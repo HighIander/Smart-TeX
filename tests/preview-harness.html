@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SmartTeX equation-preview harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body {
+      margin: 0;
+      color: #d8dee9;
+      background: #2e3440;
+      font: 16px/1.6 Consolas, monospace;
+    }
+
+    .editor {
+      width: min(900px, calc(100vw - 80px));
+      min-height: 620px;
+      margin: 40px auto;
+      padding: 28px 36px;
+      border-radius: 10px;
+      background: #3b4252;
+      box-shadow: 0 18px 60px rgb(0 0 0 / 28%);
+      white-space: pre-wrap;
+    }
+
+    .source-caret {
+      display: inline-block;
+      width: 2px;
+      height: 1.15em;
+      margin: 0 -1px;
+      vertical-align: -0.2em;
+      background: #88c0d0;
+    }
+
+    .katex-html .smarttex-rendered-caret::after {
+      animation: none !important;
+      width: 4px !important;
+      background: #ff1744 !important;
+    }
+
+    #position-test-result {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 2147483647;
+      padding: 6px 10px;
+      border-radius: 999px;
+      color: #fff;
+      background: #9a6700;
+      font: 700 12px/1.2 system-ui, sans-serif;
+    }
+
+    #position-test-result[data-result="passed"] {
+      background: #16803b;
+    }
+
+    #position-test-result[data-result="failed"] {
+      background: #cf222e;
+    }
+  </style>
+</head>
+<body>
+  <output id="position-test-result">Position test running</output>
+  <div class="editor">\newcommand{\vect}[1]{\mathbf{#1}}
+
+\begin{align}
+  E &amp;= mc^2 \\
+  \vect{F} &amp;= m<span class="source-caret"></span>\frac{d^2\vect{x}}{dt^2}\label{eq:force}
+\end{align}</div>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    const markedSource = String.raw`\newcommand{\vect}[1]{\mathbf{#1}}
+
+\begin{align}
+  E &= mc^2 \\
+  \vect{F} &= m|\frac{d^2\vect{x}}{dt^2}\label{eq:force}
+\end{align}`;
+    const cursorIndex = markedSource.indexOf("|");
+    const source = markedSource.slice(0, cursorIndex) + markedSource.slice(cursorIndex + 1);
+    const baseState = {
+        value: source,
+        cursorIndex,
+        selectionFrom: cursorIndex,
+        selectionTo: cursorIndex,
+        screen: {
+          pageX: 500,
+          pageY: 360,
+          lineHeight: 25
+        },
+        fileName: "main.tex",
+        focused: true,
+        editorKind: "harness"
+    };
+    function dispatchState(overrides = {}) {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({ ...baseState, ...overrides })
+      }));
+    }
+    dispatchState();
+
+    function afterPreviewUpdate(callback) {
+      // The content script debounces rendering and then positions on the next
+      // animation frame. A plain delay also works in headless Chrome, where
+      // requestAnimationFrame callbacks may be throttled under virtual time.
+      window.setTimeout(() => {
+        window.dispatchEvent(new Event("resize"));
+        window.setTimeout(callback, 50);
+      }, 150);
+    }
+
+    function runPositionTest() {
+      const popup = document.querySelector("#smarttex-equation-preview");
+      if (popup.hidden || !popup.style.left || !popup.style.top) {
+        window.setTimeout(runPositionTest, 25);
+        return;
+      }
+      const initial = popup.getBoundingClientRect();
+      const initialPosition = {
+        left: initial.left,
+        top: initial.top
+      };
+      const renderedEquationText = popup.querySelector(".katex")?.textContent || "";
+      const renderedEquationNumbers = (
+        renderedEquationText.includes("(1)") &&
+        renderedEquationText.includes("(2)")
+      );
+      const hidesCommandCount = popup.querySelector(".smarttex-preview-meta")?.hidden;
+      dispatchState({
+        screen: { pageX: 850, pageY: 690, lineHeight: 25 }
+      });
+      afterPreviewUpdate(() => {
+        const stable = popup.getBoundingClientRect();
+        const stayedPut = (
+          Math.abs(stable.left - initialPosition.left) < 1 &&
+          Math.abs(stable.top - initialPosition.top) < 1
+        );
+        const stablePosition = {
+          left: stable.left,
+          top: stable.top
+        };
+        const editedSource = source.replace(
+          "\\frac{d^2",
+          "\\displaystyle\\frac{d^2"
+        );
+        dispatchState({
+          value: editedSource,
+          screen: {
+            pageX: 850,
+            pageY: 690,
+            lineHeight: 25
+          }
+        });
+        afterPreviewUpdate(() => {
+          const edited = popup.getBoundingClientRect();
+          const stayedPutAfterEquationEdit = (
+            Math.abs(edited.left - stablePosition.left) < 1 &&
+            Math.abs(edited.top - stablePosition.top) < 1
+          );
+          const editedPosition = {
+            left: edited.left,
+            top: edited.top
+          };
+          dispatchState({
+            value: editedSource,
+            screen: {
+              pageX: edited.left + edited.width / 2,
+              pageY: edited.top + edited.height / 2,
+              lineHeight: 25
+            }
+          });
+          afterPreviewUpdate(() => {
+            const relocated = popup.getBoundingClientRect();
+            const movedToRevealCursor = (
+              Math.abs(relocated.left - editedPosition.left) >= 1 ||
+              Math.abs(relocated.top - editedPosition.top) >= 1
+            );
+            const relocatedPosition = {
+              left: relocated.left,
+              top: relocated.top
+            };
+            const secondMarkedSource = `${editedSource}\n\n\\[a+|b\\]`;
+            const secondCursorIndex = secondMarkedSource.indexOf("|");
+            const secondSource = (
+              secondMarkedSource.slice(0, secondCursorIndex) +
+              secondMarkedSource.slice(secondCursorIndex + 1)
+            );
+            const secondContext = window.SmartTeXLatexContext.findEquationContext(
+              secondSource,
+              secondCursorIndex
+            );
+            dispatchState({
+              value: secondSource,
+              cursorIndex: secondCursorIndex,
+              selectionFrom: secondCursorIndex,
+              selectionTo: secondCursorIndex,
+              screen: { pageX: 900, pageY: 690, lineHeight: 25 }
+            });
+            afterPreviewUpdate(() => {
+              const reanchored = popup.getBoundingClientRect();
+              const movedForNewEquation = (
+                Math.abs(reanchored.left - relocatedPosition.left) >= 1 ||
+                Math.abs(reanchored.top - relocatedPosition.top) >= 1
+              );
+              const reanchoredPosition = {
+                left: reanchored.left,
+                top: reanchored.top
+              };
+              document.querySelector(".editor").dispatchEvent(new Event("scroll", {
+                bubbles: true
+              }));
+              dispatchState({
+                value: secondSource,
+                cursorIndex: secondCursorIndex,
+                selectionFrom: secondCursorIndex,
+                selectionTo: secondCursorIndex,
+                screen: { pageX: 150, pageY: 590, lineHeight: 25 }
+              });
+              afterPreviewUpdate(() => {
+                const scrolled = popup.getBoundingClientRect();
+                const followedScrollVertically = (
+                  Math.abs(scrolled.left - reanchoredPosition.left) < 1 &&
+                  Math.abs((scrolled.top - reanchoredPosition.top) + 100) < 1
+                );
+                const result = (
+                  renderedEquationNumbers &&
+                  hidesCommandCount &&
+                  stayedPut &&
+                  stayedPutAfterEquationEdit &&
+                  movedToRevealCursor &&
+                  movedForNewEquation &&
+                  followedScrollVertically
+                ) ? "passed" : "failed";
+                document.documentElement.dataset.positionTest = result;
+                const output = document.querySelector("#position-test-result");
+                output.dataset.result = result;
+                output.textContent = result === "passed"
+                  ? "Position test passed"
+                  : (
+                    `Position test failed S:${stayedPut} D:${stayedPutAfterEquationEdit} ` +
+                    `N:${renderedEquationNumbers} H:${hidesCommandCount} ` +
+                    `C:${movedToRevealCursor} ` +
+                    `E:${movedForNewEquation} V:${followedScrollVertically} ` +
+                    `O:${secondContext?.openStart ?? "none"}`
+                  );
+              });
+            });
+          });
+        });
+      });
+    }
+    window.setTimeout(runPositionTest, 25);
+  </script>
+</body>
+</html>

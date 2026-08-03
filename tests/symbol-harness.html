@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX symbol rendering harness</title>
+  <style>
+    body {
+      margin: 32px;
+      color: #172033;
+      background: #fff;
+      font: 18px/1.5 system-ui, sans-serif;
+    }
+
+    .sample {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      align-items: center;
+      min-height: 74px;
+      border-bottom: 1px solid #d8dee8;
+    }
+
+    .rendered {
+      font-size: 30px;
+    }
+  </style>
+</head>
+<body>
+  <div class="sample">
+    <span>KaTeX <code>\ne</code></span>
+    <span class="rendered" id="command"></span>
+  </div>
+  <div class="sample">
+    <span>Unicode <code>≠</code></span>
+    <span class="rendered" id="unicode"></span>
+  </div>
+  <div class="sample">
+    <span>KaTeX <code>\not=</code></span>
+    <span class="rendered" id="composed"></span>
+  </div>
+  <script>
+    const katexLayoutReady = fetch("../vendor/katex/katex.min.css")
+      .then((response) => response.text())
+      .then((css) => {
+        const style = document.createElement("style");
+        style.textContent = css.replace(/@font-face\{[^}]*\}/g, "");
+        document.head.appendChild(style);
+      });
+    globalThis.browser = {
+      runtime: {
+        getURL(path) {
+          return new URL(`../${path}`, window.location.href).href;
+        }
+      }
+    };
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../font-loader.js"></script>
+  <script>
+    Promise.all([katexLayoutReady, SmartTeXKatexFonts.ready]).then(() => {
+      katex.render(String.raw`I(q)\ne I(-q)`, document.querySelector("#command"));
+      katex.render(String.raw`I(q)≠I(-q)`, document.querySelector("#unicode"));
+      katex.render(String.raw`I(q)\not=I(-q)`, document.querySelector("#composed"));
+      document.documentElement.dataset.testResult = "rendered";
+    });
+  </script>
+</body>
+</html>

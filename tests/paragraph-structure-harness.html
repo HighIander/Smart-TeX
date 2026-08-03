@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX paragraph structure harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body { overflow: hidden; }
+    #ide-redesign-panel-editor { position: fixed; left: 0; top: 0; width: 360px; }
+    .toolbar-editor, .pdf-toolbar { min-height: 42px; display: flex; align-items: center; }
+    #ide-redesign-panel-pdf { height: 100vh; margin-left: 360px; display: grid; grid-template-rows: auto 1fr; }
+    .pdf-native { min-height: 0; }
+  </style>
+</head>
+<body>
+  <section id="ide-redesign-panel-editor">
+    <div class="toolbar toolbar-editor" role="toolbar"></div>
+  </section>
+  <section id="ide-redesign-panel-pdf">
+    <div class="pdf-toolbar" role="toolbar">
+      <button type="button" aria-label="Recompile">Recompile</button>
+      <button type="button" aria-label="Download PDF">Download PDF</button>
+    </div>
+    <div class="pdf-native"><iframe title="PDF preview"></iframe></div>
+  </section>
+  <output id="paragraph-structure-test-result">Paragraph structure test running</output>
+
+  <script>
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get() { return {}; },
+          async set() {}
+        }
+      }
+    };
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({ requestId: request.requestId, ok: true })
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../document-preview.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => {
+      window.setTimeout(resolve, milliseconds);
+    });
+
+    function dispatch(value, cursorIndex) {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          selectionAnchor: cursorIndex,
+          selectionHead: cursorIndex,
+          screen: { pageX: 200, pageY: 220, lineHeight: 22 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "harness"
+        })
+      }));
+    }
+
+    async function waitFor(selector) {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const element = document.querySelector(selector);
+        if (element) return element;
+        await delay(20);
+      }
+      throw new Error(`${selector} did not appear`);
+    }
+
+    function paragraphsContaining(text) {
+      return [...document.querySelectorAll(".smarttex-document-page p")]
+        .filter((paragraph) => paragraph.textContent.includes(text));
+    }
+
+    function renderedCaretContext() {
+      const caret = document.querySelector(
+        ".smarttex-document-page .smarttex-document-text-caret, " +
+        ".smarttex-document-page .smarttex-rendered-caret"
+      );
+      const paragraph = caret?.closest("p, h2, h3, h4, h5");
+      if (!caret || !paragraph) return null;
+      const prefix = document.createRange();
+      prefix.selectNodeContents(paragraph);
+      prefix.setEndBefore(caret);
+      return { paragraph, prefix: prefix.toString() };
+    }
+
+    async function cursorMatches(value, sourceNeedle, sourceOffset, paragraphNeedle) {
+      dispatch(value, value.indexOf(sourceNeedle) + sourceOffset);
+      await delay(70);
+      const context = renderedCaretContext();
+      return Boolean(
+        context &&
+        context.paragraph.textContent.includes(paragraphNeedle) &&
+        context.prefix.length > 0
+      );
+    }
+
+    async function run() {
+      const source = String.raw`\documentclass{article}
+\newcommand{\hlc}[1]{\textbf{#1}}
+\begin{document}
+Earlier paragraph remains unchanged.
+
+\section{Coherence}
+\label{sec:Coherence}
+In the following we assume an XFEL beam created by a stationary random process.
+\hlc{A }SASE XFEL pulse typically has a rather large bandwidth, and the following words must remain visible.
+We now only treat a single coherent slice.
+
+\begin{equation}
+E=mc^2
+\end{equation}
+
+Far destination paragraph for a preceding fast text edit.
+\end{document}`;
+      dispatch(source, source.indexOf("stationary") + 4);
+      const toggle = await waitFor("#smarttex-document-preview-toggle");
+      toggle.click();
+      const page = await waitFor(".smarttex-document-page");
+      await delay(160);
+      const renderedAt = document.querySelector(
+        ".smarttex-document-preview"
+      ).dataset.lastRenderedAt;
+
+      const fastEdited = source.replace(
+        "Far destination paragraph",
+        "Far bright destination paragraph"
+      );
+      dispatch(fastEdited, fastEdited.indexOf("Far bright") + 10);
+      await delay(50);
+
+      const splitSource = fastEdited.replace(
+        "process.\n\\hlc{A }SASE",
+        "process.\n\n\\hlc{A }SASE"
+      );
+      dispatch(splitSource, splitSource.indexOf("SASE XFEL") + 4);
+      await delay(100);
+      const processParagraph = paragraphsContaining(
+        "In the following we assume an XFEL"
+      )[0];
+      const splitSase = paragraphsContaining("A SASE XFEL pulse typically");
+      const splitCorrect = (
+        processParagraph &&
+        splitSase.length === 1 &&
+        splitSase[0] !== processParagraph &&
+        splitSase[0].textContent.includes("following words must remain visible")
+      );
+
+      const typedAfterSplit = splitSource.replace(
+        "\\hlc{A }SASE XFEL",
+        "\\hlc{A }new SASE XFEL"
+      );
+      dispatch(typedAfterSplit, typedAfterSplit.indexOf("new SASE") + 3);
+      await delay(60);
+      const typedParagraphs = paragraphsContaining("A new SASE XFEL");
+      const typedCorrect = (
+        typedParagraphs.length === 1 &&
+        typedParagraphs[0].textContent.includes("following words must remain visible")
+      );
+
+      const mergedSource = typedAfterSplit.replace(
+        "process.\n\n\\hlc{A }new SASE",
+        "process.\n\\hlc{A }new SASE"
+      );
+      dispatch(mergedSource, mergedSource.indexOf("new SASE") + 3);
+      await delay(100);
+      const mergedProcess = paragraphsContaining(
+        "In the following we assume an XFEL"
+      );
+      const mergedSase = paragraphsContaining("A new SASE XFEL");
+      const mergeCorrect = (
+        mergedProcess.length === 1 &&
+        mergedSase.length === 1 &&
+        mergedProcess[0] === mergedSase[0] &&
+        (document.querySelector(".smarttex-document-page").textContent.match(
+          /A new SASE XFEL/g
+        ) || []).length === 1
+      );
+
+      const enterSource = mergedSource.replace(
+        "We now only treat a single coherent slice.",
+        "We now only treat a single coherent slice.\n\nNew paragraph starts immediately after Enter."
+      );
+      dispatch(enterSource, enterSource.indexOf("New paragraph") + 3);
+      await delay(100);
+      const enterParagraphs = paragraphsContaining(
+        "New paragraph starts immediately after Enter."
+      );
+      const enterCorrect = (
+        enterParagraphs.length === 1 &&
+        !enterParagraphs[0].textContent.includes("single coherent slice")
+      );
+
+      const cursorAfterInsertion = await cursorMatches(
+        enterSource,
+        "New paragraph starts",
+        12,
+        "New paragraph starts immediately"
+      );
+      const cursorBeforeInsertion = await cursorMatches(
+        enterSource,
+        "single coherent slice",
+        8,
+        "We now only treat a single coherent slice"
+      );
+
+      const removedAgain = enterSource.replace(
+        "single coherent slice.\n\nNew paragraph",
+        "single coherent slice. New paragraph"
+      );
+      dispatch(removedAgain, removedAgain.indexOf("New paragraph") + 7);
+      await delay(110);
+      const cursorAfterRemoval = await cursorMatches(
+        removedAgain,
+        "New paragraph",
+        7,
+        "single coherent slice. New paragraph"
+      );
+
+      const literalEdit = removedAgain.replace(
+        "New paragraph starts",
+        "New responsive paragraph starts"
+      );
+      dispatch(literalEdit, literalEdit.indexOf("responsive") + 6);
+      await delay(70);
+
+      const preview = document.querySelector(".smarttex-document-preview");
+      const lightweightCommit = preview.dataset.lastFastCommitMode === "lightweight";
+      const immediate = (
+        document.querySelector(".smarttex-document-page") === page &&
+        preview.dataset.lastRenderedAt === renderedAt &&
+        Boolean(preview.dataset.lastFastRegionAt)
+      );
+      const checks = {
+        splitCorrect,
+        typedCorrect,
+        mergeCorrect,
+        enterCorrect,
+        cursorAfterInsertion,
+        cursorBeforeInsertion,
+        cursorAfterRemoval,
+        lightweightCommit,
+        immediate
+      };
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#paragraph-structure-test-result");
+      output.textContent = passed
+        ? "Paragraph structure test passed"
+        : `Paragraph structure test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.paragraphStructureTest = passed
+        ? "passed"
+        : "failed";
+    }
+
+    run().catch((error) => {
+      document.querySelector("#paragraph-structure-test-result").textContent =
+        `Paragraph structure test failed: ${error.message}`;
+      document.documentElement.dataset.paragraphStructureTest = "failed";
+    });
+  </script>
+</body>
+</html>

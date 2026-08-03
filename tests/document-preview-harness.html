@@ -1,0 +1,1255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX document preview harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      background: #202938;
+    }
+
+    #ide-redesign-panel-editor {
+      position: fixed;
+      inset: 0 auto auto 0;
+      width: calc(100vw - min(980px, 100vw));
+      min-width: 340px;
+    }
+
+    .toolbar-editor {
+      display: flex;
+      align-items: center;
+      min-height: 42px;
+      padding: 5px 9px;
+      background: #f4f6f8;
+    }
+
+    #ide-redesign-panel-pdf {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      width: min(980px, 100vw);
+      height: 100vh;
+      margin-left: auto;
+      background: #fff;
+    }
+
+    .pdf-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 42px;
+      padding: 5px 9px;
+      border-bottom: 1px solid #c8d0da;
+      background: #f4f6f8;
+    }
+
+    .pdf-toolbar button {
+      min-height: 30px;
+    }
+
+    .pdf-native {
+      min-width: 0;
+      min-height: 0;
+      background: #ddd;
+    }
+
+    .pdf-native iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: white;
+    }
+
+    #document-preview-test-result {
+      position: fixed;
+      z-index: 2147483647;
+      right: 12px;
+      bottom: 12px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      color: #fff;
+      background: #9a6700;
+      font: 700 12px/1.2 system-ui, sans-serif;
+    }
+
+    #document-preview-test-result[data-result="passed"] {
+      background: #16803b;
+    }
+
+    #document-preview-test-result[data-result="failed"] {
+      background: #cf222e;
+    }
+  </style>
+</head>
+<body>
+  <section id="ide-redesign-panel-editor">
+    <div class="toolbar toolbar-editor" role="toolbar">
+      <button type="button" aria-label="Editor menu">Menu</button>
+    </div>
+  </section>
+  <div class="file-tree-list" hidden>
+    <div
+      role="treeitem"
+      data-path="figure.png"
+      data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='100'%3E%3Crect width='240' height='100' fill='%233158b8'/%3E%3C/svg%3E"
+    ></div>
+  </div>
+  <section id="ide-redesign-panel-pdf">
+    <div class="pdf-toolbar" role="toolbar">
+      <button type="button" aria-label="Recompile">Recompile</button>
+      <button type="button" aria-label="Download PDF">Download PDF</button>
+    </div>
+    <div class="pdf-native">
+      <iframe title="PDF preview"></iframe>
+    </div>
+  </section>
+  <output id="document-preview-test-result">Document preview test running</output>
+
+  <script>
+    const storedPreviewSettings = {};
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    let figureFetchCount = 0;
+    globalThis.fetch = (...argumentsList) => {
+      if (String(argumentsList[0] || "").startsWith("data:image/svg+xml")) {
+        figureFetchCount += 1;
+      }
+      return nativeFetch(...argumentsList);
+    };
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(key) {
+            return { [key]: storedPreviewSettings[key] };
+          },
+          async set(values) {
+            Object.assign(storedPreviewSettings, values);
+          }
+        }
+      }
+    };
+    storedPreviewSettings[
+      `smarttex:citation-cache:v1:${window.location.origin}:${window.location.pathname}`
+    ] = {
+      parsedAt: new Date().toISOString(),
+      records: [{
+        key: "Lovelace",
+        title: "A".repeat(50000),
+        authors: Array.from({ length: 500 }, (_item, index) => `Author ${index}`),
+        journal: "Journal of bounded popup rendering",
+        year: "1843"
+      }]
+    };
+  </script>
+  <script>
+    const previewNavigationRequests = [];
+    const previewSelectionRequests = [];
+    const previewEditRequests = [];
+    const previewFocusRequests = [];
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      if (request.type === "setCursor") previewNavigationRequests.push(request);
+      else if (request.type === "setSelection") previewSelectionRequests.push(request);
+      else if (request.type === "replaceRange") previewEditRequests.push(request);
+      else if (request.type === "focus") previewFocusRequests.push(request);
+      else return;
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({
+          requestId: request.requestId,
+          ok: true,
+          index: request.index
+        })
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../document-preview.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => {
+      window.setTimeout(resolve, milliseconds);
+    });
+
+    function dispatch(
+      value,
+      cursorIndex,
+      fileName = "main.tex",
+      selectionFrom = cursorIndex,
+      selectionTo = cursorIndex,
+      selectionAnchor = selectionFrom
+    ) {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex,
+          selectionFrom,
+          selectionTo,
+          selectionAnchor,
+          selectionHead: cursorIndex,
+          screen: { pageX: 320, pageY: 260, lineHeight: 22 },
+          fileName,
+          focused: true,
+          editorKind: "harness"
+        })
+      }));
+    }
+
+    async function waitFor(selector) {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const element = document.querySelector(selector);
+        if (element) return element;
+        await delay(30);
+      }
+      throw new Error(`${selector} did not appear`);
+    }
+
+    function textBeforeCaret(caret) {
+      const container = caret?.closest("p, h1, h2, h3, h4, h5");
+      if (!container || !caret) return "";
+      const range = document.createRange();
+      range.setStart(container, 0);
+      range.setEndBefore(caret);
+      return range.toString();
+    }
+
+    async function runDocumentPreviewTest() {
+      const markedSource = String.raw`\title{Live document preview}
+\author{Ada Lovelace}
+\newcommand{\vect}[1]{\mathbf{#1}}
+\newcommand{\hlc}[1]{\textbf{#1}}
+\renewcommand{\hlc}[2][cyan]{{\sethlcolor{#1}\hl{#2}}}
+\newcommand{\unit}[1]{\mathrm{#1}}
+\begin{document}
+\maketitle
+\section{Introduction}
+\label{sec:intro}
+This is a live preview of the active document.
+
+Formatting: \textbf{bold and \textit{bold italic}}, \textit{italic}, \emph{emphasized}, and \underline{underlined}.
+
+Inline mathematics $E=mc^2$ continues in the same paragraph. See Section \ref{sec:intro}, Equation \eqref{eq:force}, Figure \ref{fig:test}, and \cite{Lovelace}.
+
+\begin{equation}
+\label{eq:force}
+\ensuremath{\vect{F}}=m\lef|t(\frac{a+b}{c+d}\right)
+\end{equation}
+
+\begin{align}
+x &= 1 \\
+long &= 2
+\end{align}
+
+\begin{figure}
+\includegraphics{figure.png}
+\caption{A rendered test figure from Eqn.~\eqref{eq:force}, with \hlc{distributed} data and $\vect{F}_{\mathrm{PDF}}$}
+\label{fig:test}
+\end{figure}
+
+\section{Reduction of Scattering Signal Strength for Doppler Shifted Photon Beams}
+\label{sec:coherence}
+In the following we assume an XFEL beam created by a stationary random process.
+\hlc{A }SASE XFEL pulse typically \hlc{has} a rather large bandwidth, as it consists of a train of several slices at different central energy, which we can treat as coherent within the respective slices.
+We now only treat a single coherent slice and assume that the individual slices add up incoherently.
+SASE XFEL beams have a relatively short coherence time, e.g. for $8\unit{keV}$ $\tau_{c,0}<0.4\unit{fs}$.
+
+\begin{table}
+\caption{Rendered data}
+\begin{tabular}{lc}
+Name & Value \\
+Alpha & 1 \\
+Beta & 2
+\end{tabular}
+\end{table}
+
+${Array.from({ length: 28 }, (_item, index) => (
+  `Scrolling paragraph ${index + 1}. The live preview keeps enough material here to verify immediate cursor following.`
+)).join("\n\n")}
+
+Far destination paragraph for immediate cursor scrolling.
+
+\begin{thebibliography}{9}
+\bibitem{Lovelace} Ada Lovelace. Notes on the Analytical Engine.
+\end{thebibliography}
+\end{document}`;
+      const cursorIndex = markedSource.indexOf("|");
+      const source = (
+        markedSource.slice(0, cursorIndex) +
+        markedSource.slice(cursorIndex + 1)
+      );
+      dispatch(source, cursorIndex);
+
+      const toggle = await waitFor("#smarttex-document-preview-toggle");
+      toggle.click();
+      const page = await waitFor(".smarttex-document-page");
+      await delay(180);
+
+      const nativePane = document.querySelector(".pdf-native");
+      const preview = document.querySelector(".smarttex-document-preview");
+      const inlineEquation = page.querySelector(".smarttex-document-inline-equation");
+      const inlineParagraph = inlineEquation?.closest("p");
+      const checks = {
+        toggleActive: (
+          toggle.getAttribute("aria-pressed") === "true" &&
+          toggle.classList.contains("smarttex-document-preview-toggle-active")
+        ),
+        settingsButtonActive: document.querySelector(
+          "#smarttex-document-preview-settings-button"
+        )?.classList.contains(
+          "smarttex-document-preview-settings-button-active"
+        ),
+        nativeHidden: nativePane.classList.contains("smarttex-document-native-hidden"),
+        nativeRecompileHidden: getComputedStyle(
+          document.querySelector("[aria-label='Recompile']")
+        ).display === "none",
+        previewVisible: !preview.hidden,
+        title: page.textContent.includes("Live document preview"),
+        section: page.textContent.includes("Introduction"),
+        equation: Boolean(page.querySelector(".smarttex-document-equation .katex")),
+        delimiterCommand: !page.querySelector(".smarttex-document-render-error"),
+        cursor: Boolean(page.querySelector(".smarttex-rendered-caret")),
+        table: page.querySelectorAll(".smarttex-table-preview tr").length === 3,
+        inlineEquation: (
+          Boolean(inlineEquation?.querySelector(".katex")) &&
+          inlineParagraph?.textContent.includes("Inline mathematics") &&
+          inlineParagraph?.textContent.includes("continues in the same paragraph")
+        ),
+        inlineEquationLeadingSpace: (
+          inlineEquation?.previousSibling?.nodeType === Node.TEXT_NODE &&
+          /\s$/.test(inlineEquation.previousSibling.data)
+        ),
+        justifiedText: getComputedStyle(
+          [...page.querySelectorAll("p")].find((item) => (
+            item.textContent.includes("live preview of the active document")
+          ))
+        ).textAlign === "justify",
+        smallerDefaultText: parseFloat(getComputedStyle(page).fontSize) <= 13.1,
+        textFormatting: (
+          page.querySelector(".smarttex-document-bold")?.textContent ===
+            "bold and bold italic" &&
+          getComputedStyle(page.querySelector(".smarttex-document-bold")).fontWeight ===
+            "700" &&
+          [...page.querySelectorAll(".smarttex-document-italic")].some((item) => (
+            item.textContent === "italic" &&
+            getComputedStyle(item).fontStyle === "italic"
+          )) &&
+          [...page.querySelectorAll(".smarttex-document-italic")].some((item) => (
+            item.textContent === "emphasized" &&
+            getComputedStyle(item).fontStyle === "italic"
+          )) &&
+          page.querySelector(".smarttex-document-underline")?.textContent ===
+            "underlined" &&
+          getComputedStyle(page.querySelector(".smarttex-document-underline"))
+            .textDecorationLine.includes("underline")
+        )
+      };
+
+      const zoomControls = document.querySelector(".smarttex-document-zoom-controls");
+      const fontSizeBeforeZoom = getComputedStyle(page).fontSize;
+      zoomControls.querySelector("button:last-of-type").click();
+      await delay(20);
+      checks.zoomControls = (
+        zoomControls.querySelector("output").textContent === "110%" &&
+        document.querySelector(".smarttex-document-page").style.transform ===
+          "scale(1.1)" &&
+        getComputedStyle(document.querySelector(
+          ".smarttex-document-page"
+        )).fontSize === fontSizeBeforeZoom &&
+        document.querySelector(".smarttex-document-zoom-stage")
+          .getBoundingClientRect().width >
+          document.querySelector(".smarttex-document-page").offsetWidth &&
+        storedPreviewSettings["smarttex:document-preview-settings:v1"]?.zoom === 1.1
+      );
+
+      const initialReferences = [...page.querySelectorAll(
+        ".smarttex-document-reference"
+      )];
+      const equationReference = initialReferences.find((link) => (
+        JSON.parse(link.dataset.labels || "[]").includes("eq:force")
+      ));
+      checks.referenceRendering = (
+        initialReferences.length >= 4 &&
+        equationReference?.textContent === "(1)" &&
+        equationReference.getAttribute("href")?.startsWith(
+          "#smarttex-reference-target-"
+        )
+      );
+      equationReference.dispatchEvent(new PointerEvent("pointerenter"));
+      await delay(20);
+      const referencePopup = document.querySelector(
+        ".smarttex-document-reference-popup"
+      );
+      checks.referenceHoverPreview = (
+        referencePopup &&
+        !referencePopup.hidden &&
+        Boolean(referencePopup.querySelector(".katex"))
+      );
+      equationReference.dispatchEvent(new PointerEvent("pointerleave"));
+      const citationReference = initialReferences.find((link) => (
+        JSON.parse(link.dataset.labels || "[]").includes("Lovelace")
+      ));
+      citationReference.dispatchEvent(new PointerEvent("pointerenter"));
+      await delay(30);
+      const citationCard = referencePopup.querySelector(
+        ".smarttex-reference-popup-citation"
+      );
+      checks.citationPopupIsBounded = (
+        !referencePopup.hidden &&
+        citationCard?.querySelector("strong")?.textContent.length <= 280 &&
+        citationCard?.querySelectorAll("span").length <= 2 &&
+        referencePopup.childElementCount <= 9
+      );
+      checks.citationPopupIsFull = (
+        citationCard?.querySelector(
+          ".smarttex-reference-popup-citation-key"
+        )?.textContent === "Lovelace" &&
+        citationCard?.querySelector(
+          ".smarttex-reference-popup-citation-authors"
+        )?.textContent.includes("Author 0") &&
+        citationCard?.querySelector(
+          ".smarttex-reference-popup-citation-publication"
+        )?.textContent.includes("1843")
+      );
+      referencePopup.style.maxHeight = "72px";
+      while (referencePopup.children.length < 7) {
+        referencePopup.appendChild(referencePopup.firstElementChild.cloneNode(true));
+      }
+      citationReference.dispatchEvent(new PointerEvent("pointerleave"));
+      referencePopup.dispatchEvent(new PointerEvent("pointerleave"));
+      referencePopup.scrollTop = 48;
+      referencePopup.dispatchEvent(new Event("scroll"));
+      referencePopup.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        deltaY: 80
+      }));
+      await delay(260);
+      checks.citationPopupRemainsWhileScrolling = !referencePopup.hidden;
+      referencePopup.style.maxHeight = "";
+      referencePopup.replaceChildren(citationCard);
+      citationReference.dispatchEvent(new PointerEvent("pointerleave"));
+      const citationCommandIndex = source.indexOf("\\cite{Lovelace}") + 7;
+      dispatch(source, citationCommandIndex);
+      await delay(50);
+      citationReference.dispatchEvent(new PointerEvent("pointerenter"));
+      await delay(50);
+      checks.citationPopupHiddenInsideCommand = referencePopup.hidden;
+      citationReference.dispatchEvent(new PointerEvent("pointerleave"));
+      dispatch(source, source.indexOf("This is a live preview") + 5);
+      await delay(40);
+
+      const clickableParagraph = [...page.querySelectorAll("p")].find((item) => (
+        item.textContent.includes("This is a live preview")
+      ));
+      const clickableRect = clickableParagraph.getBoundingClientRect();
+      clickableParagraph.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        clientX: clickableRect.left + Math.min(80, clickableRect.width / 3),
+        clientY: clickableRect.top + clickableRect.height / 2
+      }));
+      await delay(40);
+      const requestsAfterClick = previewNavigationRequests.length;
+      checks.clickMovesCursorAndKeepsPreviewFocus = (
+        requestsAfterClick > 0 &&
+        previewNavigationRequests.at(-1).focus === false &&
+        preview.classList.contains("smarttex-document-focused")
+      );
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowDown"
+      }));
+      await delay(40);
+      checks.previewArrowNavigation = (
+        previewNavigationRequests.length > requestsAfterClick
+      );
+      const beforeRight = previewNavigationRequests.at(-1)?.index;
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowRight"
+      }));
+      await delay(30);
+      checks.previewHorizontalNavigation = (
+        previewNavigationRequests.at(-1)?.index === beforeRight + 1
+      );
+
+      const leftCommandStart = source.indexOf("\\left");
+      dispatch(source, leftCommandStart);
+      await delay(40);
+      preview.focus({ preventScroll: true });
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowRight"
+      }));
+      await delay(30);
+      checks.previewRightSkipsDelimiterCommand = (
+        previewNavigationRequests.at(-1)?.index ===
+          leftCommandStart + "\\left(".length
+      );
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowLeft"
+      }));
+      await delay(30);
+      checks.previewLeftSkipsDelimiterCommand = (
+        previewNavigationRequests.at(-1)?.index === leftCommandStart
+      );
+
+      const numeratorCursor = source.indexOf("a+b") + 1;
+      const denominatorCursor = source.indexOf("c+d") + 1;
+      dispatch(source, numeratorCursor);
+      await delay(40);
+      preview.focus({ preventScroll: true });
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowDown"
+      }));
+      await delay(30);
+      checks.previewFractionDown = (
+        previewNavigationRequests.at(-1)?.index === denominatorCursor
+      );
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowUp"
+      }));
+      await delay(30);
+      checks.previewFractionUp = (
+        previewNavigationRequests.at(-1)?.index === numeratorCursor
+      );
+
+      const firstAlignCursor = source.indexOf("x &= 1") + 1;
+      const secondAlignCursor = source.indexOf("long &= 2") + 1;
+      dispatch(source, firstAlignCursor);
+      await delay(40);
+      preview.focus({ preventScroll: true });
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowDown"
+      }));
+      await delay(30);
+      checks.previewEquationRowDown = (
+        previewNavigationRequests.at(-1)?.index === secondAlignCursor
+      );
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowUp"
+      }));
+      await delay(30);
+      checks.previewEquationRowUp = (
+        previewNavigationRequests.at(-1)?.index === firstAlignCursor
+      );
+
+      const requestsBeforePageDown = previewNavigationRequests.length;
+      const scrollBeforePageDown = preview.scrollTop;
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "PageDown"
+      }));
+      await delay(80);
+      checks.previewPageScrolls =
+        preview.scrollTop > scrollBeforePageDown;
+      checks.previewPageMovesCursor =
+        previewNavigationRequests.length > requestsBeforePageDown;
+
+      const initialPage = document.querySelector(".smarttex-document-page");
+      const initialRenderedAt = preview.dataset.lastRenderedAt;
+      const inlineCursor = source.indexOf("mc^2") + 2;
+      dispatch(source, inlineCursor);
+      await delay(40);
+      checks.immediateEquationCaret = (
+        document.querySelector(".smarttex-document-page") === initialPage &&
+        preview.dataset.lastRenderedAt === initialRenderedAt &&
+        Boolean(document.querySelector(
+          ".smarttex-document-inline-equation .smarttex-rendered-caret"
+        ))
+      );
+
+      const citationCursor = source.indexOf("\\cite{Lovelace}") + 8;
+      dispatch(source, citationCursor);
+      await delay(40);
+      checks.referenceLinkSurvivesCursorMovement = (
+        [...document.querySelectorAll(".smarttex-document-reference")].some((link) => (
+          JSON.parse(link.dataset.labels || "[]").includes("Lovelace")
+        ))
+      );
+
+      preview.scrollTop = 0;
+      const farCursor = source.indexOf("Far destination") + 8;
+      dispatch(source, farCursor);
+      await delay(40);
+      const fastCaret = document.querySelector(".smarttex-document-fast-caret");
+      checks.immediateProseCaretAndScroll = (
+        document.querySelector(".smarttex-document-page") === initialPage &&
+        preview.dataset.lastRenderedAt === initialRenderedAt &&
+        Boolean(fastCaret) &&
+        fastCaret.closest("p")?.textContent.includes("Far destination") &&
+        textBeforeCaret(fastCaret) === "Far dest" &&
+        preview.scrollTop > 0
+      );
+
+      const fastEditedSource = source.replace(
+        "Far destination",
+        "Far bright destination"
+      );
+      const fastEditedCursor = fastEditedSource.indexOf("Far bright") + 10;
+      dispatch(fastEditedSource, fastEditedCursor);
+      await delay(40);
+      const editedFastCaret = document.querySelector(".smarttex-document-fast-caret");
+      checks.immediateTypedTextAndCaret = (
+        document.querySelector(".smarttex-document-page") === initialPage &&
+        preview.dataset.lastRenderedAt === initialRenderedAt &&
+        editedFastCaret?.closest("p")?.textContent.includes("Far bright destination") &&
+        textBeforeCaret(editedFastCaret) === "Far bright"
+      );
+
+      const paragraphBoundary = "\n\\hlc{A }SASE XFEL pulse";
+      const splitParagraphSource = fastEditedSource.replace(
+        paragraphBoundary,
+        "\n\n\\hlc{A }SASE XFEL pulse"
+      );
+      const splitParagraphCursor = splitParagraphSource.indexOf(
+        "SASE XFEL pulse"
+      ) + 4;
+      const fastRegionBeforeSplit = preview.dataset.lastFastRegionAt || "";
+      dispatch(splitParagraphSource, splitParagraphCursor);
+      await delay(100);
+      const splitParagraphs = [...document.querySelectorAll(
+        ".smarttex-document-page p"
+      )];
+      const processParagraph = splitParagraphs.find((paragraph) => (
+        paragraph.textContent.includes(
+          "In the following we assume an XFEL beam created by a stationary random process."
+        )
+      ));
+      const saseParagraphs = splitParagraphs.filter((paragraph) => (
+        paragraph.textContent.includes("A SASE XFEL pulse typically")
+      ));
+      checks.immediateParagraphSplit = (
+        document.querySelector(".smarttex-document-page") === initialPage &&
+        preview.dataset.lastRenderedAt === initialRenderedAt &&
+        preview.dataset.lastFastRegionAt !== fastRegionBeforeSplit &&
+        Boolean(processParagraph) &&
+        !processParagraph.textContent.includes("A SASE XFEL pulse typically") &&
+        saseParagraphs.length === 1 &&
+        saseParagraphs[0] !== processParagraph
+      );
+
+      const mergedParagraphSource = splitParagraphSource.replace(
+        "\n\n\\hlc{A }SASE XFEL pulse",
+        paragraphBoundary
+      );
+      const mergedParagraphCursor = mergedParagraphSource.indexOf(
+        "SASE XFEL pulse"
+      ) + 4;
+      const fastRegionBeforeMerge = preview.dataset.lastFastRegionAt || "";
+      dispatch(mergedParagraphSource, mergedParagraphCursor);
+      await delay(100);
+      const mergedParagraphs = [...document.querySelectorAll(
+        ".smarttex-document-page p"
+      )];
+      const mergedProcessParagraphs = mergedParagraphs.filter((paragraph) => (
+        paragraph.textContent.includes(
+          "In the following we assume an XFEL beam created by a stationary random process."
+        )
+      ));
+      const mergedSaseParagraphs = mergedParagraphs.filter((paragraph) => (
+        paragraph.textContent.includes("A SASE XFEL pulse typically")
+      ));
+      checks.immediateParagraphMergeWithoutDuplicate = (
+        document.querySelector(".smarttex-document-page") === initialPage &&
+        preview.dataset.lastRenderedAt === initialRenderedAt &&
+        preview.dataset.lastFastRegionAt !== fastRegionBeforeMerge &&
+        mergedProcessParagraphs.length === 1 &&
+        mergedSaseParagraphs.length === 1 &&
+        mergedProcessParagraphs[0] === mergedSaseParagraphs[0]
+      );
+
+      const settingsButton = document.querySelector(
+        "#smarttex-document-preview-settings-button"
+      );
+      settingsButton.click();
+      const settingsMenu = document.querySelector(
+        "#smarttex-document-preview-settings"
+      );
+      const sizeInput = settingsMenu.querySelector("input[type='range']");
+      sizeInput.value = "82";
+      sizeInput.dispatchEvent(new Event("input", { bubbles: true }));
+      await delay(30);
+      checks.sizeMenu = (
+        !settingsMenu.hidden &&
+        settingsMenu.querySelector("output").textContent === "82%" &&
+        storedPreviewSettings["smarttex:document-preview-settings:v1"]?.textScale === 82 &&
+        parseFloat(getComputedStyle(
+          document.querySelector(".smarttex-document-page")
+        ).fontSize) < 11
+      );
+      const renderFiguresInput = [...settingsMenu.querySelectorAll(
+        "input[type='checkbox']"
+      )].find((input) => input.parentElement.textContent.includes("Render figures"));
+      const figureHoverAnchor = document.querySelector(
+        ".smarttex-document-figure-hover-anchor"
+      );
+      figureHoverAnchor?.dispatchEvent(new PointerEvent("pointerenter", {
+        clientX: 640,
+        clientY: 260
+      }));
+      checks.popupSpinnerAtPointer = Boolean(
+        document.querySelector(".smarttex-popup-loading-spinner:not([hidden])")
+      );
+      await delay(120);
+      const hoverCaptionReference = referencePopup.querySelector(
+        ".smarttex-document-figure-caption .smarttex-caption-reference"
+      );
+      checks.unrenderedFigureHoverPreview = (
+        Boolean(figureHoverAnchor) &&
+        !referencePopup.hidden &&
+        referencePopup.textContent.includes("A rendered test figure") &&
+        Boolean(referencePopup.querySelector("img"))
+      );
+      checks.unrenderedFigureHoverReference = (
+        hoverCaptionReference?.textContent === "(1)" &&
+        !referencePopup.textContent.includes("\\eqref")
+      );
+      hoverCaptionReference?.dispatchEvent(new PointerEvent("pointerenter", {
+        clientX: 700,
+        clientY: 300
+      }));
+      await delay(50);
+      const nestedReferencePopup = document.querySelector(
+        ".smarttex-nested-reference-popup:not([hidden])"
+      );
+      checks.unrenderedFigureNestedReferencePopup = Boolean(
+        nestedReferencePopup?.querySelector(".smarttex-reference-popup-target")
+      );
+      hoverCaptionReference?.dispatchEvent(new PointerEvent("pointerleave"));
+      figureHoverAnchor?.dispatchEvent(new PointerEvent("pointerleave"));
+      referencePopup.hidden = true;
+      await delay(20);
+      renderFiguresInput.checked = true;
+      renderFiguresInput.dispatchEvent(new Event("change", { bubbles: true }));
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        if (document.querySelector(
+          ".smarttex-document-page .smarttex-document-figure img"
+        )) break;
+        await delay(20);
+      }
+      const renderedFigure = document.querySelector(
+        ".smarttex-document-page .smarttex-document-figure"
+      );
+      const figureReference = [...document.querySelectorAll(
+        ".smarttex-document-reference"
+      )].find((link) => (
+        JSON.parse(link.dataset.labels || "[]").includes("fig:test")
+      ));
+      checks.figureOptionStored =
+        storedPreviewSettings["smarttex:document-preview-settings:v1"]?.renderFigures === true;
+      checks.figureCaption = (
+        renderedFigure?.querySelector(
+          ".smarttex-document-figure-caption > strong"
+        )?.textContent === "Fig. 1:" &&
+        renderedFigure.textContent.includes("A rendered test figure") &&
+        renderedFigure.querySelector(
+          ".smarttex-document-figure-caption mark"
+        )?.textContent === "distributed" &&
+        [...renderedFigure.querySelectorAll(".smarttex-document-reference")]
+          .some((link) => link.textContent === "(1)") &&
+        !renderedFigure.textContent.includes("\\hlc") &&
+        Boolean(renderedFigure.querySelector(
+          ".smarttex-document-figure-caption .katex"
+        ))
+      );
+      const captionSource = renderedFigure.querySelector(
+        ".smarttex-document-caption-source"
+      );
+      const captionSourceStart = fastEditedSource.indexOf(
+        "A rendered test figure"
+      );
+      const captionSourceEnd = fastEditedSource.indexOf(
+        "\n\\label{fig:test}",
+        captionSourceStart
+      );
+      renderedFigure.scrollIntoView({ block: "center" });
+      await delay(20);
+      const captionRect = captionSource.getBoundingClientRect();
+      const captionClickX = captionRect.left + Math.min(90, captionRect.width * 0.3);
+      const captionClickY = captionRect.top + Math.min(8, captionRect.height / 2);
+      captionSource.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        clientX: captionClickX,
+        clientY: captionClickY
+      }));
+      await delay(40);
+      const captionCursorRequest = previewNavigationRequests.at(-1);
+      checks.figureCaptionClickMapsInsideCaption = (
+        captionCursorRequest?.index >= captionSourceStart &&
+        captionCursorRequest?.index <= captionSourceEnd
+      );
+      const captionFastCaret = document.querySelector(
+        ".smarttex-document-figure-caption .smarttex-document-fast-caret, " +
+        ".smarttex-document-figure-caption .smarttex-rendered-caret"
+      );
+      checks.figureCaptionClickKeepsFastCaret = Boolean(captionFastCaret);
+      checks.figureCaptionCaretMatchesClick = (
+        Boolean(captionFastCaret) &&
+        Math.abs(captionFastCaret.getBoundingClientRect().left - captionClickX) < 7
+      );
+
+      const proseParagraph = [...document.querySelectorAll(
+        ".smarttex-document-page p"
+      )].find((paragraph) => paragraph.textContent.includes(
+        "This is a live preview of the active document."
+      ));
+      const proseNode = [...proseParagraph.childNodes].find((node) => (
+        node.nodeType === Node.TEXT_NODE && node.data.includes("live preview")
+      ));
+      const proseOffset = proseNode.data.indexOf("live preview") + 5;
+      const proseRange = document.createRange();
+      proseRange.setStart(proseNode, proseOffset);
+      proseRange.collapse(true);
+      const prosePoint = proseRange.getBoundingClientRect();
+      const proseClickX = prosePoint.left + 1;
+      const proseClickY = prosePoint.top + Math.max(3, prosePoint.height / 2);
+      proseParagraph.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        clientX: proseClickX,
+        clientY: proseClickY
+      }));
+      await delay(40);
+      const proseCursorRequest = previewNavigationRequests.at(-1);
+      const proseCaret = document.querySelector(
+        ".smarttex-document-page p .smarttex-document-fast-caret"
+      );
+      checks.firstProseClickAfterCaptionIsExact = (
+        proseCursorRequest?.index ===
+          fastEditedSource.indexOf("This is a live preview") + proseOffset &&
+        Boolean(proseCaret) &&
+        Math.abs(proseCaret.getBoundingClientRect().left - proseClickX) < 7
+      );
+
+      const sectionParagraph = [...document.querySelectorAll(
+        ".smarttex-document-page p"
+      )].find((paragraph) => paragraph.textContent.includes(
+        "In the following we assume an XFEL"
+      ));
+      const sectionPhrase = "In the following we assume an XFEL beam created by a stationary random process.";
+      const sectionPhraseOffset = sectionParagraph.textContent.indexOf(
+        "In the following"
+      );
+      const sourceSectionStart = fastEditedSource.indexOf(
+        "In the following"
+      );
+      const sectionClickResults = [];
+      const textPointAtOffset = (container, offsetValue) => {
+        const walker = document.createTreeWalker(
+          container,
+          NodeFilter.SHOW_TEXT
+        );
+        let remaining = Math.max(0, Number(offsetValue) || 0);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          if (remaining <= node.data.length) {
+            return { node, offset: remaining };
+          }
+          remaining -= node.data.length;
+        }
+        return null;
+      };
+      sectionParagraph.scrollIntoView({ block: "center" });
+      await delay(20);
+      for (const offset of [0, 3, 12, 30, 60]) {
+        const point = textPointAtOffset(
+          sectionParagraph,
+          sectionPhraseOffset + offset
+        );
+        const range = document.createRange();
+        range.setStart(point.node, point.offset);
+        range.collapse(true);
+        const rect = range.getBoundingClientRect();
+        sectionParagraph.dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          clientX: rect.left + 0.5,
+          clientY: rect.top + Math.max(3, rect.height / 2)
+        }));
+        await delay(30);
+        sectionClickResults.push(
+          previewNavigationRequests.at(-1)?.index === sourceSectionStart + offset
+        );
+      }
+      checks.sectionOpeningClickMapping = (
+        sectionPhrase.length > 60 &&
+        sectionClickResults.every(Boolean)
+      );
+
+      checks.figureImage = Boolean(renderedFigure.querySelector("img"));
+      checks.figureReference = figureReference?.getAttribute("href")?.startsWith(
+        "#smarttex-reference-target-"
+      );
+      figureReference.dispatchEvent(new PointerEvent("pointerenter"));
+      await delay(30);
+      checks.figureReferencePopupCaption = (
+        !referencePopup.hidden &&
+        referencePopup.querySelector(
+          ".smarttex-document-figure-caption > strong"
+        )?.textContent === "Fig. 1:" &&
+        Boolean(referencePopup.querySelector(
+          ".smarttex-document-figure-caption .katex"
+        ))
+      );
+      figureReference.dispatchEvent(new PointerEvent("pointerleave"));
+
+      const debounceSource = source.replace(
+        "live preview of the active document",
+        "debounced preview update"
+      );
+      const cursorFor = (value) => value.indexOf("\\left") + 4;
+      dispatch(debounceSource, cursorFor(debounceSource));
+      await delay(300);
+      checks.immediateTextBeforeFullRender = document.querySelector(
+        ".smarttex-document-page"
+      ).textContent.includes("debounced preview update");
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if (document.querySelector(".smarttex-document-page")?.textContent.includes(
+          "debounced preview update"
+        )) break;
+        await delay(30);
+      }
+      checks.rendersAfterPause = document.querySelector(
+        ".smarttex-document-page"
+      ).textContent.includes("debounced preview update");
+
+      const continuousStarted = performance.now();
+      let renderedDuringContinuousTyping = false;
+      let latestContinuousSource = debounceSource;
+      for (let index = 0; index < 19; index += 1) {
+        latestContinuousSource = debounceSource.replace(
+          "debounced preview update",
+          `continuous update ${index}`
+        );
+        dispatch(latestContinuousSource, cursorFor(latestContinuousSource));
+        await delay(300);
+        const renderedText = document.querySelector(
+          ".smarttex-document-page"
+        )?.textContent || "";
+        if (
+          performance.now() - continuousStarted < 5500 &&
+          renderedText.includes("continuous update")
+        ) {
+          renderedDuringContinuousTyping = true;
+        }
+      }
+      checks.continuousRefresh = renderedDuringContinuousTyping;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if (document.querySelector(".smarttex-document-page")?.textContent.includes(
+          "continuous update 18"
+        )) break;
+        await delay(30);
+      }
+      checks.latestAfterContinuousTyping = document.querySelector(
+        ".smarttex-document-page"
+      ).textContent.includes("continuous update 18");
+      await delay(50);
+      checks.editorYielded = (
+        !preview.classList.contains("smarttex-document-rendering") &&
+        preview.getAttribute("aria-busy") !== "true"
+      );
+
+      const changedFileSource = latestContinuousSource
+        .replace("Live document preview", "Appendix preview")
+        .replace("This is a continuous update 18.", "Fresh appendix body paragraph.")
+        .replace("\\vect{F}", "\\vect{G}");
+      dispatch(
+        changedFileSource,
+        changedFileSource.indexOf("\\vect{G}") + 7,
+        "appendix.tex"
+      );
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const currentPage = document.querySelector(".smarttex-document-page");
+        if (
+          currentPage?.dataset.fileName === "appendix.tex" &&
+          currentPage.textContent.includes("Fresh appendix body paragraph")
+        ) {
+          break;
+        }
+        await delay(20);
+      }
+      const changedFilePage = document.querySelector(".smarttex-document-page");
+      checks.reparsesImmediatelyOnFileChange = (
+        changedFilePage?.dataset.fileName === "appendix.tex" &&
+        changedFilePage.textContent.includes("Fresh appendix body paragraph") &&
+        Boolean(changedFilePage.querySelector(".smarttex-document-equation .katex")) &&
+        !changedFilePage.querySelector(".smarttex-document-render-error")
+      );
+      checks.figureAssetIsCached = figureFetchCount === 1;
+
+      const editingToolbar = document.querySelector(
+        ".smarttex-document-editing-toolbar"
+      );
+      checks.editingToolbar = (
+        Boolean(editingToolbar) &&
+        editingToolbar.parentElement?.matches(".toolbar.toolbar-editor") &&
+        !document.querySelector(".smarttex-document-preview")
+          .contains(editingToolbar) &&
+        ["Bold", "Italic", "Underline", "Bulleted list", "Numbered list", "Add figure", "Add equation"]
+          .every((title) => editingToolbar.querySelector(`[title="${title}"]`))
+      );
+      const editorPane = document.querySelector("#ide-redesign-panel-editor");
+      const editorToolbarHost = editorPane.querySelector(".toolbar-editor");
+      editorPane.hidden = true;
+      await delay(30);
+      const pdfToolbar = document.querySelector(".pdf-toolbar");
+      const pdfDownloadButton = pdfToolbar.querySelector(
+        "[aria-label='Download PDF']"
+      );
+      checks.editingToolbarPdfFallback = (
+        editingToolbar.parentElement === pdfToolbar &&
+        editingToolbar.previousElementSibling === pdfDownloadButton
+      );
+      editorPane.hidden = false;
+      await delay(30);
+      checks.editingToolbarReturnsToEditor = (
+        editingToolbar.parentElement === editorToolbarHost
+      );
+
+      const proseSelectionStart = changedFileSource.indexOf("Fresh appendix");
+      const proseSelectionEnd = proseSelectionStart + "Fresh appendix".length;
+      dispatch(
+        changedFileSource,
+        proseSelectionEnd,
+        "appendix.tex",
+        proseSelectionStart,
+        proseSelectionEnd,
+        proseSelectionStart
+      );
+      await delay(140);
+      checks.editorSelectionHighlightsPreview =
+        Boolean(globalThis.CSS?.highlights?.has("smarttex-editor-selection"));
+
+      const mathSelectionStart = changedFileSource.indexOf("a+b");
+      const mathSelectionEnd = mathSelectionStart + 3;
+      dispatch(
+        changedFileSource,
+        mathSelectionEnd,
+        "appendix.tex",
+        mathSelectionStart,
+        mathSelectionEnd,
+        mathSelectionStart
+      );
+      await delay(140);
+      checks.editorMathSelectionHighlightsPreview = Boolean(
+        document.querySelector(".smarttex-source-selection")
+      );
+
+      dispatch(
+        changedFileSource,
+        proseSelectionEnd,
+        "appendix.tex",
+        proseSelectionStart,
+        proseSelectionEnd,
+        proseSelectionStart
+      );
+      await delay(40);
+      editingToolbar.querySelector('[title="Bold"]').click();
+      await delay(30);
+      checks.boldToolbarAction = (
+        previewEditRequests.at(-1)?.text === "\\textbf{Fresh appendix}" &&
+        previewEditRequests.at(-1)?.focus === false
+      );
+      checks.boldToolbarImmediatePreview = [...document.querySelectorAll(
+        ".smarttex-document-bold"
+      )].some((element) => element.textContent.includes("Fresh appendix"));
+      const boldButton = editingToolbar.querySelector('[title="Bold"]');
+      const boldWasPressed = boldButton.getAttribute("aria-pressed") === "true";
+      boldButton.click();
+      await delay(20);
+      checks.boldToolbarToggle = (
+        boldWasPressed &&
+        previewEditRequests.at(-1)?.text === "Fresh appendix" &&
+        boldButton.getAttribute("aria-pressed") === "false"
+      );
+
+      dispatch(changedFileSource, proseSelectionStart, "appendix.tex");
+      await delay(20);
+      editingToolbar.querySelector('[title="Italic"]').click();
+      await delay(20);
+      checks.italicToolbarAction =
+        previewEditRequests.at(-1)?.text === "\\textit{}";
+
+      dispatch(changedFileSource, proseSelectionStart, "appendix.tex");
+      await delay(20);
+      editingToolbar.querySelector('[title="Underline"]').click();
+      await delay(20);
+      checks.underlineToolbarAction =
+        previewEditRequests.at(-1)?.text === "\\underline{}";
+
+      dispatch(
+        changedFileSource,
+        proseSelectionEnd,
+        "appendix.tex",
+        proseSelectionStart,
+        proseSelectionEnd,
+        proseSelectionStart
+      );
+      await delay(20);
+      const textSize = editingToolbar.querySelector('select[aria-label="Text size"]');
+      textSize.value = "large";
+      textSize.dispatchEvent(new Event("change", { bubbles: true }));
+      await delay(20);
+      checks.textSizeToolbarAction =
+        previewEditRequests.at(-1)?.text === "{\\large Fresh appendix}";
+
+      const farLineStart = changedFileSource.indexOf("Far destination");
+      dispatch(changedFileSource, farLineStart, "appendix.tex");
+      await delay(20);
+      editingToolbar.querySelector('[title="Bulleted list"]').click();
+      await delay(20);
+      checks.bulletedListAction = (
+        previewEditRequests.at(-1)?.text.includes("\\begin{itemize}") &&
+        previewEditRequests.at(-1)?.text.includes("\\item Far destination")
+      );
+      checks.bulletedListImmediatePreview = (
+        document.querySelector(".smarttex-document-page")?.textContent || ""
+      ).includes("• Far destination");
+      const bulletedButton = editingToolbar.querySelector(
+        '[title="Bulleted list"]'
+      );
+      const bulletedWasPressed =
+        bulletedButton.getAttribute("aria-pressed") === "true";
+      bulletedButton.click();
+      await delay(20);
+      checks.bulletedListToggle = (
+        bulletedWasPressed &&
+        !previewEditRequests.at(-1)?.text.includes("\\begin{itemize}") &&
+        previewEditRequests.at(-1)?.text.includes("Far destination") &&
+        bulletedButton.getAttribute("aria-pressed") === "false"
+      );
+
+      dispatch(changedFileSource, farLineStart, "appendix.tex");
+      await delay(20);
+      editingToolbar.querySelector('[title="Numbered list"]').click();
+      await delay(20);
+      checks.numberedListAction = (
+        previewEditRequests.at(-1)?.text.includes("\\begin{enumerate}") &&
+        previewEditRequests.at(-1)?.text.includes("\\item Far destination")
+      );
+      checks.numberedListImmediatePreview = (
+        document.querySelector(".smarttex-document-page")?.textContent || ""
+      ).includes("1. Far destination");
+
+      dispatch(changedFileSource, farLineStart, "appendix.tex");
+      await delay(20);
+      editingToolbar.querySelector('[title="Add figure"]').click();
+      await delay(20);
+      checks.addFigureAction = (
+        previewEditRequests.at(-1)?.text.includes("\\begin{figure}") &&
+        previewEditRequests.at(-1)?.text.includes("\\includegraphics") &&
+        previewEditRequests.at(-1)?.text.includes("\\caption{}") &&
+        previewEditRequests.at(-1)?.text.includes("\\label{fig:")
+      );
+
+      dispatch(changedFileSource, mathSelectionStart, "appendix.tex");
+      await delay(20);
+      editingToolbar.querySelector('[title="Add equation"]').click();
+      await delay(20);
+      checks.addEquationAction = (
+        previewEditRequests.at(-1)?.text.includes("\\begin{equation}") &&
+        previewEditRequests.at(-1)?.text.includes("\\label{eq:")
+      );
+
+      dispatch(changedFileSource, proseSelectionStart, "appendix.tex");
+      await delay(20);
+      preview.focus({ preventScroll: true });
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "Z"
+      }));
+      await delay(30);
+      checks.typingHandsOffToEditor = (
+        previewEditRequests.at(-1)?.text === "Z" &&
+        previewEditRequests.at(-1)?.focus === true &&
+        previewFocusRequests.length > 0
+      );
+      const selectionRequestsBeforeHandoffArrow = previewSelectionRequests.length;
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowRight",
+        shiftKey: true
+      }));
+      await delay(40);
+      checks.arrowSelectionHandsOffToEditor = (
+        previewSelectionRequests.length > selectionRequestsBeforeHandoffArrow &&
+        previewSelectionRequests.at(-1)?.focus === true
+      );
+      const selectionRequestsBeforeHandoffPage = previewSelectionRequests.length;
+      preview.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "PageDown",
+        shiftKey: true
+      }));
+      await delay(100);
+      checks.pageSelectionHandsOffToEditor = (
+        previewSelectionRequests.length > selectionRequestsBeforeHandoffPage &&
+        previewSelectionRequests.at(-1)?.focus === true
+      );
+
+      dispatch(changedFileSource, farLineStart, "appendix.tex");
+      await delay(120);
+      const selectableParagraph = [...document.querySelectorAll(
+        ".smarttex-document-page p"
+      )].find((item) => item.textContent.includes("Far destination"));
+      const textNode = [...selectableParagraph.childNodes].find(
+        (node) => node.nodeType === Node.TEXT_NODE && node.data.includes("Far destination")
+      );
+      const nativeSelection = document.getSelection();
+      nativeSelection.removeAllRanges();
+      const nativeRange = document.createRange();
+      const nativeStart = textNode.data.indexOf("Far");
+      nativeRange.setStart(textNode, nativeStart);
+      nativeRange.setEnd(textNode, nativeStart + 3);
+      nativeSelection.addRange(nativeRange);
+      document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+      await delay(60);
+      checks.previewSelectionSynchronizesEditor = (
+        previewSelectionRequests.length > 0 &&
+        previewSelectionRequests.at(-1).anchor !==
+          previewSelectionRequests.at(-1).head
+      );
+      nativeSelection.removeAllRanges();
+
+      toggle.click();
+      await delay(30);
+      checks.restoresPdf = (
+        !nativePane.classList.contains("smarttex-document-native-hidden") &&
+        preview.hidden &&
+        toggle.getAttribute("aria-pressed") === "false" &&
+        getComputedStyle(
+          document.querySelector("[aria-label='Recompile']")
+        ).display !== "none"
+      );
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#document-preview-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Document preview test passed"
+        : `Document preview test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.documentPreviewTest = passed
+        ? "passed"
+        : "failed";
+    }
+
+    runDocumentPreviewTest().catch((error) => {
+      const output = document.querySelector("#document-preview-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Document preview test failed: ${error.message}`;
+      document.documentElement.dataset.documentPreviewTest = "failed";
+    });
+  </script>
+</body>
+</html>

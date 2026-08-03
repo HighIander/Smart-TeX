@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX controls harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #2e3440;
+    }
+
+    .ide-redesign-toolbar-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0;
+      min-height: 52px;
+      padding: 0 16px;
+      background: #202938;
+    }
+
+    .ide-redesign-toolbar-button-container {
+      display: flex;
+      align-items: center;
+    }
+
+    #mock-share-button {
+      height: 32px;
+      padding: 4px 14px;
+      border: 1px solid #14823a;
+      border-radius: 6px;
+      color: #fff;
+      background: #1f9d4c;
+      font: 700 13px/1 system-ui, sans-serif;
+    }
+
+    #controls-test-result {
+      position: fixed;
+      z-index: 2147483647;
+      top: 52px;
+      right: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      color: #fff;
+      background: #9a6700;
+      font: 700 12px/1.2 system-ui, sans-serif;
+    }
+
+    #controls-test-result[data-result="passed"] {
+      background: #16803b;
+    }
+
+    #controls-test-result[data-result="failed"] {
+      background: #cf222e;
+    }
+  </style>
+</head>
+<body>
+  <div class="file-tree-list" hidden>
+    <div
+      role="treeitem"
+      data-path="figures/preview.png"
+      data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='360' height='140'%3E%3Crect width='360' height='140' fill='%233158b8'/%3E%3C/svg%3E"
+    ></div>
+  </div>
+  <div class="ide-redesign-toolbar-actions">
+    <div id="ctca-project-cloud-slot" class="ide-redesign-toolbar-button-container ctca-project-cloud-slot">
+      <button type="button" aria-label="Nextcloud">Cloud</button>
+    </div>
+    <div id="mock-share-slot" class="ide-redesign-toolbar-button-container">
+      <button id="mock-share-button" type="button" aria-label="Share">Share</button>
+    </div>
+  </div>
+  <output id="controls-test-result">Controls test running</output>
+  <script>
+    const featureKey = "smarttex:features:v1";
+    let fakeFeatures = { equations: true, tables: true, figures: true };
+    const storageListeners = [];
+    const sentMessages = [];
+    const editorRequests = [];
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get() {
+            return { [featureKey]: { ...fakeFeatures } };
+          }
+        },
+        onChanged: {
+          addListener(listener) {
+            storageListeners.push(listener);
+          }
+        }
+      },
+      runtime: {
+        async sendMessage(message) {
+          sentMessages.push(message);
+          return { ok: true };
+        }
+      }
+    };
+    function changeFeatures(next) {
+      fakeFeatures = { ...next };
+      for (const listener of storageListeners) {
+        listener({
+          [featureKey]: {
+            newValue: { ...fakeFeatures }
+          }
+        }, "local");
+      }
+    }
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      editorRequests.push(request);
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({
+          requestId: request.requestId,
+          ok: true,
+          index: request.index
+        })
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    const equationSource = "Text $a+b$";
+    const equationCursor = equationSource.indexOf("+");
+    const tableSource = String.raw`\begin{tabular}{lc}A & B \\ C & D\end{tabular}`;
+    const tableCursor = tableSource.indexOf("C");
+    const figureSource = String.raw`\newcommand{\hlc}[1]{\textbf{#1}}
+\renewcommand{\hlc}[2][cyan]{{\sethlcolor{#1}\hl{#2}}}
+\begin{equation}
+E=mc^2
+\label{eq:test}
+\end{equation}
+\begin{figure}
+\includegraphics{figures/preview}
+\caption{A popup figure from Eqn.~\eqref{eq:test}, with \hlc{distributed} data and $x^2$}
+\end{figure}`;
+    const figureCursor = figureSource.indexOf("includegraphics");
+
+    function dispatch(value, cursorIndex) {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          screen: { pageX: 480, pageY: 360, lineHeight: 24 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "harness"
+        })
+      }));
+    }
+    const delay = (milliseconds) => new Promise((resolve) => {
+      window.setTimeout(resolve, milliseconds);
+    });
+    async function waitForPreview(kind) {
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const popup = document.querySelector("#smarttex-equation-preview");
+        if (!popup.hidden && popup.dataset.previewKind === kind) return popup;
+        await delay(30);
+      }
+      throw new Error(`${kind} preview did not appear`);
+    }
+
+    async function runControlsTest() {
+      const checks = {};
+      dispatch(equationSource, equationCursor);
+      let popup = await waitForPreview("equation");
+      popup.querySelector(".smarttex-preview-close").click();
+      checks.xCloses = popup.hidden;
+      dispatch(equationSource, equationCursor);
+      await delay(150);
+      checks.xSuppressesSameContext = popup.hidden;
+
+      dispatch(equationSource, 0);
+      await delay(80);
+      dispatch(equationSource, equationCursor);
+      popup = await waitForPreview("equation");
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true
+      }));
+      checks.escapeCloses = popup.hidden;
+
+      dispatch(equationSource, 0);
+      await delay(80);
+      dispatch(equationSource, equationCursor);
+      await waitForPreview("equation");
+      const delimiterMarked = String.raw`Delimiter test $\lef|t(x\right)$`;
+      const delimiterCursor = delimiterMarked.indexOf("|");
+      const delimiterSource = (
+        delimiterMarked.slice(0, delimiterCursor) +
+        delimiterMarked.slice(delimiterCursor + 1)
+      );
+      dispatch(delimiterSource, delimiterCursor);
+      popup = await waitForPreview("equation");
+      await delay(150);
+      checks.delimiterCommand = (
+        popup.querySelector(".smarttex-preview-status").hidden &&
+        !popup.classList.contains("smarttex-preview-stale") &&
+        Boolean(popup.querySelector(".katex"))
+      );
+
+      changeFeatures({ equations: false, tables: true, figures: true });
+      await delay(150);
+      dispatch(equationSource, equationCursor);
+      await delay(150);
+      checks.equationSwitch = popup.hidden;
+
+      dispatch(tableSource, tableCursor);
+      popup = await waitForPreview("table");
+      checks.tableSwitch = !popup.hidden;
+      changeFeatures({ equations: false, tables: false, figures: true });
+      await delay(150);
+      checks.tableSwitchDisables = popup.hidden;
+
+      dispatch(figureSource, figureCursor);
+      popup = await waitForPreview("figure");
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if (popup.querySelector(".smarttex-figure-popup-image")) break;
+        await delay(20);
+      }
+      const figureImage = popup.querySelector(".smarttex-figure-popup-image");
+      const figureRect = popup.getBoundingClientRect();
+      const captionReference = popup.querySelector(
+        ".smarttex-caption-reference"
+      );
+      checks.figureSwitch = (
+        !popup.hidden &&
+        popup.querySelector(".smarttex-preview-title").textContent === "Figure preview" &&
+        popup.querySelector(".smarttex-preview-meta").textContent === "Figure 1" &&
+        popup.textContent.includes("A popup figure") &&
+        popup.querySelector("figcaption strong")?.textContent === "Fig. 1:" &&
+        popup.querySelector("figcaption .katex")?.textContent.includes("x2") &&
+        captionReference?.textContent === "(1)" &&
+        getComputedStyle(captionReference).pointerEvents === "auto" &&
+        popup.querySelector("figcaption mark")?.textContent === "distributed" &&
+        popup.querySelector("figcaption mark")?.style.backgroundColor === "cyan" &&
+        !popup.textContent.includes("\\hlc") &&
+        Boolean(figureImage) &&
+        popup.querySelector(".smarttex-equation-output").scrollWidth <=
+          popup.querySelector(".smarttex-equation-output").clientWidth + 1 &&
+        popup.querySelector(".smarttex-equation-output").scrollHeight <=
+          popup.querySelector(".smarttex-equation-output").clientHeight + 1 &&
+        figureRect.width <= window.innerWidth * 0.4 + 2 &&
+        figureImage.getBoundingClientRect().width <= window.innerWidth * 0.4 + 2 &&
+        figureImage.getBoundingClientRect().height <= window.innerHeight * 0.4 + 2
+      );
+      captionReference.dispatchEvent(new PointerEvent("pointerenter"));
+      await delay(30);
+      checks.captionReferenceHover = Boolean(
+        document.querySelector(
+          ".smarttex-caption-reference-popup:not([hidden]) .katex"
+        )
+      );
+      captionReference.click();
+      await delay(30);
+      checks.captionReferenceClick = editorRequests.some((request) => (
+        request.type === "setCursor" &&
+        request.index === figureSource.indexOf("\\begin{equation}") &&
+        request.focus === true
+      ));
+      changeFeatures({ equations: false, tables: false, figures: false });
+      await delay(150);
+      checks.figureSwitchDisables = popup.hidden;
+
+      const smartButton = document.querySelector("#smarttex-options-button");
+      const smartSlot = document.querySelector("#smarttex-toolbar-slot");
+      const cloudSlot = document.querySelector("#ctca-project-cloud-slot");
+      const shareSlot = document.querySelector("#mock-share-slot");
+      checks.smartPlacement = (
+        smartSlot?.nextElementSibling === cloudSlot &&
+        cloudSlot?.nextElementSibling === shareSlot
+      );
+      checks.smartFormatting = smartButton.classList.contains("smarttex-toolbar-button");
+      smartButton.click();
+      await delay(30);
+      checks.smartButton = sentMessages.some(
+        (message) => message?.type === "smarttex-open-options"
+      );
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#controls-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Controls test passed"
+        : `Controls test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.controlsTest = passed ? "passed" : "failed";
+    }
+
+    runControlsTest().catch((error) => {
+      const output = document.querySelector("#controls-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Controls test failed: ${error.message}`;
+      document.documentElement.dataset.controlsTest = "failed";
+    });
+  </script>
+</body>
+</html>

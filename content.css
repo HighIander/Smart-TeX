@@ -1,0 +1,2481 @@
+/* SPDX-License-Identifier: CC-BY-NC-SA-4.0 */
+
+#smarttex-equation-preview,
+#smarttex-equation-preview *,
+#smarttex-equation-preview *::before,
+#smarttex-equation-preview *::after {
+  box-sizing: border-box;
+}
+
+#smarttex-options-button {
+  position: fixed;
+  z-index: 2147483645;
+  top: 10px;
+  right: 12px;
+  min-width: 58px;
+  height: 32px;
+  padding: 4px 12px;
+  border: 1px solid #0d63b8;
+  border-radius: 6px;
+  color: #fff;
+  background: #1674d1;
+  box-shadow: 0 3px 10px rgb(15 23 42 / 20%);
+  font: 700 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+#smarttex-options-button:hover {
+  background: #0d63b8;
+}
+
+#smarttex-toolbar-slot {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-right: 6px;
+}
+
+#smarttex-toolbar-slot #smarttex-options-button.smarttex-toolbar-button {
+  position: static;
+  inset: auto;
+  display: inline-grid;
+  place-items: center;
+  min-width: 64px;
+  height: 32px;
+  margin: 0;
+  padding: 4px 14px;
+  border: 1px solid #3158b8;
+  border-radius: 6px;
+  color: #fff;
+  background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 18%),
+    inset 0 1px 0 rgb(255 255 255 / 14%);
+  font: 700 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#smarttex-toolbar-slot #smarttex-options-button.smarttex-toolbar-button:hover {
+  border-color: #294ba2;
+  color: #fff;
+  background: linear-gradient(135deg, #294fae 0%, #5b3da5 100%);
+  box-shadow:
+    0 2px 5px rgb(15 23 42 / 24%),
+    inset 0 1px 0 rgb(255 255 255 / 16%);
+}
+
+#smarttex-toolbar-slot #smarttex-options-button.smarttex-toolbar-button:focus-visible {
+  outline: 2px solid #9cc8ff;
+  outline-offset: 2px;
+}
+
+#smarttex-equation-preview {
+  position: fixed;
+  z-index: 2147483646;
+  width: max-content;
+  min-width: 220px;
+  max-width: min(70vw, calc(100vw - 24px));
+  max-height: min(70vh, 640px);
+  overflow: hidden;
+  border: 1px solid rgb(111 127 147 / 48%);
+  border-radius: 12px;
+  color: #172033;
+  background: rgb(255 255 255 / 97%);
+  box-shadow:
+    0 18px 46px rgb(15 23 42 / 22%),
+    0 3px 10px rgb(15 23 42 / 12%);
+  font: 13px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px) scale(0.985);
+  transform-origin: center top;
+  transition: opacity 90ms ease, transform 90ms ease;
+}
+
+#smarttex-equation-preview[hidden] {
+  display: none !important;
+}
+
+#smarttex-equation-preview.smarttex-preview-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+#smarttex-equation-preview.smarttex-preview-measuring {
+  visibility: hidden;
+  transition: none;
+}
+
+#smarttex-equation-preview[data-placement="above"] {
+  transform-origin: center bottom;
+}
+
+.smarttex-preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 34px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e3e8ef;
+  color: #475569;
+  background: #f7f9fc;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.smarttex-preview-meta {
+  color: #718096;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.smarttex-preview-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.smarttex-preview-close {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #64748b;
+  background: transparent;
+  font: 500 19px/1 system-ui, sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.smarttex-preview-close:hover {
+  color: #172033;
+  background: #e7edf5;
+}
+
+.smarttex-equation-output {
+  min-height: 56px;
+  max-width: min(70vw, calc(100vw - 26px));
+  max-height: min(62vh, 560px);
+  overflow: auto;
+  padding: 17px 20px;
+  text-align: center;
+}
+
+.smarttex-equation-output > .katex-display {
+  margin: 0;
+}
+
+.smarttex-equation-output .katex {
+  font-size: 1.25em;
+}
+
+#smarttex-equation-preview[data-preview-kind="table"] .smarttex-equation-output {
+  padding: 12px 14px 14px;
+  text-align: left;
+}
+
+#smarttex-equation-preview[data-preview-kind="figure"] {
+  width: max-content;
+  min-width: 220px;
+  max-width: min(40vw, calc(100vw - 24px));
+  max-height: min(70vh, calc(100vh - 24px));
+}
+
+#smarttex-equation-preview[data-preview-kind="figure"] .smarttex-equation-output {
+  width: max-content;
+  max-width: min(40vw, calc(100vw - 26px));
+  max-height: none;
+  overflow: hidden;
+  padding: 12px 14px 14px;
+}
+
+.smarttex-figure-popup {
+  display: grid;
+  gap: 9px;
+  width: max-content;
+  max-width: 100%;
+  margin: 0;
+}
+
+.smarttex-figure-popup-media {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  width: max-content;
+  max-width: 100%;
+}
+
+.smarttex-figure-popup-image {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 40vh;
+  object-fit: contain;
+}
+
+.smarttex-figure-popup-pdf {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(40vw, 520px);
+  max-height: min(40vh, 420px);
+  background: #fff;
+}
+
+.smarttex-figure-popup-placeholder {
+  display: grid;
+  place-items: center;
+  width: min(40vw, 520px);
+  min-height: 110px;
+  padding: 14px;
+  border: 1px dashed #9aa7b7;
+  border-radius: 7px;
+  color: #617083;
+  background: #f7f9fc;
+  font: 600 12px/1.4 Inter, ui-sans-serif, system-ui, sans-serif;
+  overflow-wrap: anywhere;
+}
+
+.smarttex-float-popup-caption {
+  max-width: 100%;
+  color: inherit;
+  font: 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.smarttex-float-popup-caption .smarttex-inline-latex {
+  display: inline;
+}
+
+.smarttex-float-popup-caption .smarttex-inline-latex .katex {
+  font-size: 1em;
+}
+
+.smarttex-float-popup-caption .smarttex-caption-reference {
+  pointer-events: auto;
+}
+
+.smarttex-table-scroll {
+  max-width: min(calc(70vw - 28px), calc(100vw - 54px));
+  overflow: auto;
+}
+
+.smarttex-table-popup {
+  display: grid;
+  gap: 9px;
+  width: max-content;
+  max-width: 100%;
+  margin: 0;
+}
+
+.smarttex-table-preview {
+  min-width: max-content;
+  margin: 0 auto;
+  border-spacing: 0;
+  border-collapse: collapse;
+  color: inherit;
+  font: 13px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.smarttex-table-preview td {
+  position: relative;
+  min-width: 34px;
+  padding: 6px 10px;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.smarttex-table-preview .smarttex-table-align-left {
+  text-align: left;
+}
+
+.smarttex-table-preview .smarttex-table-align-center {
+  text-align: center;
+}
+
+.smarttex-table-preview .smarttex-table-align-right {
+  text-align: right;
+}
+
+.smarttex-table-preview .smarttex-table-border-left {
+  border-left: 1px solid currentColor;
+}
+
+.smarttex-table-preview .smarttex-table-border-right {
+  border-right: 1px solid currentColor;
+}
+
+.smarttex-table-preview .smarttex-table-rule-before > td {
+  border-top: 1px solid currentColor;
+}
+
+.smarttex-table-preview .smarttex-table-rule-after > td {
+  border-bottom: 1px solid currentColor;
+}
+
+.smarttex-table-preview strong {
+  font-weight: 700;
+}
+
+.smarttex-table-preview code {
+  font: 0.95em/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.smarttex-table-preview .smarttex-small-caps {
+  font-variant: small-caps;
+}
+
+.smarttex-table-inline-math .katex {
+  font-size: 1em;
+}
+
+.smarttex-table-rendered-caret {
+  position: relative;
+  pointer-events: none;
+  display: inline-block;
+  width: 0;
+  min-width: 0;
+  height: 1em;
+  vertical-align: -0.12em;
+}
+
+.smarttex-table-rendered-caret::after {
+  position: absolute;
+  z-index: 2;
+  top: -0.08em;
+  left: -1px;
+  width: 2px;
+  height: 1.14em;
+  border-radius: 1px;
+  background: #1674d1;
+  content: "";
+  animation: smarttex-caret-blink 1.05s steps(1, end) infinite;
+}
+
+.smarttex-rendered-caret {
+  position: relative;
+  pointer-events: none;
+  display: inline-block;
+  width: 0;
+  min-width: 0;
+}
+
+.katex-html .smarttex-rendered-caret::after {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: -0.03em;
+  width: 2px;
+  height: 1.08em;
+  border-radius: 1px;
+  background: #1674d1;
+  content: "";
+  animation: smarttex-caret-blink 1.05s steps(1, end) infinite;
+}
+
+.smarttex-preview-status {
+  overflow: hidden;
+  padding: 7px 12px 8px;
+  border-top: 1px solid #f0d9a4;
+  color: #815a13;
+  background: #fff8e7;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-preview-stale .smarttex-equation-output {
+  opacity: 0.72;
+}
+
+.smarttex-equation-source-fallback {
+  color: #7a2932;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+@keyframes smarttex-caret-blink {
+  0%,
+  48% {
+    opacity: 1;
+  }
+
+  49%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #smarttex-equation-preview {
+    transition: none;
+  }
+
+  .katex-html .smarttex-rendered-caret::after {
+    animation: none;
+  }
+
+  .smarttex-table-rendered-caret::after {
+    animation: none;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  #smarttex-equation-preview {
+    border-color: rgb(130 151 176 / 60%);
+    color: #e8eef7;
+    background: rgb(25 34 47 / 98%);
+    box-shadow:
+      0 18px 48px rgb(0 0 0 / 48%),
+      0 3px 10px rgb(0 0 0 / 28%);
+  }
+
+  .smarttex-preview-heading {
+    border-color: #3a4657;
+    color: #b8c4d4;
+    background: #222e3e;
+  }
+
+  .smarttex-preview-meta {
+    color: #93a4b9;
+  }
+
+  .smarttex-preview-close {
+    color: #aab8ca;
+  }
+
+  .smarttex-preview-close:hover {
+    color: #fff;
+    background: #35445a;
+  }
+
+  .smarttex-preview-status {
+    border-color: #6c5425;
+    color: #f0ce88;
+    background: #3c311c;
+  }
+
+  .smarttex-equation-source-fallback {
+    color: #ffabb4;
+  }
+
+  .katex-html .smarttex-rendered-caret::after {
+    background: #58a6ff;
+  }
+
+  .smarttex-table-rendered-caret::after {
+    background: #58a6ff;
+  }
+}
+
+/* Per-document Nextcloud project files. */
+#smarttex-toolbar-slot {
+  gap: 5px;
+}
+
+#smarttex-cloud-button.smarttex-cloud-toolbar-button {
+  position: static;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  min-width: 36px;
+  height: 32px;
+  margin: 0;
+  padding: 5px;
+  border: 1px solid #4968c5;
+  border-radius: 6px;
+  color: #fff;
+  background: linear-gradient(135deg, #4b6dca 0%, #7a5cca 100%);
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 18%),
+    inset 0 1px 0 rgb(255 255 255 / 16%);
+  cursor: pointer;
+}
+
+#smarttex-cloud-button svg {
+  width: 23px;
+  height: 18px;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+#smarttex-cloud-button:hover,
+#smarttex-cloud-button:focus-visible {
+  border-color: #3158b8;
+  color: #fff;
+  background: linear-gradient(135deg, #405fbc 0%, #6e50bc 100%);
+}
+
+#smarttex-cloud-button.smarttex-cloud-connected {
+  border-color: #3158b8;
+  color: #fff;
+  background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
+}
+
+.smarttex-dialog-overlay,
+.smarttex-dialog-overlay *,
+.smarttex-dialog-overlay *::before,
+.smarttex-dialog-overlay *::after {
+  box-sizing: border-box;
+}
+
+.smarttex-dialog-overlay {
+  position: fixed;
+  z-index: 2147483647;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  color: #1f2937;
+  background: rgb(15 23 42 / 58%);
+  font: 13px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.smarttex-dialog-card {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  overflow: hidden;
+  border: 1px solid #c6d0dc;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgb(15 23 42 / 34%);
+}
+
+.smarttex-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 13px 16px 12px 18px;
+  border-bottom: 1px solid #e3e8ef;
+  background: #f7f9fc;
+}
+
+.smarttex-dialog-header h2 {
+  margin: 0;
+  color: #243247;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.smarttex-dialog-close {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #64748b;
+  background: transparent;
+  font: 500 22px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-dialog-close:hover {
+  color: #172033;
+  background: #e7edf5;
+}
+
+.smarttex-dialog-message {
+  padding: 12px 18px 0;
+  color: #526174;
+  white-space: pre-line;
+}
+
+.smarttex-dialog-body {
+  min-height: 0;
+  padding: 14px 18px 18px;
+  overflow: auto;
+}
+
+.smarttex-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 56px;
+  padding: 11px 16px;
+  border-top: 1px solid #e3e8ef;
+  background: #f7f9fc;
+}
+
+.smarttex-dialog-actions button,
+.smarttex-inline-form button {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid #b4bfcc;
+  border-radius: 6px;
+  color: #26374b;
+  background: #fff;
+  font: 650 13px/1.2 inherit;
+  cursor: pointer;
+}
+
+.smarttex-dialog-actions button:hover,
+.smarttex-inline-form button:hover {
+  border-color: #3979cb;
+  background: #eef6ff;
+}
+
+.smarttex-dialog-actions .smarttex-dialog-primary {
+  border-color: #1769be;
+  color: #fff;
+  background: #1674d1;
+}
+
+.smarttex-dialog-actions .smarttex-dialog-primary:hover {
+  background: #0d63b8;
+}
+
+.smarttex-dialog-actions .smarttex-dialog-danger {
+  margin-right: auto;
+  border-color: #b42331;
+  color: #fff;
+  background: #cf3342;
+}
+
+.smarttex-dialog-actions .smarttex-dialog-danger:hover {
+  background: #ad2432;
+}
+
+.smarttex-dialog-overlay.smarttex-dialog-busy .smarttex-dialog-card::after {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  content: "";
+  cursor: wait;
+  background: rgb(255 255 255 / 42%);
+}
+
+.smarttex-connection-section h3,
+.smarttex-new-connection h3 {
+  margin: 0 0 8px;
+  color: #34445a;
+  font-size: 13px;
+}
+
+.smarttex-connection-list {
+  display: grid;
+  gap: 7px;
+}
+
+.smarttex-connection-choice {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #d0d8e2;
+  border-radius: 8px;
+  background: #f9fbfd;
+  cursor: pointer;
+}
+
+.smarttex-connection-choice:has(input:checked) {
+  border-color: #54aeff;
+  background: #eef7ff;
+  box-shadow: 0 0 0 1px rgb(84 174 255 / 24%);
+}
+
+.smarttex-connection-choice > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.smarttex-connection-choice strong {
+  overflow: hidden;
+  color: #1f334b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-connection-choice small,
+.smarttex-connection-empty,
+.smarttex-nextcloud-status {
+  color: #66768a;
+}
+
+.smarttex-connection-empty {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed #c5cfda;
+  border-radius: 8px;
+}
+
+.smarttex-new-connection {
+  margin-top: 17px;
+  padding-top: 15px;
+  border-top: 1px solid #e3e8ef;
+}
+
+.smarttex-inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.smarttex-inline-form input,
+.smarttex-picker-toolbar input {
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid #b4bfcc;
+  border-radius: 6px;
+  color: #1f2937;
+  background: #fff;
+  font: inherit;
+}
+
+.smarttex-nextcloud-status {
+  min-height: 20px;
+  margin-top: 7px;
+}
+
+.smarttex-nextcloud-status[data-state="success"] {
+  color: #17813b;
+}
+
+.smarttex-nextcloud-status[data-state="error"] {
+  color: #c22636;
+}
+
+.smarttex-check-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  margin-top: 16px;
+  padding: 11px 12px;
+  border: 1px solid #d0d8e2;
+  border-radius: 8px;
+  background: #f9fbfd;
+}
+
+.smarttex-check-row > span {
+  display: grid;
+  gap: 2px;
+}
+
+.smarttex-check-row small {
+  color: #66768a;
+}
+
+.smarttex-nextcloud-picker-dialog {
+  width: min(960px, calc(100vw - 32px));
+  height: min(720px, calc(100vh - 24px));
+  max-height: calc(100vh - 24px);
+}
+
+.smarttex-nextcloud-picker-dialog .smarttex-dialog-body {
+  display: grid;
+  overflow: hidden;
+}
+
+.smarttex-nextcloud-picker {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  min-height: 0;
+}
+
+.smarttex-picker-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(150px, 230px);
+  gap: 7px;
+  align-items: center;
+}
+
+.smarttex-picker-toolbar button {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid #b4bfcc;
+  border-radius: 6px;
+  color: #26374b;
+  background: #fff;
+  cursor: pointer;
+}
+
+.smarttex-picker-breadcrumb {
+  min-width: 0;
+  overflow: auto hidden;
+  white-space: nowrap;
+}
+
+.smarttex-picker-breadcrumb button {
+  min-height: 28px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.smarttex-picker-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #d0d8e2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.smarttex-picker-row {
+  display: grid;
+  grid-template-columns: 24px 28px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  min-height: 40px;
+  padding: 5px 10px;
+  border-bottom: 1px solid #e8edf2;
+}
+
+.smarttex-picker-row:last-child {
+  border-bottom: 0;
+}
+
+.smarttex-picker-row:hover {
+  background: #f4f7fa;
+}
+
+.smarttex-picker-icon {
+  font-size: 17px;
+}
+
+.smarttex-picker-name {
+  min-width: 0;
+  padding: 4px 0;
+  overflow: hidden;
+  border: 0;
+  color: #1f2937;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-picker-meta,
+.smarttex-picker-status,
+.smarttex-picker-empty {
+  color: #66768a;
+  font-size: 12px;
+}
+
+.smarttex-picker-meta {
+  white-space: nowrap;
+}
+
+.smarttex-picker-empty {
+  padding: 26px;
+  text-align: center;
+}
+
+.smarttex-picker-status-error {
+  color: #c22636;
+}
+
+.smarttex-nextcloud-upload-source {
+  display: flex;
+  margin: 10px 0;
+}
+
+.smarttex-nextcloud-upload-source-button {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #b4bfcc;
+  border-radius: 8px;
+  color: #25364a;
+  background: #f7f9fc;
+  cursor: pointer;
+  text-align: left;
+}
+
+.smarttex-nextcloud-upload-source-button:hover {
+  border-color: #3979cb;
+  background: #eef6ff;
+}
+
+.smarttex-nextcloud-upload-source-button svg {
+  flex: 0 0 auto;
+  width: 27px;
+  height: 21px;
+  fill: #1674d1;
+}
+
+.smarttex-nextcloud-upload-source-button > span {
+  display: grid;
+  gap: 2px;
+}
+
+.smarttex-nextcloud-upload-source-button small {
+  color: #66768a;
+}
+
+.smarttex-nextcloud-update-all {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  min-width: 38px;
+  height: 32px;
+  padding: 4px;
+  border: 1px solid #54aeff;
+  border-radius: 6px;
+  color: #0969da;
+  background: #ddf4ff;
+  cursor: pointer;
+}
+
+.smarttex-nextcloud-update-all[hidden] {
+  display: none !important;
+}
+
+.smarttex-nextcloud-update-all:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.smarttex-nextcloud-update-all svg,
+.smarttex-nextcloud-file-refresh svg {
+  display: block;
+  width: 30px;
+  height: 20px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.smarttex-refresh-cloud {
+  fill: currentColor;
+}
+
+.smarttex-refresh-arrow {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.smarttex-nextcloud-linked-tree-item {
+  position: relative !important;
+  box-sizing: border-box !important;
+  min-width: 0 !important;
+  padding-right: 94px !important;
+}
+
+.smarttex-nextcloud-linked-tree-item .smarttex-linked-name-region,
+.smarttex-nextcloud-linked-tree-item .smarttex-linked-name-control {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+}
+
+.smarttex-nextcloud-linked-tree-item .smarttex-linked-name-text {
+  display: block !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  direction: ltr !important;
+  text-align: left !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.smarttex-nextcloud-file-refresh {
+  position: absolute;
+  z-index: 6;
+  top: 50%;
+  right: 42px;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  min-width: 44px;
+  height: 32px;
+  margin: 0;
+  padding: 4px 6px;
+  border: 1px solid #54aeff;
+  border-radius: 6px;
+  color: #0969da;
+  background: #ddf4ff;
+  box-shadow: 0 1px 2px rgb(27 31 36 / 18%);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+#smarttex-cloud-toast {
+  position: fixed;
+  z-index: 2147483647;
+  right: 18px;
+  bottom: 18px;
+  max-width: min(560px, calc(100vw - 36px));
+  padding: 10px 13px;
+  border: 1px solid #54aeff;
+  border-radius: 8px;
+  color: #0550ae;
+  background: #ddf4ff;
+  box-shadow: 0 8px 24px rgb(27 31 36 / 18%);
+  font: 13px/1.4 Inter, ui-sans-serif, system-ui, sans-serif;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+#smarttex-cloud-toast.smarttex-cloud-toast-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#smarttex-cloud-toast.smarttex-cloud-toast-error {
+  border-color: #ff8182;
+  color: #a40e26;
+  background: #ffebe9;
+}
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-dialog-card,
+  .smarttex-dialog-actions,
+  .smarttex-inline-form input,
+  .smarttex-picker-toolbar input,
+  .smarttex-picker-toolbar button,
+  .smarttex-picker-list,
+  .smarttex-nextcloud-upload-source-button {
+    border-color: #48586c;
+    color: #d9e2ee;
+    background: #182230;
+  }
+
+  .smarttex-dialog-header {
+    border-color: #3a4657;
+    background: #222e3e;
+  }
+
+  .smarttex-dialog-header h2,
+  .smarttex-connection-section h3,
+  .smarttex-new-connection h3,
+  .smarttex-connection-choice strong,
+  .smarttex-picker-name {
+    color: #e3ebf5;
+  }
+
+  .smarttex-dialog-message,
+  .smarttex-connection-choice small,
+  .smarttex-connection-empty,
+  .smarttex-nextcloud-status,
+  .smarttex-check-row small,
+  .smarttex-picker-meta,
+  .smarttex-picker-status,
+  .smarttex-picker-empty,
+  .smarttex-nextcloud-upload-source-button small {
+    color: #9cadc1;
+  }
+
+  .smarttex-dialog-body {
+    background: #182230;
+  }
+
+  .smarttex-connection-choice,
+  .smarttex-check-row {
+    border-color: #3f4d60;
+    background: #202c3c;
+  }
+
+  .smarttex-connection-choice:has(input:checked),
+  .smarttex-nextcloud-file-refresh,
+  .smarttex-nextcloud-update-all {
+    border-color: #1f6feb;
+    color: #79c0ff;
+    background: #0d2742;
+  }
+
+  .smarttex-new-connection,
+  .smarttex-dialog-actions,
+  .smarttex-picker-row {
+    border-color: #354154;
+  }
+
+  .smarttex-picker-row:hover,
+  .smarttex-nextcloud-upload-source-button:hover {
+    background: #222f40;
+  }
+
+  .smarttex-dialog-overlay.smarttex-dialog-busy .smarttex-dialog-card::after {
+    background: rgb(15 23 42 / 46%);
+  }
+}
+
+@media (max-width: 640px) {
+  .smarttex-dialog-overlay {
+    padding: 8px;
+  }
+
+  .smarttex-dialog-card,
+  .smarttex-nextcloud-picker-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+  }
+
+  .smarttex-inline-form,
+  .smarttex-picker-toolbar {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .smarttex-inline-form input,
+  .smarttex-picker-search {
+    grid-column: 1 / -1;
+  }
+
+  .smarttex-picker-row {
+    grid-template-columns: 24px 28px minmax(0, 1fr);
+  }
+
+  .smarttex-picker-meta {
+    display: none;
+  }
+}
+
+/* Full-document KaTeX preview inside the CollabTeX PDF pane. */
+#smarttex-document-preview-toggle,
+#smarttex-document-preview-toggle *,
+#smarttex-document-preview-controls,
+#smarttex-document-preview-controls *,
+.smarttex-document-preview-settings,
+.smarttex-document-preview-settings *,
+.smarttex-document-editing-toolbar,
+.smarttex-document-editing-toolbar *,
+.smarttex-document-preview,
+.smarttex-document-preview *,
+.smarttex-document-preview *::before,
+.smarttex-document-preview *::after {
+  box-sizing: border-box;
+}
+
+.smarttex-document-preview-controls {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  margin: 0 4px;
+}
+
+#smarttex-document-preview-toggle.smarttex-document-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 68px;
+  min-height: 30px;
+  margin: 0;
+  padding: 4px 9px;
+  border: 1px solid #4968c5;
+  border-radius: 6px 0 0 6px;
+  color: #fff;
+  background: linear-gradient(135deg, #4b6dca 0%, #7a5cca 100%);
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 18%),
+    inset 0 1px 0 rgb(255 255 255 / 16%);
+  font: 700 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#smarttex-document-preview-toggle:hover,
+#smarttex-document-preview-toggle:focus-visible {
+  border-color: #3158b8;
+  color: #fff;
+  background: linear-gradient(135deg, #405fbc 0%, #6e50bc 100%);
+}
+
+#smarttex-document-preview-toggle:focus-visible {
+  outline: 2px solid #9cc8ff;
+  outline-offset: 2px;
+}
+
+#smarttex-document-preview-toggle.smarttex-document-preview-toggle-active {
+  border-color: #3158b8;
+  color: #fff;
+  background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
+}
+
+.smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active {
+  border-color: #3158b8;
+  color: #fff;
+  background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
+}
+
+.smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active:hover,
+.smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active:focus-visible,
+.smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active[aria-expanded="true"] {
+  border-color: #274da7;
+  color: #fff;
+  background: linear-gradient(135deg, #405fbc 0%, #6e50bc 100%);
+}
+
+.smarttex-document-preview-settings-button {
+  display: inline-grid;
+  place-items: center;
+  width: 27px;
+  min-width: 27px;
+  min-height: 30px;
+  margin-left: -1px;
+  padding: 0;
+  border: 1px solid #4968c5;
+  border-radius: 0 6px 6px 0;
+  color: #fff;
+  background: linear-gradient(135deg, #4b6dca 0%, #7a5cca 100%);
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 18%),
+    inset 0 1px 0 rgb(255 255 255 / 16%);
+  font: 700 12px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-document-preview-settings-button:hover,
+.smarttex-document-preview-settings-button:focus-visible,
+.smarttex-document-preview-settings-button[aria-expanded="true"] {
+  z-index: 1;
+  border-color: #3158b8;
+  color: #fff;
+  background: linear-gradient(135deg, #405fbc 0%, #6e50bc 100%);
+}
+
+.smarttex-document-preview-settings-button:focus-visible {
+  outline: 2px solid #9cc8ff;
+  outline-offset: 2px;
+}
+
+.smarttex-document-preview-settings[hidden] {
+  display: none !important;
+}
+
+.smarttex-document-preview-settings {
+  position: fixed;
+  z-index: 2147483647;
+  display: grid;
+  gap: 12px;
+  width: min(300px, calc(100vw - 16px));
+  padding: 13px 14px 14px;
+  border: 1px solid #b9c4d0;
+  border-radius: 9px;
+  color: #25364a;
+  background: #fff;
+  box-shadow: 0 12px 32px rgb(15 23 42 / 24%);
+  font: 13px/1.35 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-document-preview-size-row {
+  display: grid;
+  grid-template-columns: auto minmax(100px, 1fr) 42px;
+  gap: 9px;
+  align-items: center;
+}
+
+.smarttex-document-preview-size-row input {
+  width: 100%;
+  accent-color: #3158b8;
+}
+
+.smarttex-document-preview-size-row output {
+  color: #526174;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.smarttex-document-preview-option-row {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  width: max-content;
+  cursor: pointer;
+}
+
+.smarttex-document-preview-option-row input {
+  margin: 0;
+  accent-color: #3158b8;
+}
+
+.smarttex-document-preview-toggle-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font: 800 11px/1 Georgia, "Times New Roman", serif;
+}
+
+.smarttex-document-native-hidden,
+.smarttex-native-recompile-hidden {
+  display: none !important;
+}
+
+.smarttex-document-preview[hidden] {
+  display: none !important;
+}
+
+.smarttex-document-preview {
+  --smarttex-document-font-size: 13px;
+
+  position: relative;
+  align-self: stretch;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(10px, 1.5vw, 18px);
+  color: #191919;
+  background: #737b85;
+  overscroll-behavior: contain;
+  cursor: grab;
+}
+
+.smarttex-document-preview:focus {
+  outline: none;
+}
+
+.smarttex-document-preview.smarttex-document-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.smarttex-document-zoom-stage {
+  position: relative;
+  min-width: 1px;
+  min-height: 1px;
+  margin: 0 auto;
+}
+
+.smarttex-document-zoom-controls {
+  position: sticky;
+  z-index: 8;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  width: max-content;
+  margin: 0 0 -34px;
+  border: 1px solid rgb(82 97 116 / 45%);
+  border-radius: 999px;
+  overflow: hidden;
+  opacity: 0;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 3px 12px rgb(15 23 42 / 20%);
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.smarttex-document-preview:hover .smarttex-document-zoom-controls,
+.smarttex-document-preview:focus-within .smarttex-document-zoom-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.smarttex-document-zoom-controls button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  color: #34465a;
+  background: transparent;
+  font: 800 18px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-document-zoom-controls button:hover,
+.smarttex-document-zoom-controls button:focus-visible {
+  color: #1f66bd;
+  background: #e8f2ff;
+}
+
+.smarttex-document-zoom-controls output {
+  display: grid;
+  place-items: center;
+  min-width: 48px;
+  border-right: 1px solid rgb(82 97 116 / 25%);
+  border-left: 1px solid rgb(82 97 116 / 25%);
+  color: #526174;
+  font: 700 11px/1 ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-document-editing-toolbar {
+  position: static;
+  z-index: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: max-content;
+  max-width: min(100%, 520px);
+  min-height: 30px;
+  margin: 0 5px;
+  padding: 1px 3px;
+  overflow: auto hidden;
+  border: 0;
+  border-radius: 5px;
+  color: #34465a;
+  background: transparent;
+  box-shadow: none;
+  scrollbar-width: thin;
+}
+
+.smarttex-document-editing-toolbar-editor {
+  margin-left: auto;
+}
+
+.smarttex-document-editing-toolbar-pdf {
+  flex: 0 1 auto;
+}
+
+.smarttex-document-editing-toolbar button,
+.smarttex-document-editing-toolbar select {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  min-width: 28px;
+  height: 27px;
+  margin: 0;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  font: 700 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-document-editing-toolbar select {
+  display: block;
+  width: 67px;
+  font-weight: 600;
+}
+
+.smarttex-document-editing-toolbar button:hover,
+.smarttex-document-editing-toolbar button:focus-visible,
+.smarttex-document-editing-toolbar select:hover,
+.smarttex-document-editing-toolbar select:focus-visible {
+  border-color: #9fc4eb;
+  color: #175ea8;
+  background: #e8f2ff;
+  outline: none;
+}
+
+.smarttex-document-editing-toolbar button[aria-pressed="true"] {
+  border-color: #4a91d8;
+  color: #0d559c;
+  background: #d8ebff;
+  box-shadow: inset 0 0 0 1px rgb(49 121 191 / 16%);
+}
+
+.smarttex-document-editing-toolbar svg {
+  width: 19px;
+  height: 19px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.smarttex-document-editing-toolbar svg circle,
+.smarttex-document-editing-toolbar svg text {
+  fill: currentColor;
+  stroke: none;
+}
+
+.smarttex-toolbar-letter {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 16px;
+}
+
+.smarttex-toolbar-underlined {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.smarttex-document-toolbar-divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 21px;
+  margin: 0 2px;
+  background: #cbd5e1;
+}
+
+.smarttex-document-page::selection,
+.smarttex-document-page *::selection {
+  color: inherit;
+  background: rgb(49 132 222 / 32%);
+}
+
+::highlight(smarttex-editor-selection) {
+  color: inherit;
+  background: rgb(49 132 222 / 32%);
+}
+
+.smarttex-source-selection {
+  border-radius: 2px;
+  background: rgb(49 132 222 / 32%);
+  box-shadow: 0 0 0 1px rgb(49 132 222 / 8%);
+}
+
+.smarttex-document-page {
+  width: min(960px, 100%);
+  min-height: calc(100% - 2px);
+  margin: 0;
+  padding: clamp(42px, 7vw, 76px) clamp(18px, 3vw, 34px);
+  color: #151515;
+  background: #fff;
+  box-shadow: 0 3px 18px rgb(15 23 42 / 28%);
+  font-family: "Latin Modern Roman", "Computer Modern Serif", Georgia, serif;
+  font-size: var(--smarttex-document-font-size);
+  line-height: 1.62;
+  cursor: text;
+}
+
+.smarttex-document-page h1,
+.smarttex-document-page h2,
+.smarttex-document-page h3,
+.smarttex-document-page h4,
+.smarttex-document-page h5 {
+  color: inherit;
+  font-family: inherit;
+  line-height: 1.22;
+}
+
+.smarttex-document-page h2 {
+  margin: 2.1em 0 0.75em;
+  font-size: 1.55em;
+}
+
+.smarttex-document-page h3 {
+  margin: 1.75em 0 0.65em;
+  font-size: 1.28em;
+}
+
+.smarttex-document-page h4,
+.smarttex-document-page h5 {
+  margin: 1.4em 0 0.55em;
+  font-size: 1.08em;
+}
+
+.smarttex-document-page p {
+  margin: 0.72em 0;
+  text-align: justify;
+  text-justify: inter-word;
+  hyphens: auto;
+  white-space: pre-line;
+}
+
+.smarttex-document-title {
+  margin: 0 0 3em;
+  text-align: center;
+}
+
+.smarttex-document-title p,
+.smarttex-document-caption {
+  text-align: center;
+}
+
+.smarttex-document-title h1 {
+  margin: 0 0 0.75em;
+  font-size: 1.8em;
+}
+
+.smarttex-document-title p,
+.smarttex-document-title small {
+  display: block;
+  margin: 0.35em 0;
+}
+
+.smarttex-document-equation {
+  margin: 1.4em 0;
+  padding: 0.5em 0.75em;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.smarttex-document-equation > .katex-display {
+  margin: 0;
+}
+
+.smarttex-document-inline-equation {
+  display: inline-block;
+  margin: 0 0.1em;
+  vertical-align: baseline;
+}
+
+.smarttex-document-table {
+  max-width: 100%;
+  margin: 1.8em auto;
+  overflow-x: auto;
+}
+
+.smarttex-document-table figcaption {
+  margin-bottom: 0.65em;
+  font-size: 0.9em;
+  text-align: center;
+}
+
+.smarttex-document-table .smarttex-table-preview {
+  font-family: inherit;
+}
+
+.smarttex-document-figure {
+  max-width: 100%;
+  margin: 1.9em auto;
+  text-align: center;
+}
+
+.smarttex-document-figure-images {
+  display: grid;
+  gap: 0.75em;
+  justify-items: center;
+}
+
+.smarttex-document-figure img {
+  display: block;
+  max-width: min(100%, 680px);
+  max-height: 65vh;
+  object-fit: contain;
+}
+
+.smarttex-document-figure-pdf {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(100%, 680px);
+  max-height: 65vh;
+  background: #fff;
+}
+
+.smarttex-document-figure figcaption {
+  margin-top: 0.7em;
+  font-size: 0.92em;
+}
+
+.smarttex-document-figure-caption .smarttex-inline-latex {
+  display: inline;
+}
+
+.smarttex-document-figure-caption .katex {
+  font-size: 1em;
+}
+
+.smarttex-document-figure-placeholder {
+  display: grid;
+  place-items: center;
+  width: min(100%, 520px);
+  min-height: 130px;
+  padding: 18px;
+  border: 1px dashed #98a5b4;
+  border-radius: 7px;
+  color: #607083;
+  background:
+    linear-gradient(135deg, rgb(238 242 247 / 70%) 25%, transparent 25%) 0 0 / 18px 18px,
+    linear-gradient(315deg, rgb(238 242 247 / 70%) 25%, transparent 25%) 0 0 / 18px 18px,
+    #fafbfc;
+  font: 600 0.9em/1.35 ui-sans-serif, system-ui, sans-serif;
+  overflow-wrap: anywhere;
+}
+
+.smarttex-document-caption {
+  font-size: 0.92em;
+  text-align: center;
+}
+
+.smarttex-document-bold {
+  font-weight: 700;
+}
+
+.smarttex-document-italic {
+  font-style: italic;
+}
+
+.smarttex-document-underline {
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.smarttex-document-active-source {
+  border-radius: 5px;
+  background: rgb(49 88 184 / 5%);
+}
+
+.smarttex-document-render-error {
+  padding: 9px 11px;
+  border: 1px solid #ffb3b7;
+  border-radius: 6px;
+  color: #8f1d2c;
+  background: #fff0f1;
+  text-align: left;
+}
+
+.smarttex-document-render-error code {
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+.smarttex-document-empty {
+  color: #667085;
+  text-align: center;
+}
+
+.smarttex-document-text-caret {
+  position: relative;
+  pointer-events: none;
+  display: inline-block;
+  width: 0;
+  height: 1.06em;
+  vertical-align: -0.13em;
+}
+
+.smarttex-document-text-caret::after {
+  position: absolute;
+  z-index: 2;
+  top: -0.03em;
+  left: -1px;
+  width: 2px;
+  height: 1.13em;
+  border-radius: 1px;
+  background: #1674d1;
+  content: "";
+  animation: smarttex-caret-blink 1.05s steps(1, end) infinite;
+}
+
+.smarttex-document-focused .smarttex-document-text-caret::after,
+.smarttex-document-focused .katex-html .smarttex-rendered-caret::after,
+.smarttex-document-focused .smarttex-table-rendered-caret::after {
+  background: #169447;
+}
+
+.smarttex-document-reference {
+  border-radius: 2px;
+  color: #175ea8;
+  text-decoration: underline;
+  text-decoration-color: rgb(23 94 168 / 38%);
+  text-underline-offset: 0.12em;
+  cursor: pointer;
+}
+
+.smarttex-document-reference:hover,
+.smarttex-document-reference:focus-visible {
+  color: #0d7d3c;
+  background: rgb(22 148 71 / 9%);
+  text-decoration-color: currentColor;
+}
+
+.smarttex-popup-loading-spinner {
+  position: fixed;
+  z-index: 2147483647;
+  width: 18px;
+  height: 18px;
+  margin: 9px 0 0 9px;
+  border: 2px solid rgb(75 95 120 / 28%);
+  border-top-color: #1769aa;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 88%);
+  box-shadow: 0 1px 5px rgb(15 23 42 / 24%);
+  pointer-events: none;
+  animation: smarttex-document-spin 0.7s linear infinite;
+}
+
+.smarttex-popup-loading-spinner[hidden] {
+  display: none !important;
+}
+
+.smarttex-document-reference-popup {
+  position: fixed;
+  z-index: 2147483647;
+  width: min(430px, calc(100vw - 20px));
+  max-height: min(360px, calc(100vh - 20px));
+  padding: 12px;
+  border: 1px solid #aeb9c7;
+  border-radius: 10px;
+  overflow: auto;
+  color: #171717;
+  background: rgb(255 255 255 / 98%);
+  box-shadow: 0 12px 34px rgb(15 23 42 / 28%);
+  font-family: "Latin Modern Roman", "Computer Modern Serif", Georgia, serif;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.smarttex-document-reference-popup[hidden] {
+  display: none !important;
+}
+
+.smarttex-document-reference-popup .smarttex-reference-popup-target {
+  max-width: 100%;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  box-shadow: none;
+}
+
+.smarttex-document-reference-popup .smarttex-reference-popup-target + .smarttex-reference-popup-target {
+  margin-top: 8px;
+  border-top: 1px solid #dde3ea;
+  padding-top: 10px;
+}
+
+.smarttex-reference-popup-entry {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.smarttex-reference-popup-entry + .smarttex-reference-popup-entry {
+  margin-top: 9px;
+  border-top: 1px solid #dde3ea;
+  padding-top: 10px;
+}
+
+.smarttex-reference-popup-heading {
+  position: sticky;
+  z-index: 1;
+  top: -12px;
+  margin: -4px -4px 0;
+  padding: 5px 7px;
+  border-bottom: 1px solid #e3e8ef;
+  background: rgb(255 255 255 / 96%);
+  font: 700 12px/1.3 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-reference-popup-title {
+  color: #175ea8;
+  text-decoration: none;
+}
+
+.smarttex-reference-popup-heading a.smarttex-reference-popup-title:hover,
+.smarttex-reference-popup-heading a.smarttex-reference-popup-title:focus-visible {
+  color: #0d7d3c;
+  text-decoration: underline;
+  text-underline-offset: 0.13em;
+}
+
+.smarttex-editor-reference-popup .smarttex-figure-popup,
+.smarttex-editor-reference-popup .smarttex-table-popup {
+  width: 100%;
+}
+
+.smarttex-editor-reference-popup .smarttex-figure-popup-media,
+.smarttex-editor-reference-popup .smarttex-figure-popup-placeholder {
+  width: 100%;
+}
+
+.smarttex-editor-reference-popup .smarttex-figure-popup-image,
+.smarttex-editor-reference-popup .smarttex-figure-popup-pdf {
+  max-width: 100%;
+  max-height: 230px;
+}
+
+.smarttex-editor-reference-popup .smarttex-table-scroll {
+  max-width: 100%;
+}
+
+.smarttex-reference-popup-missing {
+  color: #59697b;
+  font: 600 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-reference-popup-citation {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px;
+}
+
+.smarttex-reference-popup-citation-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 5px 9px;
+  min-width: 0;
+}
+
+.smarttex-reference-popup-citation-title {
+  min-width: 0;
+  color: #182536;
+  font-size: 1.02em;
+  overflow-wrap: anywhere;
+}
+
+.smarttex-reference-popup-citation-key {
+  max-width: 150px;
+  padding: 2px 6px;
+  overflow: hidden;
+  border: 1px solid #b6dcff;
+  border-radius: 999px;
+  color: #0969da;
+  background: #eef7ff;
+  font: 600 11px/1.25 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-reference-popup-citation span {
+  color: #556577;
+  font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-reference-popup-citation-doi {
+  overflow-wrap: anywhere;
+}
+
+.smarttex-document-figure-hover-anchor {
+  cursor: zoom-in;
+}
+
+.smarttex-document-figure-hover-popup {
+  width: 100%;
+}
+
+.smarttex-document-figure-hover-popup .smarttex-document-figure-image,
+.smarttex-document-figure-hover-popup .smarttex-document-figure-pdf {
+  max-width: 100%;
+  max-height: 230px;
+}
+
+html.smarttex-document-live #smarttex-equation-preview {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .smarttex-document-text-caret::after {
+    animation: none;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-document-preview-settings {
+    border-color: #48586c;
+    color: #d9e2ee;
+    background: #182230;
+  }
+
+  #smarttex-document-preview-toggle:hover,
+  #smarttex-document-preview-toggle:focus-visible,
+  .smarttex-document-preview-settings-button:hover,
+  .smarttex-document-preview-settings-button:focus-visible,
+  .smarttex-document-preview-settings-button[aria-expanded="true"] {
+    border-color: #3158b8;
+    color: #fff;
+    background: linear-gradient(135deg, #405fbc 0%, #6e50bc 100%);
+  }
+
+  .smarttex-document-preview-size-row output {
+    color: #9cadc1;
+  }
+
+  #smarttex-document-preview-toggle.smarttex-document-preview-toggle-active {
+    border-color: #667eea;
+    color: #fff;
+    background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
+  }
+
+  .smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active {
+    border-color: #667eea;
+    color: #fff;
+    background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
+  }
+
+  .smarttex-document-editing-toolbar {
+    color: #d9e2ee;
+    background: transparent;
+  }
+
+  .smarttex-document-editing-toolbar button[aria-pressed="true"] {
+    border-color: #3979cb;
+    color: #9ed0ff;
+    background: #12375c;
+  }
+
+  .smarttex-document-toolbar-divider {
+    background: #526174;
+  }
+
+  .smarttex-document-reference-popup {
+    border-color: #48586c;
+    color: #e3ebf5;
+    background: rgb(24 34 48 / 98%);
+    box-shadow: 0 12px 34px rgb(0 0 0 / 48%);
+  }
+
+  .smarttex-reference-popup-heading {
+    border-color: #3a4657;
+    background: rgb(24 34 48 / 96%);
+  }
+
+  .smarttex-reference-popup-citation-title {
+    color: #e3ebf5;
+  }
+
+  .smarttex-reference-popup-citation-key {
+    border-color: #1f6feb;
+    color: #79c0ff;
+    background: #0d2742;
+  }
+
+  .smarttex-reference-popup-citation span,
+  .smarttex-reference-popup-missing {
+    color: #9cadc1;
+  }
+}
+
+@media (max-width: 720px) {
+  .smarttex-document-preview {
+    padding: 12px;
+  }
+
+  .smarttex-document-page {
+    padding: 34px 18px;
+  }
+}
+
+/* Lightweight citation autocomplete. */
+body.smarttex-citation-autocomplete-active .cm-tooltip-autocomplete,
+body.smarttex-citation-autocomplete-active .ace_autocomplete {
+  display: none !important;
+}
+
+#smarttex-citation-popup,
+#smarttex-citation-popup *,
+#smarttex-citation-popup *::before,
+#smarttex-citation-popup *::after {
+  box-sizing: border-box;
+}
+
+#smarttex-citation-popup[hidden] {
+  display: none !important;
+}
+
+#smarttex-citation-popup {
+  position: fixed;
+  z-index: 2147483646;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  width: min(540px, calc(100vw - 18px));
+  max-height: min(460px, calc(100vh - 18px));
+  overflow: hidden;
+  border: 1px solid rgb(111 127 147 / 52%);
+  border-radius: 10px;
+  color: #1d2939;
+  background: #fff;
+  box-shadow:
+    0 16px 42px rgb(15 23 42 / 24%),
+    0 3px 9px rgb(15 23 42 / 12%);
+  font: 12px/1.38 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-citation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid #e3e8ef;
+  color: #475569;
+  background: #f7f9fc;
+}
+
+.smarttex-citation-query {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-citation-close {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #64748b;
+  background: transparent;
+  font: 500 19px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-citation-close:hover {
+  color: #172033;
+  background: #e7edf5;
+}
+
+.smarttex-citation-status {
+  padding: 7px 11px;
+  border-bottom: 1px solid #d7e8fa;
+  color: #245b98;
+  background: #eef6ff;
+}
+
+.smarttex-citation-status[hidden] {
+  display: none !important;
+}
+
+.smarttex-citation-status-error {
+  border-color: #ffb3b7;
+  color: #9b1c2c;
+  background: #fff0f1;
+}
+
+.smarttex-citation-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.smarttex-citation-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 11px;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid #edf0f4;
+  border-radius: 0;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.smarttex-citation-item:hover,
+.smarttex-citation-item.smarttex-citation-selected {
+  background: #eaf4ff;
+}
+
+.smarttex-citation-item.smarttex-citation-selected {
+  box-shadow: inset 3px 0 #1674d1;
+}
+
+.smarttex-citation-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #182536;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-citation-key {
+  align-self: start;
+  max-width: 150px;
+  padding: 2px 6px;
+  overflow: hidden;
+  border: 1px solid #b6dcff;
+  border-radius: 999px;
+  color: #0969da;
+  background: #eef7ff;
+  font: 600 11px/1.25 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-citation-authors,
+.smarttex-citation-publication {
+  min-width: 0;
+  overflow: hidden;
+  color: #617085;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-citation-publication {
+  text-align: right;
+}
+
+.smarttex-citation-empty {
+  margin: 0;
+  padding: 22px 16px;
+  color: #66768a;
+  text-align: center;
+}
+
+.smarttex-citation-parse-card {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 18px;
+}
+
+.smarttex-citation-parse-card strong {
+  color: #25364a;
+  font-size: 14px;
+}
+
+.smarttex-citation-parse-card p {
+  margin: 0;
+  color: #617085;
+}
+
+.smarttex-citation-parse {
+  min-height: 32px;
+  padding: 6px 11px;
+  border: 1px solid #1769be;
+  border-radius: 6px;
+  color: #fff;
+  background: #1674d1;
+  font: 650 12px/1.2 inherit;
+  cursor: pointer;
+}
+
+.smarttex-citation-parse:hover {
+  background: #0d63b8;
+}
+
+.smarttex-citation-parse:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.smarttex-citation-promotion {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 6px 9px;
+  border-top: 1px solid #e3e8ef;
+  color: #7a8798;
+  background: #f8fafc;
+  font-size: 10.5px;
+  text-align: center;
+}
+
+.smarttex-citation-promotion a {
+  color: #3158b8;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.smarttex-citation-promotion a:hover {
+  text-decoration: underline;
+}
+
+@media (prefers-color-scheme: dark) {
+  #smarttex-citation-popup {
+    border-color: rgb(130 151 176 / 60%);
+    color: #e3ebf5;
+    background: #182230;
+    box-shadow:
+      0 18px 48px rgb(0 0 0 / 48%),
+      0 3px 10px rgb(0 0 0 / 28%);
+  }
+
+  .smarttex-citation-header,
+  .smarttex-citation-promotion {
+    border-color: #3a4657;
+    color: #9cadc1;
+    background: #222e3e;
+  }
+
+  .smarttex-citation-item {
+    border-color: #354154;
+    color: #d9e2ee;
+    background: #182230;
+  }
+
+  .smarttex-citation-item:hover,
+  .smarttex-citation-item.smarttex-citation-selected {
+    background: #0d2742;
+  }
+
+  .smarttex-citation-title,
+  .smarttex-citation-parse-card strong {
+    color: #e3ebf5;
+  }
+
+  .smarttex-citation-authors,
+  .smarttex-citation-publication,
+  .smarttex-citation-empty,
+  .smarttex-citation-parse-card p {
+    color: #9cadc1;
+  }
+
+  .smarttex-citation-key {
+    border-color: #1f6feb;
+    color: #79c0ff;
+    background: #0d2742;
+  }
+
+  .smarttex-citation-close {
+    color: #aab8ca;
+  }
+
+  .smarttex-citation-close:hover {
+    color: #fff;
+    background: #35445a;
+  }
+}
+
+/* SmartTeX compact application button. */
+#smarttex-options-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+#smarttex-toolbar-slot #smarttex-options-button.smarttex-toolbar-button {
+  display: inline-flex;
+  min-width: 58px;
+  padding-right: 10px;
+  padding-left: 10px;
+}
+
+.smarttex-options-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font: 800 11px/1 Georgia, "Times New Roman", serif;
+}
+
+.smarttex-options-menu-icon {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 15px;
+}
+
+.smarttex-options-menu-icon > span {
+  display: block;
+  width: 100%;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+/* Busy indicator for both live-preview rendering and native PDF compilation. */
+.smarttex-document-activity-spinner {
+  position: fixed;
+  z-index: 2147483646;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgb(82 97 116 / 35%);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 92%);
+  box-shadow: 0 3px 12px rgb(15 23 42 / 20%);
+  pointer-events: none;
+}
+
+.smarttex-document-activity-spinner[hidden] {
+  display: none !important;
+}
+
+.smarttex-document-activity-spinner-ring {
+  width: 17px;
+  height: 17px;
+  border: 2px solid rgb(49 88 184 / 24%);
+  border-top-color: #3158b8;
+  border-radius: 50%;
+  animation: smarttex-document-spin 650ms linear infinite;
+}
+
+@keyframes smarttex-document-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Match formatting controls to the actual editor theme rather than only OS theme. */
+.smarttex-document-editing-toolbar.smarttex-editor-dark {
+  color: #d9e2ee;
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark button,
+.smarttex-document-editing-toolbar.smarttex-editor-dark select {
+  color: #d9e2ee;
+  background: transparent;
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark select option {
+  color: #e5edf7;
+  background: #182230;
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark button:hover,
+.smarttex-document-editing-toolbar.smarttex-editor-dark button:focus-visible,
+.smarttex-document-editing-toolbar.smarttex-editor-dark select:hover,
+.smarttex-document-editing-toolbar.smarttex-editor-dark select:focus-visible {
+  border-color: #4f78a5;
+  color: #9dceff;
+  background: #18324d;
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark button[aria-pressed="true"] {
+  border-color: #5b9add;
+  color: #d7ebff;
+  background: #20466c;
+  box-shadow: inset 0 0 0 1px rgb(121 192 255 / 16%);
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark .smarttex-document-toolbar-divider {
+  background: #536174;
+}
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-document-activity-spinner {
+    border-color: rgb(130 151 176 / 45%);
+    background: rgb(24 34 48 / 94%);
+    box-shadow: 0 3px 12px rgb(0 0 0 / 36%);
+  }
+
+  .smarttex-document-activity-spinner-ring {
+    border-color: rgb(121 192 255 / 22%);
+    border-top-color: #79c0ff;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .smarttex-document-activity-spinner-ring {
+    animation-duration: 1.4s;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-popup-loading-spinner {
+    border-color: rgb(188 202 219 / 34%);
+    border-top-color: #79b8ff;
+    background: rgb(24 34 48 / 92%);
+    box-shadow: 0 1px 6px rgb(0 0 0 / 45%);
+  }
+}

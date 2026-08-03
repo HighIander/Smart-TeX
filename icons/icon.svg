@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="SmartTeX">
+  <defs>
+    <linearGradient id="background" x1="18" y1="12" x2="112" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1674d1"/>
+      <stop offset="1" stop-color="#074c96"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#background)"/>
+  <path d="M24 29h64v17H65v57H47V46H24z" fill="#fff"/>
+  <rect x="96" y="27" width="7" height="78" rx="3.5" fill="#67e8f9"/>
+</svg>

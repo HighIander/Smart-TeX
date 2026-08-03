@@ -1,0 +1,82 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC-BY-NC-SA-4.0 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SmartTeX options</title>
+  <link rel="icon" type="image/png" sizes="128x128" href="icons/icon128.png">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <header>
+      <img src="icons/icon128.png" alt="">
+      <div>
+        <h1>SmartTeX options</h1>
+        <p>Configure where SmartTeX enhances your LaTeX editor.</p>
+      </div>
+    </header>
+
+    <form id="smarttex-options-form">
+      <section>
+        <label for="smarttex-editor-sites">Document editor sites</label>
+        <p class="hint">
+          Define domains where SmartTeX should be active. Enter one hostname or URL per line.
+          Wildcard subdomains are supported; for example, <code>*.example.org</code> includes
+          the main domain and its subdomains. URL paths and trailing slashes are ignored.
+          Lines beginning with <code>#</code> are ignored.
+        </p>
+        <textarea id="smarttex-editor-sites" rows="9" spellcheck="false" placeholder="collabtex.helmholtz.cloud"></textarea>
+      </section>
+
+      <section>
+        <h2>Features</h2>
+        <p class="hint">Choose which SmartTeX previews should appear in document editors.</p>
+        <div class="feature-list">
+          <label class="feature-option">
+            <input id="smarttex-feature-equations" type="checkbox">
+            <span>Popup preview for equations</span>
+          </label>
+          <label class="feature-option">
+            <input id="smarttex-feature-tables" type="checkbox">
+            <span>Popup preview for tables</span>
+          </label>
+          <label class="feature-option">
+            <input id="smarttex-feature-figures" type="checkbox">
+            <span>Popup preview for figures</span>
+          </label>
+        </div>
+      </section>
+
+      <section>
+        <h2>Live previews</h2>
+        <p class="hint">
+          Move the text cursor into an inline or display equation to show a live KaTeX preview
+          beside it. SmartTeX applies <code>\newcommand</code>, <code>\renewcommand</code>, and
+          <code>\providecommand</code> definitions found earlier in the active LaTeX file.
+          Moving into a <code>tabular</code>, <code>tabularx</code>, <code>longtable</code>,
+          or <code>array</code> block shows a live table preview with its rules, alignment,
+          formatted text, and inline mathematics. Moving into a <code>figure</code> block
+          shows its project image or PDF together with its caption.
+        </p>
+      </section>
+
+      <div class="actions">
+        <button type="submit">Save options</button>
+        <span id="smarttex-options-status" role="status" aria-live="polite"></span>
+      </div>
+    </form>
+
+    <section class="license-notice">
+      <h2>License</h2>
+      <p>
+        SmartTeX source code is licensed under the
+        <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="license noopener noreferrer">CC BY-NC-SA 4.0 license</a>.
+        Bundled KaTeX files remain subject to the KaTeX MIT license.
+      </p>
+    </section>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

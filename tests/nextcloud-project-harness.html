@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX Nextcloud project-files harness</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: #fff;
+      background: #2e3440;
+      font-family: system-ui, sans-serif;
+    }
+
+    .ide-redesign-toolbar-actions,
+    #smarttex-toolbar-slot,
+    .toolbar-filetree {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 48px;
+      padding: 0 12px;
+      background: #202938;
+    }
+
+    #smarttex-options-button {
+      position: static;
+    }
+
+    .file-tree-list {
+      width: 420px;
+      margin: 20px;
+      background: #46566d;
+    }
+
+    [role="treeitem"] {
+      display: flex;
+      align-items: center;
+      min-height: 42px;
+      padding: 0 12px;
+    }
+
+    .entity-name {
+      display: flex;
+      min-width: 0;
+    }
+
+    .mock-upload-dialog {
+      position: fixed;
+      left: 30px;
+      bottom: 30px;
+      width: 360px;
+      padding: 16px;
+      color: #1f2937;
+      background: #fff;
+    }
+
+    #nextcloud-project-test-result {
+      position: fixed;
+      z-index: 2147483647;
+      top: 58px;
+      right: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      color: #fff;
+      background: #9a6700;
+      font: 700 12px/1.2 system-ui, sans-serif;
+    }
+
+    #nextcloud-project-test-result[data-result="passed"] {
+      background: #16803b;
+    }
+
+    #nextcloud-project-test-result[data-result="failed"] {
+      background: #cf222e;
+    }
+  </style>
+</head>
+<body>
+  <div class="ide-redesign-toolbar-actions">
+    <div id="smarttex-toolbar-slot">
+      <button id="smarttex-options-button" type="button">Smart</button>
+    </div>
+    <button type="button">Share</button>
+  </div>
+  <div class="toolbar-filetree">
+    <button id="mock-upload-button" type="button" aria-label="Upload files">Upload</button>
+  </div>
+  <div class="file-tree-list">
+    <div role="treeitem" aria-label="figure.png">
+      <button class="item-name-button" type="button">
+        <span class="entity-name"><span>figure.png</span></span>
+      </button>
+      <button type="button" aria-label="More options">⋮</button>
+    </div>
+  </div>
+  <output id="nextcloud-project-test-result">Nextcloud project test running</output>
+  <script>
+    const storageListeners = [];
+    const intervalDelays = [];
+    const nativeSetInterval = window.setInterval.bind(window);
+    window.setInterval = (callback, delay, ...args) => {
+      intervalDelays.push(delay);
+      return nativeSetInterval(callback, delay, ...args);
+    };
+    let storedProjectState = {
+      version: 1,
+      connectionId: "connection-one",
+      autoUpdate: true,
+      lastDirectory: "Research/Papers",
+      links: [{
+        id: "linked-figure",
+        targetPath: "figure.png",
+        targetName: "figure.png",
+        nextcloudPath: "Research/Papers/figure.png",
+        etag: "\"v1\"",
+        size: 1200,
+        lastModified: "2026-08-02T10:00:00Z"
+      }]
+    };
+    const directoryCalls = [];
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(key) {
+            if (String(key).startsWith("smarttex:project-nextcloud:v1:")) {
+              return { [key]: structuredClone(storedProjectState) };
+            }
+            return {};
+          },
+          async set(values) {
+            for (const [key, value] of Object.entries(values)) {
+              if (!key.startsWith("smarttex:project-nextcloud:v1:")) continue;
+              const oldValue = structuredClone(storedProjectState);
+              storedProjectState = structuredClone(value);
+              for (const listener of storageListeners) {
+                listener({ [key]: { oldValue, newValue: value } }, "local");
+              }
+            }
+          }
+        },
+        onChanged: {
+          addListener(listener) {
+            storageListeners.push(listener);
+          }
+        }
+      },
+      runtime: {
+        async sendMessage() {
+          return { ok: true };
+        }
+      }
+    };
+
+    const connections = [{
+      id: "connection-one",
+      server: "https://cloud-one.example",
+      loginName: "alice",
+      userId: "alice",
+      appPassword: "secret-one"
+    }, {
+      id: "connection-two",
+      server: "https://cloud-two.example",
+      loginName: "alice",
+      userId: "alice",
+      appPassword: "secret-two"
+    }];
+    globalThis.SmartTeXNextcloud = {
+      normalizePath(value) {
+        return String(value || "").replace(/^\/+|\/+$/g, "");
+      },
+      async listConnections() {
+        return structuredClone(connections);
+      },
+      async getConnection(id) {
+        return structuredClone(connections.find((item) => item.id === id) || null);
+      },
+      async markConnectionUsed(id) {
+        return this.getConnection(id);
+      },
+      async ensureOriginPermission() {
+        return true;
+      },
+      async checkConnection() {
+        return true;
+      },
+      async connect() {
+        return structuredClone(connections[0]);
+      },
+      async listDirectory(_connection, path) {
+        directoryCalls.push(path);
+        return [{
+          path: `${path}/figure.png`,
+          name: "figure.png",
+          isDirectory: false,
+          etag: "\"v1\"",
+          size: 1200,
+          lastModified: "2026-08-02T10:00:00Z"
+        }];
+      },
+      async getFileInfo() {
+        return {
+          path: "Research/Papers/figure.png",
+          name: "figure.png",
+          isDirectory: false,
+          etag: "\"v1\"",
+          size: 1200
+        };
+      }
+    };
+
+    function openMockUploadDialog() {
+      document.querySelector(".mock-upload-dialog")?.remove();
+      const dialog = document.createElement("div");
+      dialog.className = "mock-upload-dialog modal";
+      dialog.setAttribute("role", "dialog");
+      dialog.innerHTML = `
+        <strong>Upload files</strong>
+        <button type="button" aria-label="Close">×</button>
+        <div class="upload-area"><input type="file" multiple aria-label="Select files to upload"></div>`;
+      dialog.querySelector("[aria-label='Close']").addEventListener("click", () => dialog.remove());
+      document.body.appendChild(dialog);
+    }
+    document.querySelector("#mock-upload-button").addEventListener("click", openMockUploadDialog);
+    openMockUploadDialog();
+  </script>
+  <script src="../project-files.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => {
+      window.setTimeout(resolve, milliseconds);
+    });
+    async function waitFor(check, message) {
+      for (let attempt = 0; attempt < 160; attempt += 1) {
+        const result = check();
+        if (result) return result;
+        await delay(30);
+      }
+      throw new Error(message);
+    }
+    async function runTest() {
+      const checks = {};
+      await waitFor(
+        () => document.querySelector("#smarttex-cloud-button"),
+        "cloud toolbar button missing"
+      );
+      checks.cloudButton = Boolean(
+        document.querySelector("#smarttex-cloud-button.smarttex-cloud-connected")
+      );
+      checks.linkedButton = Boolean(
+        document.querySelector(".smarttex-nextcloud-file-refresh")
+      );
+      checks.updateAll = Boolean(
+        document.querySelector(".smarttex-nextcloud-update-all:not([hidden])")
+      );
+      checks.uploadIntegration = Boolean(
+        document.querySelector(".smarttex-nextcloud-upload-source-button")
+      );
+
+      document.querySelector("#smarttex-cloud-button").click();
+      const settings = await waitFor(
+        () => document.querySelector(".smarttex-cloud-settings-dialog"),
+        "settings dialog missing"
+      );
+      checks.connectionUrls = (
+        settings.textContent.includes("https://cloud-one.example") &&
+        settings.textContent.includes("https://cloud-two.example")
+      );
+      checks.autoUpdate = settings.querySelector(".smarttex-auto-update").checked;
+      checks.oneMinuteInterval = intervalDelays.includes(60 * 1000);
+      settings.querySelector(".smarttex-dialog-close").click();
+      await waitFor(
+        () => !document.querySelector(".smarttex-cloud-settings-dialog"),
+        "settings dialog did not close"
+      );
+
+      document.querySelector(".smarttex-nextcloud-upload-source-button").click();
+      const picker = await waitFor(
+        () => document.querySelector(".smarttex-nextcloud-picker-dialog"),
+        "Nextcloud picker missing"
+      );
+      await waitFor(
+        () => directoryCalls.includes("Research/Papers"),
+        "remembered directory was not restored"
+      );
+      checks.rememberedDirectory = (
+        picker.querySelector(".smarttex-picker-breadcrumb").textContent.includes("Research") &&
+        directoryCalls[0] === "Research/Papers"
+      );
+      picker.querySelector(".smarttex-dialog-close").click();
+      await waitFor(
+        () => !document.querySelector(".smarttex-nextcloud-picker-dialog"),
+        "picker did not close"
+      );
+
+      document.querySelector("#smarttex-cloud-button").click();
+      const secondSettings = await waitFor(
+        () => document.querySelector(".smarttex-cloud-settings-dialog"),
+        "second settings dialog missing"
+      );
+      const secondConnection = secondSettings.querySelector(
+        "input[value='connection-two']"
+      );
+      secondConnection.checked = true;
+      secondConnection.dispatchEvent(new Event("change", { bubbles: true }));
+      [...secondSettings.querySelectorAll(".smarttex-dialog-actions button")]
+        .find((button) => button.textContent === "Use selected connection")
+        .click();
+      const warning = await waitFor(
+        () => [...document.querySelectorAll(".smarttex-confirm-dialog")]
+          .find((dialog) => dialog.textContent.includes("breaks the Nextcloud link")),
+        "connection-change warning missing"
+      );
+      checks.changeWarning = warning.textContent.includes(
+        "treated as normal files"
+      );
+      [...warning.querySelectorAll("button")]
+        .find((button) => button.textContent === "Change connection")
+        .click();
+      await waitFor(
+        () => storedProjectState.connectionId === "connection-two",
+        "connection was not changed"
+      );
+      await waitFor(
+        () => !document.querySelector(".smarttex-nextcloud-file-refresh"),
+        "old linked-file control was not removed"
+      );
+      checks.normalFilesAfterChange = (
+        storedProjectState.links.length === 0 &&
+        document.querySelector("[role='treeitem']") &&
+        !document.querySelector(".smarttex-nextcloud-file-refresh")
+      );
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#nextcloud-project-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Nextcloud project test passed"
+        : `Nextcloud project test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.nextcloudProjectTest = passed
+        ? "passed"
+        : "failed";
+    }
+    if (!new URLSearchParams(window.location.search).has("manual")) {
+      runTest().catch((error) => {
+        const output = document.querySelector("#nextcloud-project-test-result");
+        output.dataset.result = "failed";
+        output.textContent = `Nextcloud project test failed: ${error.message}`;
+        document.documentElement.dataset.nextcloudProjectTest = "failed";
+      });
+    }
+  </script>
+</body>
+</html>

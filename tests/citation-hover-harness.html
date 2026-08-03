@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX citation hover harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; padding: 80px; background: #eef1f5; }
+    .cm-content { width: 760px; padding: 24px; background: white; font: 15px/1.55 Consolas, monospace; }
+    #citation-hover-test-result { position: fixed; right: 10px; bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div class="cm-content">See \cite{Lovelace} for details.</div>
+  <output id="citation-hover-test-result">Citation hover test running</output>
+  <script>
+    const source = String.raw`\begin{document}
+See \cite{Lovelace} for details.
+\end{document}`;
+    const citeStart = source.indexOf("\\cite{Lovelace}");
+    const cacheKey = `smarttex:citation-cache:v1:${window.location.origin}:${window.location.pathname}`;
+    const stored = {
+      "smarttex:features:v1": { equations: true, tables: true, figures: true },
+      [cacheKey]: {
+        records: [{
+          key: "Lovelace",
+          title: "Notes on the Analytical Engine",
+          authors: ["Ada Lovelace", "Charles Babbage"],
+          journal: "Scientific Memoirs",
+          volume: "3",
+          number: "2",
+          pages: "666--731",
+          year: "1843",
+          doi: "10.1000/analytical-engine"
+        }]
+      }
+    };
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(key) { return { [key]: stored[key] }; },
+          async set(values) { Object.assign(stored, values); }
+        },
+        onChanged: { addListener() {} }
+      }
+    };
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      const response = { requestId: request.requestId, ok: true };
+      if (request.type === "getIndexAtCoordinates") response.index = citeStart + 7;
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify(response)
+      }));
+    });
+    function dispatchState(cursorIndex) {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value: source,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          screen: { pageX: 200, pageY: 110, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "codemirror"
+        })
+      }));
+    }
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    async function runCitationHoverTest() {
+      const editor = document.querySelector(".cm-content");
+      const rect = editor.getBoundingClientRect();
+      dispatchState(source.indexOf("See "));
+      await delay(30);
+      editor.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: rect.left + 90,
+        clientY: rect.top + 30
+      }));
+      let popup = null;
+      for (let i = 0; i < 80; i += 1) {
+        popup = document.querySelector(".smarttex-editor-reference-popup:not([hidden])");
+        if (popup) break;
+        await delay(25);
+      }
+      const fullCitation = Boolean(
+        popup?.querySelector(".smarttex-reference-popup-citation-title")?.textContent.includes("Analytical Engine") &&
+        popup?.querySelector(".smarttex-reference-popup-citation-key")?.textContent === "Lovelace" &&
+        popup?.querySelector(".smarttex-reference-popup-citation-authors")?.textContent.includes("Ada Lovelace") &&
+        popup?.querySelector(".smarttex-reference-popup-citation-publication")?.textContent.includes("3(2)") &&
+        popup?.querySelector(".smarttex-reference-popup-citation-doi")?.textContent.includes("10.1000")
+      );
+
+      popup.style.maxHeight = "72px";
+      while (popup.children.length < 7) {
+        popup.appendChild(popup.firstElementChild.cloneNode(true));
+      }
+      popup.scrollTop = 48;
+      popup.dispatchEvent(new Event("scroll"));
+      popup.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        deltaY: 80
+      }));
+      await delay(260);
+      const popupRemainsWhileScrolling = !popup.hidden;
+
+      dispatchState(citeStart + 7);
+      await delay(80);
+      editor.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: rect.left + 90,
+        clientY: rect.top + 30
+      }));
+      await delay(180);
+      const suppressedInsideCommand = !document.querySelector(
+        ".smarttex-editor-reference-popup:not([hidden])"
+      );
+
+      const checks = {
+        fullCitation,
+        popupRemainsWhileScrolling,
+        suppressedInsideCommand
+      };
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#citation-hover-test-result");
+      output.textContent = passed
+        ? "Citation hover test passed"
+        : `Citation hover test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.citationHoverTest = passed ? "passed" : "failed";
+    }
+    runCitationHoverTest();
+  </script>
+</body>
+</html>

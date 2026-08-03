@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX citation bridge harness</title>
+  <style>
+    #bridge-test-result {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      color: white;
+      background: #9a6700;
+      font: 700 12px/1.2 system-ui, sans-serif;
+    }
+
+    #bridge-test-result[data-result="passed"] {
+      background: #16803b;
+    }
+
+    #bridge-test-result[data-result="failed"] {
+      background: #cf222e;
+    }
+  </style>
+</head>
+<body>
+  <div class="file-tree-list">
+    <div role="treeitem" aria-label="main.tex" aria-selected="true"></div>
+    <div
+      role="treeitem"
+      aria-label="figures"
+      aria-expanded="false"
+      id="collapsed-figures"
+    ><button type="button" aria-label="Expand figures">Expand</button></div>
+  </div>
+  <div id="ide-redesign-panel-source-editor">
+    <div class="cm-editor">
+      <div class="cm-scroller">
+        <div class="cm-content" contenteditable="true"></div>
+      </div>
+    </div>
+  </div>
+  <output id="bridge-test-result">Citation bridge test running</output>
+
+  <script>
+    let editorText = String.raw`Text \cite{Klu}`;
+    let editorCursor = editorText.indexOf("Klu") + 3;
+    let editorSelectionAnchor = editorCursor;
+    let editorSelectionHead = editorCursor;
+    const root = document.querySelector(".cm-editor");
+    const content = document.querySelector(".cm-content");
+    const scroller = document.querySelector(".cm-scroller");
+    document.querySelector("#collapsed-figures button").addEventListener("click", () => {
+      const folder = document.querySelector("#collapsed-figures");
+      folder.setAttribute("aria-expanded", "true");
+      if (document.querySelector('[aria-label="figure.png"]')) return;
+      const figure = document.createElement("div");
+      figure.setAttribute("role", "treeitem");
+      figure.setAttribute("aria-label", "figure.png");
+      figure.setAttribute(
+        "data-download-url",
+        "https://collabtex.example/project/demo/file/figure-id"
+      );
+      document.querySelector(".file-tree-list").appendChild(figure);
+    });
+
+    function documentState() {
+      return {
+        length: editorText.length,
+        toString() {
+          return editorText;
+        },
+        lineAt(index) {
+          const before = editorText.slice(0, index);
+          const lineStart = before.lastIndexOf("\n") + 1;
+          return {
+            number: before.split("\n").length,
+            from: lineStart
+          };
+        }
+      };
+    }
+
+    const view = {
+      contentDOM: content,
+      dom: root,
+      scrollDOM: scroller,
+      hasFocus: true,
+      state: {
+        doc: documentState(),
+        selection: {
+          main: {
+            head: editorCursor,
+            anchor: editorSelectionAnchor,
+            from: Math.min(editorSelectionAnchor, editorSelectionHead),
+            to: Math.max(editorSelectionAnchor, editorSelectionHead)
+          }
+        }
+      },
+      dispatch(transaction) {
+        if (transaction.changes) {
+          const { from, to, insert } = transaction.changes;
+          editorText = editorText.slice(0, from) + insert + editorText.slice(to);
+        }
+        if (transaction.selection) {
+          editorSelectionAnchor = transaction.selection.anchor;
+          editorSelectionHead = transaction.selection.head ?? transaction.selection.anchor;
+          editorCursor = editorSelectionHead;
+        }
+        this.state = {
+          doc: documentState(),
+          selection: {
+            main: {
+              head: editorCursor,
+              anchor: editorSelectionAnchor,
+              from: Math.min(editorSelectionAnchor, editorSelectionHead),
+              to: Math.max(editorSelectionAnchor, editorSelectionHead)
+            }
+          }
+        };
+      },
+      focus() {
+        this.hasFocus = true;
+      },
+      coordsAtPos() {
+        return { left: 310, right: 312, top: 220, bottom: 240 };
+      },
+      posAtCoords(position) {
+        return position.x === 315 && position.y === 225 ? 7 : null;
+      }
+    };
+    root.cmView = { view };
+  </script>
+  <script src="../page-bridge.js"></script>
+  <script>
+    const REQUEST_EVENT = "smarttex:citation-editor-request";
+    const RESPONSE_EVENT = "smarttex:citation-editor-response";
+    let requestCounter = 0;
+
+    function request(type, payload = {}) {
+      const requestId = `bridge-${++requestCounter}`;
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error(`${type} timed out`)),
+          2500
+        );
+        const listener = (event) => {
+          const response = JSON.parse(event.detail);
+          if (response.requestId !== requestId) return;
+          clearTimeout(timeout);
+          window.removeEventListener(RESPONSE_EVENT, listener);
+          if (response.ok) resolve(response);
+          else reject(new Error(response.error));
+        };
+        window.addEventListener(RESPONSE_EVENT, listener);
+        window.dispatchEvent(new CustomEvent(REQUEST_EVENT, {
+          detail: JSON.stringify({ requestId, type, ...payload })
+        }));
+      });
+    }
+
+    async function runBridgeTest() {
+      const checks = {};
+      const stateResponse = await request("getState");
+      checks.state = (
+        stateResponse.state.fileName === "main.tex" &&
+        stateResponse.state.value === editorText
+      );
+
+      const activeResponse = await request("setCitationAutocompleteActive", {
+        active: true
+      });
+      checks.activation = (
+        activeResponse.active === true &&
+        document.body.classList.contains("smarttex-citation-autocomplete-active")
+      );
+
+      const coordinates = await request("getCoordinates", {
+        index: editorCursor
+      });
+      checks.coordinates = (
+        coordinates.screen.pageX === 310 &&
+        coordinates.screen.pageY === 220
+      );
+      const coordinateIndex = await request("getIndexAtCoordinates", {
+        clientX: 315,
+        clientY: 225
+      });
+      checks.indexAtCoordinates = coordinateIndex.index === 7;
+
+      const replacement = await request("replaceCitationToken", {
+        text: "Kluge2024"
+      });
+      checks.replacement = (
+        replacement.token.fragment === "Klu" &&
+        editorText === String.raw`Text \cite{Kluge2024}` &&
+        editorCursor === editorText.indexOf("Kluge2024") + "Kluge2024".length
+      );
+
+      view.hasFocus = false;
+      await request("setCursor", { index: 2, focus: false });
+      checks.setCursorWithoutFocus = editorCursor === 2 && view.hasFocus === false;
+
+      const projectFile = await request("resolveProjectFile", {
+        path: "figures/figure"
+      });
+      checks.projectFileResolution = (
+        projectFile.file.path === "figure.png" &&
+        projectFile.file.url.includes("/project/demo/file/figure-id")
+      );
+
+      view.hasFocus = false;
+      await request("setSelection", {
+        anchor: 1,
+        head: 5,
+        focus: false
+      });
+      checks.setSelection = (
+        editorSelectionAnchor === 1 &&
+        editorSelectionHead === 5 &&
+        view.hasFocus === false
+      );
+
+      await request("replaceRange", {
+        start: 0,
+        end: 5,
+        text: "\\textbf{Text}",
+        selectionStart: 8,
+        selectionEnd: 12,
+        focus: false
+      });
+      checks.replaceRange = (
+        editorText.startsWith("\\textbf{Text}") &&
+        editorSelectionAnchor === 8 &&
+        editorSelectionHead === 12 &&
+        view.hasFocus === false
+      );
+
+      await request("setCitationAutocompleteActive", { active: false });
+      checks.release = !document.body.classList.contains(
+        "smarttex-citation-autocomplete-active"
+      );
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#bridge-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Citation bridge test passed"
+        : `Citation bridge test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.citationBridgeTest = passed
+        ? "passed"
+        : "failed";
+    }
+
+    runBridgeTest().catch((error) => {
+      const output = document.querySelector("#bridge-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Citation bridge test failed: ${error.message}`;
+      document.documentElement.dataset.citationBridgeTest = "failed";
+    });
+  </script>
+</body>
+</html>

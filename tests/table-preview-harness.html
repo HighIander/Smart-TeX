@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX table preview harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body {
+      margin: 0;
+      color: #d8dee9;
+      background: #2e3440;
+      font: 16px/1.55 Consolas, monospace;
+    }
+
+    .editor {
+      width: min(920px, calc(100vw - 80px));
+      min-height: 600px;
+      margin: 40px auto;
+      padding: 28px 36px;
+      border-radius: 10px;
+      background: #3b4252;
+      box-shadow: 0 18px 60px rgb(0 0 0 / 28%);
+      white-space: pre-wrap;
+    }
+
+    #table-test-result {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 2147483647;
+      padding: 6px 10px;
+      border-radius: 999px;
+      color: #fff;
+      background: #9a6700;
+      font: 700 12px/1.2 system-ui, sans-serif;
+    }
+
+    #table-test-result[data-result="passed"] {
+      background: #16803b;
+    }
+
+    #table-test-result[data-result="failed"] {
+      background: #cf222e;
+    }
+  </style>
+</head>
+<body>
+  <output id="table-test-result">Table test running</output>
+  <div class="editor"></div>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    const markedSource = String.raw`\newcommand{\unit}[1]{\mathrm{#1}}
+
+\begin{table}
+\caption{Earlier results}
+\begin{tabular}{c}
+Earlier
+\end{tabular}
+\end{table}
+
+\begin{table}
+\caption{Measurements at $1.25\,\unit{V}$ with \textbf{high precision}}
+\begin{tabular}{|l|c|r|}
+\hline
+\textbf{Sample} & \textbf{Signal} & \textbf{Uncertainty} \\
+Copper§ foil & $1.25\,\unit{V}$ & $0.04$ \\
+\multicolumn{2}{c|}{Mean} & $1.25 \pm 0.04$ \\
+\hline
+\end{tabular}
+\end{table}`;
+    const cursorIndex = markedSource.indexOf("§");
+    const source = markedSource.slice(0, cursorIndex) + markedSource.slice(cursorIndex + 1);
+    document.querySelector(".editor").textContent = source;
+    function dispatchSource(value) {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          screen: {
+            pageX: 520,
+            pageY: 430,
+            lineHeight: 25
+          },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "harness"
+        })
+      }));
+    }
+    dispatchSource(source);
+
+    let edited = false;
+    function checkTablePreview() {
+      const popup = document.querySelector("#smarttex-equation-preview");
+      const title = popup?.querySelector(".smarttex-preview-title")?.textContent;
+      const meta = popup?.querySelector(".smarttex-preview-meta")?.textContent;
+      const rows = popup?.querySelectorAll(".smarttex-table-preview tr").length || 0;
+      const math = popup?.querySelectorAll(
+        ".smarttex-table-preview .smarttex-table-inline-math .katex"
+      ).length || 0;
+      const caret = popup?.querySelector(".smarttex-table-rendered-caret");
+      if (!popup || popup.hidden || rows < 3 || math < 3 || !caret) {
+        window.setTimeout(checkTablePreview, 30);
+        return;
+      }
+      if (!edited) {
+        edited = true;
+        const editedSource = source.replace("Copper foil", "Copper sheet");
+        document.querySelector(".editor").textContent = editedSource;
+        dispatchSource(editedSource);
+        window.setTimeout(checkTablePreview, 80);
+        return;
+      }
+      const checks = {
+        title: title === "Table preview",
+        meta: meta === "Table 2",
+        label: popup.querySelector(".smarttex-float-popup-caption > strong")
+          ?.textContent === "Table 2:",
+        caption: popup.querySelector(".smarttex-float-popup-caption")
+          ?.textContent.includes("Measurements"),
+        captionMath: popup.querySelector(".smarttex-float-popup-caption .katex")
+          ?.textContent.includes("1.25"),
+        captionBold: popup.querySelector(
+          ".smarttex-float-popup-caption .smarttex-inline-latex strong"
+        )?.textContent === "high precision",
+        rows: rows === 3,
+        math: math === 3,
+        edit: popup.textContent.includes("Copper sheet"),
+        staleEdit: !popup.textContent.includes("Copper foil"),
+        colspan: Boolean(popup.querySelector("td[colspan='2']"))
+      };
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#table-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Table test passed"
+        : `Table test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.tableTest = passed ? "passed" : "failed";
+    }
+    window.setTimeout(checkTablePreview, 50);
+  </script>
+</body>
+</html>

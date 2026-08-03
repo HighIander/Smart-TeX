@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX Nextcloud client harness</title>
+</head>
+<body>
+  <output id="nextcloud-client-test-result">Nextcloud client test running</output>
+  <script>
+    let storedConnections = null;
+    const openedTabs = [];
+    const requestedOrigins = [];
+    const textBase64 = (value) => btoa(unescape(encodeURIComponent(value)));
+    const response = (body, {
+      status = 200,
+      headers = { "content-type": "application/json" }
+    } = {}) => ({
+      ok: true,
+      status,
+      statusText: status === 200 || status === 207 ? "OK" : "",
+      headers,
+      bodyBase64: textBase64(body)
+    });
+    const directoryXml = `<?xml version="1.0"?>
+      <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+        <d:response><d:href>/remote.php/dav/files/alice/Research/</d:href><d:propstat><d:prop>
+          <d:displayname>Research</d:displayname><d:resourcetype><d:collection/></d:resourcetype>
+        </d:prop></d:propstat></d:response>
+        <d:response><d:href>/remote.php/dav/files/alice/Research/figure.png</d:href><d:propstat><d:prop>
+          <d:displayname>figure.png</d:displayname><d:resourcetype/>
+          <d:getetag>&quot;v1&quot;</d:getetag><d:getcontentlength>5</d:getcontentlength>
+          <d:getlastmodified>Sun, 02 Aug 2026 10:00:00 GMT</d:getlastmodified>
+          <d:getcontenttype>image/png</d:getcontenttype><oc:fileid>42</oc:fileid>
+        </d:prop></d:propstat></d:response>
+      </d:multistatus>`;
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(key) {
+            return storedConnections ? { [key]: storedConnections } : {};
+          },
+          async set(values) {
+            storedConnections = Object.values(values)[0];
+          }
+        }
+      },
+      runtime: {
+        async sendMessage(message) {
+          if (message.type === "smarttex-request-origin-permission") {
+            requestedOrigins.push(message.server);
+            return { ok: true, granted: true };
+          }
+          if (message.type === "smarttex-open-external-tab") {
+            openedTabs.push(message.url);
+            return { ok: true, tabId: 1 };
+          }
+          if (message.type !== "smarttex-nextcloud-fetch") {
+            return { ok: false, error: "Unexpected message" };
+          }
+          if (message.url.endsWith("/index.php/login/v2")) {
+            return response(JSON.stringify({
+              login: "https://cloud.example/login/flow",
+              poll: {
+                endpoint: "https://cloud.example/login/v2/poll",
+                token: "poll-token"
+              }
+            }));
+          }
+          if (message.url.endsWith("/login/v2/poll")) {
+            return response(JSON.stringify({
+              server: "https://cloud.example",
+              loginName: "alice",
+              appPassword: "app-password"
+            }));
+          }
+          if (message.url.includes("/ocs/v2.php/cloud/user")) {
+            return response(JSON.stringify({ ocs: { data: { id: "alice" } } }));
+          }
+          if (message.method === "PROPFIND") {
+            return response(directoryXml, {
+              status: 207,
+              headers: { "content-type": "application/xml" }
+            });
+          }
+          if (message.method === "GET" && message.url.endsWith("/Research/figure.png")) {
+            return response("hello", {
+              headers: {
+                "content-type": "image/png",
+                etag: "\"v1\"",
+                "oc-fileid": "42",
+                "last-modified": "Sun, 02 Aug 2026 10:00:00 GMT"
+              }
+            });
+          }
+          return { ok: false, error: `Unexpected fetch ${message.method} ${message.url}` };
+        }
+      }
+    };
+  </script>
+  <script src="../nextcloud-client.js"></script>
+  <script>
+    (async () => {
+      const checks = {};
+      const statuses = [];
+      const connection = await SmartTeXNextcloud.connect(
+        "https://cloud.example/",
+        (message) => statuses.push(message)
+      );
+      checks.login = (
+        connection.server === "https://cloud.example" &&
+        connection.loginName === "alice" &&
+        openedTabs.length === 1 &&
+        requestedOrigins.length === 1 &&
+        statuses.some((message) => message.startsWith("Connected to"))
+      );
+      checks.persisted = (
+        (await SmartTeXNextcloud.listConnections()).length === 1
+      );
+      checks.connection = await SmartTeXNextcloud.checkConnection(connection);
+      const entries = await SmartTeXNextcloud.listDirectory(connection, "Research");
+      checks.directory = (
+        entries.length === 1 &&
+        entries[0].name === "figure.png" &&
+        entries[0].etag === "\"v1\""
+      );
+      const downloaded = await SmartTeXNextcloud.downloadFile(
+        connection,
+        "Research/figure.png"
+      );
+      checks.download = (
+        downloaded.blob.size === 5 &&
+        downloaded.info.fileId === "42"
+      );
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#nextcloud-client-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Nextcloud client test passed"
+        : `Nextcloud client test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.nextcloudClientTest = passed
+        ? "passed"
+        : "failed";
+    })().catch((error) => {
+      const output = document.querySelector("#nextcloud-client-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Nextcloud client test failed: ${error.message}`;
+      document.documentElement.dataset.nextcloudClientTest = "failed";
+    });
+  </script>
+</body>
+</html>

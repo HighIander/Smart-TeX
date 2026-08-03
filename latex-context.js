@@ -1,0 +1,1291 @@
+/* SPDX-License-Identifier: CC-BY-NC-SA-4.0 */
+
+((global) => {
+  "use strict";
+
+  const MATH_ENVIRONMENTS = new Set([
+    "math",
+    "displaymath",
+    "equation",
+    "equation*",
+    "align",
+    "align*",
+    "alignat",
+    "alignat*",
+    "flalign",
+    "flalign*",
+    "gather",
+    "gather*",
+    "multline",
+    "multline*",
+    "eqnarray",
+    "eqnarray*"
+  ]);
+  const TABLE_ENVIRONMENTS = new Set([
+    "array",
+    "longtable",
+    "tabular",
+    "tabular*",
+    "tabularx"
+  ]);
+  const VERBATIM_ENVIRONMENTS = [
+    "verbatim",
+    "verbatim*",
+    "Verbatim",
+    "lstlisting",
+    "minted"
+  ];
+  const CARET_MACRO = "\\SmartTeXCaret{}";
+  const MASK_CHARACTER = "\u0000";
+  const DELIMITER_COMMANDS = new Set([
+    "\\left",
+    "\\right",
+    "\\middle",
+    "\\big",
+    "\\Big",
+    "\\bigg",
+    "\\Bigg",
+    "\\bigl",
+    "\\bigr",
+    "\\Bigl",
+    "\\Bigr",
+    "\\biggl",
+    "\\biggr",
+    "\\Biggl",
+    "\\Biggr"
+  ]);
+
+  function isEscaped(source, index) {
+    let backslashes = 0;
+    for (let position = index - 1; position >= 0 && source[position] === "\\"; position -= 1) {
+      backslashes += 1;
+    }
+    return backslashes % 2 === 1;
+  }
+
+  function blankRange(characters, start, end) {
+    for (let index = start; index < end; index += 1) {
+      if (characters[index] !== "\r" && characters[index] !== "\n") {
+        characters[index] = MASK_CHARACTER;
+      }
+    }
+  }
+
+  function maskIgnoredLatex(sourceValue) {
+    const source = String(sourceValue || "");
+    const characters = source.split("");
+
+    for (let index = 0; index < source.length; index += 1) {
+      if (source[index] === "%" && !isEscaped(source, index)) {
+        let end = index;
+        while (end < source.length && source[end] !== "\r" && source[end] !== "\n") {
+          end += 1;
+        }
+        blankRange(characters, index, end);
+        index = end - 1;
+        continue;
+      }
+
+      if (source[index] !== "\\" || source.slice(index, index + 5) !== "\\verb") {
+        continue;
+      }
+      let delimiterIndex = index + 5;
+      if (source[delimiterIndex] === "*") delimiterIndex += 1;
+      const delimiter = source[delimiterIndex];
+      if (!delimiter || /\s|[A-Za-z]/.test(delimiter)) continue;
+      const endDelimiter = source.indexOf(delimiter, delimiterIndex + 1);
+      const end = endDelimiter < 0 ? source.length : endDelimiter + 1;
+      blankRange(characters, index, end);
+      index = end - 1;
+    }
+
+    let masked = characters.join("");
+    for (const environment of VERBATIM_ENVIRONMENTS) {
+      const escapedEnvironment = environment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const beginPattern = new RegExp(`\\\\begin\\s*\\{${escapedEnvironment}\\}`, "g");
+      let match;
+      while ((match = beginPattern.exec(masked))) {
+        const endPattern = new RegExp(`\\\\end\\s*\\{${escapedEnvironment}\\}`, "g");
+        endPattern.lastIndex = match.index + match[0].length;
+        const endMatch = endPattern.exec(masked);
+        const end = endMatch ? endMatch.index + endMatch[0].length : source.length;
+        blankRange(characters, match.index, end);
+        masked = characters.join("");
+        beginPattern.lastIndex = end;
+      }
+    }
+    return characters.join("");
+  }
+
+  function environmentOpeningAt(masked, index) {
+    if (masked[index] !== "\\") return null;
+    const match = masked.slice(index).match(/^\\begin\s*\{([^{}]+)\}/);
+    if (!match || !MATH_ENVIRONMENTS.has(match[1])) return null;
+    return {
+      token: match[0],
+      environment: match[1],
+      display: !["math"].includes(match[1])
+    };
+  }
+
+  function delimiterOpeningAt(masked, index) {
+    if (masked.startsWith("\\(", index)) {
+      return { token: "\\(", close: "\\)", display: false };
+    }
+    if (masked.startsWith("\\[", index)) {
+      return { token: "\\[", close: "\\]", display: true };
+    }
+    if (masked[index] !== "$" || isEscaped(masked, index)) return null;
+    if (masked.startsWith("$$", index)) {
+      return { token: "$$", close: "$$", display: true };
+    }
+    return { token: "$", close: "$", display: false };
+  }
+
+  function closingTokenAt(masked, index, active) {
+    if (active.kind !== "environment") {
+      return masked.startsWith(active.close, index) ? active.close : "";
+    }
+    if (masked[index] !== "\\") return "";
+    const escapedName = active.environment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return masked.slice(index).match(
+      new RegExp(`^\\\\end\\s*\\{${escapedName}\\}`)
+    )?.[0] || "";
+  }
+
+  function equationContexts(sourceValue) {
+    const source = String(sourceValue || "");
+    const masked = maskIgnoredLatex(source);
+    const contexts = [];
+    let active = null;
+    let index = 0;
+
+    while (index < masked.length) {
+      if (!active) {
+        const environment = environmentOpeningAt(masked, index);
+        if (environment) {
+          active = {
+            kind: "environment",
+            environment: environment.environment,
+            display: environment.display,
+            openStart: index,
+            contentStart: index + environment.token.length,
+            close: `\\end{${environment.environment}}`
+          };
+          index += environment.token.length;
+          continue;
+        }
+
+        const delimiter = delimiterOpeningAt(masked, index);
+        if (delimiter) {
+          active = {
+            kind: "delimiter",
+            delimiter: delimiter.token,
+            display: delimiter.display,
+            openStart: index,
+            contentStart: index + delimiter.token.length,
+            close: delimiter.close
+          };
+          index += delimiter.token.length;
+          continue;
+        }
+        index += 1;
+        continue;
+      }
+
+      const closingToken = closingTokenAt(masked, index, active);
+      if (closingToken) {
+        contexts.push({
+          ...active,
+          contentEnd: index,
+          closeEnd: index + closingToken.length,
+          complete: true
+        });
+        index += closingToken.length;
+        active = null;
+        continue;
+      }
+      index += 1;
+    }
+
+    if (active) {
+      contexts.push({
+        ...active,
+        contentEnd: source.length,
+        closeEnd: source.length,
+        complete: false
+      });
+    }
+    return { contexts, masked };
+  }
+
+  function findEquationContext(sourceValue, cursorValue) {
+    const source = String(sourceValue || "");
+    const cursor = Math.max(0, Math.min(Number(cursorValue) || 0, source.length));
+    const { contexts, masked } = equationContexts(source);
+    if (
+      cursor < source.length &&
+      masked[cursor] === MASK_CHARACTER
+    ) {
+      return null;
+    }
+    const context = contexts.find((candidate) => (
+      cursor >= candidate.contentStart && cursor <= candidate.contentEnd
+    ));
+    if (!context) return null;
+    return {
+      ...context,
+      source: source.slice(context.contentStart, context.contentEnd),
+      cursorOffset: cursor - context.contentStart
+    };
+  }
+
+  function tableEnvironmentHeader(source, masked, environment, tokenEnd) {
+    let position = skipWhitespace(masked, tokenEnd);
+    const takeGroup = (opening, closing) => {
+      if (masked[position] !== opening) return null;
+      const group = readBalanced(masked, position, opening, closing);
+      if (!group) return null;
+      const value = source.slice(position + 1, group.end - 1);
+      position = skipWhitespace(masked, group.end);
+      return value;
+    };
+    const takeOptionalPosition = () => {
+      if (masked[position] === "[") takeGroup("[", "]");
+    };
+    let columnSpec = "";
+
+    if (environment === "tabular*") {
+      takeGroup("{", "}");
+      takeOptionalPosition();
+      columnSpec = takeGroup("{", "}") ?? "";
+    } else if (environment === "tabularx") {
+      takeGroup("{", "}");
+      columnSpec = takeGroup("{", "}") ?? "";
+    } else {
+      takeOptionalPosition();
+      columnSpec = takeGroup("{", "}") ?? "";
+    }
+    return { columnSpec, contentStart: position };
+  }
+
+  function tableContexts(sourceValue) {
+    const source = String(sourceValue || "");
+    const masked = maskIgnoredLatex(source);
+    const tokenPattern = /\\(begin|end)\s*\{([^{}\r\n]+)\}/g;
+    const stack = [];
+    const contexts = [];
+    let match;
+
+    while ((match = tokenPattern.exec(masked))) {
+      const kind = match[1];
+      const environment = match[2].trim();
+      if (kind === "begin") {
+        stack.push({
+          environment,
+          openStart: match.index,
+          tokenEnd: match.index + match[0].length
+        });
+        continue;
+      }
+
+      let openingIndex = stack.length - 1;
+      while (
+        openingIndex >= 0 &&
+        stack[openingIndex].environment !== environment
+      ) {
+        openingIndex -= 1;
+      }
+      if (openingIndex < 0) continue;
+      const opening = stack[openingIndex];
+      stack.splice(openingIndex);
+      if (!TABLE_ENVIRONMENTS.has(environment)) continue;
+      const header = tableEnvironmentHeader(
+        source,
+        masked,
+        environment,
+        opening.tokenEnd
+      );
+      contexts.push({
+        kind: "table",
+        environment,
+        display: true,
+        openStart: opening.openStart,
+        contentStart: header.contentStart,
+        contentEnd: match.index,
+        closeEnd: match.index + match[0].length,
+        complete: true,
+        columnSpec: header.columnSpec
+      });
+    }
+
+    for (const opening of stack) {
+      if (!TABLE_ENVIRONMENTS.has(opening.environment)) continue;
+      const header = tableEnvironmentHeader(
+        source,
+        masked,
+        opening.environment,
+        opening.tokenEnd
+      );
+      contexts.push({
+        kind: "table",
+        environment: opening.environment,
+        display: true,
+        openStart: opening.openStart,
+        contentStart: header.contentStart,
+        contentEnd: source.length,
+        closeEnd: source.length,
+        complete: false,
+        columnSpec: header.columnSpec
+      });
+    }
+    return contexts;
+  }
+
+  function findTableContext(sourceValue, cursorValue) {
+    const source = String(sourceValue || "");
+    const cursor = Math.max(0, Math.min(Number(cursorValue) || 0, source.length));
+    const context = tableContexts(source)
+      .filter((candidate) => (
+        cursor >= candidate.openStart &&
+        cursor <= candidate.closeEnd
+      ))
+      .sort((left, right) => (
+        (left.closeEnd - left.openStart) - (right.closeEnd - right.openStart)
+      ))[0];
+    if (!context) return null;
+    return {
+      ...context,
+      source: source.slice(context.contentStart, context.contentEnd),
+      cursorOffset: Math.max(
+        0,
+        Math.min(cursor - context.contentStart, context.contentEnd - context.contentStart)
+      )
+    };
+  }
+
+  function skipWhitespace(source, index) {
+    let position = index;
+    while (
+      position < source.length &&
+      (source[position] === MASK_CHARACTER || /\s/.test(source[position]))
+    ) {
+      position += 1;
+    }
+    return position;
+  }
+
+  function readBalanced(source, start, opening, closing) {
+    if (source[start] !== opening) return null;
+    let depth = 0;
+    for (let index = start; index < source.length; index += 1) {
+      if (source[index] === opening && !isEscaped(source, index)) depth += 1;
+      if (source[index] === closing && !isEscaped(source, index)) {
+        depth -= 1;
+        if (depth === 0) {
+          return { start, end: index + 1 };
+        }
+      }
+    }
+    return null;
+  }
+
+  function readControlSequence(source, start) {
+    if (source[start] !== "\\") return null;
+    let end = start + 1;
+    if (/[A-Za-z@]/.test(source[end] || "")) {
+      while (end < source.length && /[A-Za-z@]/.test(source[end])) end += 1;
+    } else if (end < source.length) {
+      end += 1;
+    }
+    return { start, end };
+  }
+
+  function parseNewCommandRecords(sourceValue, beforeIndexValue = Infinity) {
+    const source = String(sourceValue || "");
+    const masked = maskIgnoredLatex(source);
+    const beforeIndex = Math.max(0, Math.min(
+      Number.isFinite(beforeIndexValue) ? Number(beforeIndexValue) : source.length,
+      source.length
+    ));
+    const pattern = /\\(newcommand|renewcommand|providecommand)(\*)?/g;
+    const records = [];
+    let match;
+
+    while ((match = pattern.exec(masked))) {
+      if (match.index >= beforeIndex || records.length >= 250) break;
+      let position = skipWhitespace(masked, match.index + match[0].length);
+      let name = "";
+      if (masked[position] === "{") {
+        const nameGroup = readBalanced(masked, position, "{", "}");
+        if (!nameGroup) continue;
+        name = source.slice(position + 1, nameGroup.end - 1).trim();
+        position = nameGroup.end;
+      } else {
+        const nameToken = readControlSequence(masked, position);
+        if (!nameToken) continue;
+        name = source.slice(nameToken.start, nameToken.end);
+        position = nameToken.end;
+      }
+      if (!/^\\(?:[A-Za-z@]+|.)$/.test(name)) continue;
+
+      position = skipWhitespace(masked, position);
+      let numArgs = 0;
+      let optionalDefault = null;
+      if (masked[position] === "[") {
+        const argumentCount = readBalanced(masked, position, "[", "]");
+        if (!argumentCount) continue;
+        const rawCount = source.slice(position + 1, argumentCount.end - 1).trim();
+        numArgs = Number.parseInt(rawCount, 10);
+        if (!Number.isInteger(numArgs) || numArgs < 0 || numArgs > 9) continue;
+        position = skipWhitespace(masked, argumentCount.end);
+        if (masked[position] === "[") {
+          const optionalDefaultGroup = readBalanced(masked, position, "[", "]");
+          if (!optionalDefaultGroup || numArgs < 1) continue;
+          optionalDefault = source.slice(position + 1, optionalDefaultGroup.end - 1);
+          position = skipWhitespace(masked, optionalDefaultGroup.end);
+        }
+      }
+
+      const definition = readBalanced(masked, position, "{", "}");
+      if (!definition || definition.end > beforeIndex) continue;
+      const raw = source.slice(match.index, definition.end).trim();
+      if (raw) {
+        records.push({
+          kind: match[1],
+          name,
+          numArgs,
+          optionalDefault,
+          body: source.slice(position + 1, definition.end - 1),
+          raw,
+          start: match.index,
+          end: definition.end
+        });
+      }
+      pattern.lastIndex = definition.end;
+    }
+    return records;
+  }
+
+  function extractNewCommandDefinitions(sourceValue, beforeIndexValue = Infinity) {
+    return parseNewCommandRecords(sourceValue, beforeIndexValue)
+      .map((record) => record.raw);
+  }
+
+  function activeNewCommandRecords(records) {
+    const active = new Map();
+    for (const record of records) {
+      if (record.kind === "providecommand" && active.has(record.name)) continue;
+      active.set(record.name, record);
+    }
+    return [...active.values()];
+  }
+
+  function macroNameMatches(source, index, name) {
+    if (!source.startsWith(name, index)) return false;
+    const last = name[name.length - 1] || "";
+    const next = source[index + name.length] || "";
+    return !/[A-Za-z@]/.test(last) || !/[A-Za-z@]/.test(next);
+  }
+
+  function readMacroArgument(source, startValue) {
+    const start = skipWhitespace(source, startValue);
+    if (start >= source.length) return null;
+    if (source[start] === "{") {
+      const group = readBalanced(source, start, "{", "}");
+      return group ? {
+        value: source.slice(start + 1, group.end - 1),
+        end: group.end
+      } : null;
+    }
+    if (source[start] === "\\") {
+      const command = readControlSequence(source, start);
+      return command ? {
+        value: source.slice(command.start, command.end),
+        end: command.end
+      } : null;
+    }
+    const codePoint = source.codePointAt(start);
+    const end = start + (codePoint > 0xFFFF ? 2 : 1);
+    return { value: source.slice(start, end), end };
+  }
+
+  function substituteMacroArguments(bodyValue, args) {
+    const placeholder = "\uE000";
+    return String(bodyValue || "")
+      .replace(/##/g, placeholder)
+      .replace(/#([1-9])/g, (_match, number) => args[Number(number) - 1] ?? "")
+      .replaceAll(placeholder, "#");
+  }
+
+  function expandOptionalCommandsOnce(source, optionalRecords) {
+    let output = "";
+    let changed = false;
+    let index = 0;
+
+    while (index < source.length) {
+      const record = source[index] === "\\"
+        ? optionalRecords.find((candidate) => macroNameMatches(source, index, candidate.name))
+        : null;
+      if (!record) {
+        output += source[index];
+        index += 1;
+        continue;
+      }
+
+      let position = skipWhitespace(source, index + record.name.length);
+      const args = [];
+      if (source[position] === "[") {
+        const optional = readBalanced(source, position, "[", "]");
+        if (!optional) {
+          output += source[index];
+          index += 1;
+          continue;
+        }
+        args.push(source.slice(position + 1, optional.end - 1));
+        position = optional.end;
+      } else {
+        args.push(record.optionalDefault);
+      }
+
+      let complete = true;
+      for (let argumentIndex = 1; argumentIndex < record.numArgs; argumentIndex += 1) {
+        const argument = readMacroArgument(source, position);
+        if (!argument) {
+          complete = false;
+          break;
+        }
+        args.push(argument.value);
+        position = argument.end;
+      }
+      if (!complete) {
+        output += source[index];
+        index += 1;
+        continue;
+      }
+
+      output += `{${substituteMacroArguments(record.body, args)}}`;
+      index = position;
+      changed = true;
+    }
+    return { value: output, changed };
+  }
+
+  function expandOptionalCommands(sourceValue, optionalRecords) {
+    let value = String(sourceValue || "");
+    for (let pass = 0; pass < 16; pass += 1) {
+      const expanded = expandOptionalCommandsOnce(value, optionalRecords);
+      value = expanded.value;
+      if (!expanded.changed) break;
+    }
+    return value;
+  }
+
+  function prepareDocumentCommands(sourceValue, beforeIndexValue, bodyValue) {
+    const activeRecords = activeNewCommandRecords(
+      parseNewCommandRecords(sourceValue, beforeIndexValue)
+    );
+    const optionalRecords = activeRecords
+      .filter((record) => record.optionalDefault !== null)
+      .sort((left, right) => right.name.length - left.name.length);
+    const macros = {
+      // LaTeX's \ensuremath is a mode guard. SmartTeX only sends these
+      // fragments to KaTeX's math renderer, so its argument is the complete
+      // compatible expansion.
+      "\\ensuremath": "#1"
+    };
+
+    for (const record of activeRecords) {
+      if (record.optionalDefault !== null) continue;
+      macros[record.name] = expandOptionalCommands(record.body, optionalRecords);
+    }
+    return {
+      body: expandOptionalCommands(bodyValue, optionalRecords),
+      macros,
+      count: activeRecords.length
+    };
+  }
+
+  function extendedDelimiterSequence(source, start) {
+    const sequence = readControlSequence(source, start);
+    if (!sequence) return null;
+    const command = source.slice(sequence.start, sequence.end);
+    if (!DELIMITER_COMMANDS.has(command)) return null;
+    const delimiterStart = skipWhitespace(source, sequence.end);
+    if (delimiterStart >= source.length) return sequence;
+    if (source[delimiterStart] === "\\") {
+      const delimiter = readControlSequence(source, delimiterStart);
+      return delimiter ? { start: sequence.start, end: delimiter.end } : sequence;
+    }
+    const codePoint = source.codePointAt(delimiterStart);
+    return {
+      start: sequence.start,
+      end: delimiterStart + (codePoint > 0xFFFF ? 2 : 1)
+    };
+  }
+
+  function controlSequenceAround(source, offset) {
+    const searchStart = Math.max(0, offset - 40);
+    for (let start = searchStart; start <= offset; start += 1) {
+      if (source[start] !== "\\") continue;
+      const delimiterSequence = extendedDelimiterSequence(source, start);
+      if (
+        delimiterSequence &&
+        offset >= delimiterSequence.start &&
+        offset <= delimiterSequence.end
+      ) {
+        return delimiterSequence;
+      }
+    }
+
+    let slash = offset;
+    while (slash > 0 && /[A-Za-z@]/.test(source[slash - 1])) slash -= 1;
+    if (slash > 0 && source[slash - 1] === "\\") slash -= 1;
+    if (source[slash] !== "\\") return null;
+    const sequence = readControlSequence(source, slash);
+    if (!sequence || offset < sequence.start || offset > sequence.end) return null;
+    return sequence;
+  }
+
+  function resolveCaretPlacement(sourceValue, offsetValue, previousValue = null) {
+    const source = String(sourceValue || "");
+    const cursorOffset = Math.max(
+      0,
+      Math.min(Number(offsetValue) || 0, source.length)
+    );
+    const command = controlSequenceAround(source, cursorOffset);
+    if (!command) {
+      return {
+        cursorOffset,
+        commandStart: null,
+        commandEnd: null,
+        commandSide: null
+      };
+    }
+
+    let commandSide;
+    if (cursorOffset <= command.start) {
+      commandSide = "left";
+    } else if (cursorOffset >= command.end) {
+      commandSide = "right";
+    } else if (
+      previousValue?.commandStart === command.start &&
+      (previousValue.commandSide === "left" || previousValue.commandSide === "right")
+    ) {
+      commandSide = previousValue.commandSide;
+    } else {
+      commandSide = Number(previousValue?.cursorOffset) >= command.end
+        ? "right"
+        : "left";
+    }
+
+    return {
+      cursorOffset,
+      commandStart: command.start,
+      commandEnd: command.end,
+      commandSide
+    };
+  }
+
+  function nextAtomEnd(source, startValue) {
+    let start = skipWhitespace(source, startValue);
+    if (start >= source.length) return start;
+    if (source[start] === "{") {
+      return readBalanced(source, start, "{", "}")?.end || source.length;
+    }
+    if (source[start] === "\\") {
+      const command = readControlSequence(source, start);
+      if (!command) return start + 1;
+      let end = command.end;
+      let groups = 0;
+      while (groups < 4) {
+        const groupStart = skipWhitespace(source, end);
+        const opening = source[groupStart];
+        if (opening !== "{" && opening !== "[") break;
+        const group = readBalanced(
+          source,
+          groupStart,
+          opening,
+          opening === "{" ? "}" : "]"
+        );
+        if (!group) break;
+        end = group.end;
+        groups += 1;
+      }
+      return end;
+    }
+    const codePoint = source.codePointAt(start);
+    return start + (codePoint > 0xFFFF ? 2 : 1);
+  }
+
+  function commandAwareCaretOffset(sourceValue, offsetValue, commandSide = null) {
+    const source = String(sourceValue || "");
+    let offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
+    const command = controlSequenceAround(source, offset);
+    if (command && offset > command.start && offset < command.end) {
+      offset = commandSide === "right" ? command.end : command.start;
+    } else if (command && offset < command.end) {
+      offset = command.start;
+    } else if (command && offset === command.end) {
+      const next = skipWhitespace(source, offset);
+      if (source[next] === "{" || source[next] === "[") {
+        offset = command.start;
+      }
+    }
+    return offset;
+  }
+
+  function injectCaret(sourceValue, offsetValue, commandSide = null) {
+    const source = String(sourceValue || "");
+    const offset = commandAwareCaretOffset(source, offsetValue, commandSide);
+
+    const next = skipWhitespace(source, offset);
+    if (source[next] === "{") {
+      return `${source.slice(0, next + 1)}${CARET_MACRO}${source.slice(next + 1)}`;
+    }
+
+    let previous = offset - 1;
+    while (previous >= 0 && /\s/.test(source[previous])) previous -= 1;
+    if (source[previous] === "^" || source[previous] === "_") {
+      if (next >= source.length) {
+        return `${source.slice(0, offset)}{${CARET_MACRO}}${source.slice(offset)}`;
+      }
+      const atomEnd = nextAtomEnd(source, next);
+      return (
+        source.slice(0, offset) +
+        `{${CARET_MACRO}` +
+        source.slice(offset, atomEnd) +
+        "}" +
+        source.slice(atomEnd)
+      );
+    }
+
+    return `${source.slice(0, offset)}${CARET_MACRO}${source.slice(offset)}`;
+  }
+
+  function splitMathRows(sourceValue) {
+    const source = String(sourceValue || "");
+    const rows = [];
+    let start = 0;
+    let braceDepth = 0;
+
+    for (let index = 0; index < source.length; index += 1) {
+      if (source[index] === "{" && !isEscaped(source, index)) {
+        braceDepth += 1;
+        continue;
+      }
+      if (source[index] === "}" && !isEscaped(source, index)) {
+        braceDepth = Math.max(0, braceDepth - 1);
+        continue;
+      }
+      if (
+        braceDepth !== 0 ||
+        source[index] !== "\\" ||
+        source[index + 1] !== "\\"
+      ) {
+        continue;
+      }
+
+      rows.push(source.slice(start, index));
+      index += 1;
+      let next = index + 1;
+      if (source[next] === "*") next += 1;
+      while (next < source.length && /[ \t]/.test(source[next])) next += 1;
+      if (source[next] === "[") {
+        const spacing = readBalanced(source, next, "[", "]");
+        if (spacing) next = spacing.end;
+      }
+      start = next;
+      index = next - 1;
+    }
+    rows.push(source.slice(start));
+    return rows;
+  }
+
+  function rowNumberDirective(sourceValue) {
+    const source = String(sourceValue || "");
+    const masked = maskIgnoredLatex(source);
+    const tagPattern = /\\tag(\*)?\s*\{/g;
+    const ranges = [];
+    let tag = null;
+    let match;
+
+    while ((match = tagPattern.exec(masked))) {
+      const opening = match.index + match[0].lastIndexOf("{");
+      const group = readBalanced(masked, opening, "{", "}");
+      if (!group) continue;
+      tag = {
+        value: source.slice(opening + 1, group.end - 1).trim(),
+        starred: Boolean(match[1])
+      };
+      ranges.push({ start: match.index, end: group.end });
+      tagPattern.lastIndex = group.end;
+    }
+
+    const withoutTags = ranges
+      .sort((left, right) => right.start - left.start)
+      .reduce(
+        (value, range) => value.slice(0, range.start) + value.slice(range.end),
+        source
+      );
+    const suppressed = /\\(?:nonumber|notag)\b/.test(masked);
+    return {
+      source: withoutTags
+        .replace(/\\(?:nonumber|notag)\b/g, "")
+        .trim(),
+      suppressed,
+      tag
+    };
+  }
+
+  function equationLineDirectives(context) {
+    const environment = String(context?.environment || "");
+    const baseEnvironment = environment.replace(/\*$/, "");
+    const multiRow = [
+      "align",
+      "alignat",
+      "flalign",
+      "gather",
+      "eqnarray",
+      "multline"
+    ].includes(baseEnvironment);
+    const sources = multiRow ? splitMathRows(context?.source) : [String(context?.source || "")];
+    return {
+      baseEnvironment,
+      multiRow,
+      rows: sources.map(rowNumberDirective)
+    };
+  }
+
+  function equationCounterIncrement(context) {
+    if (context?.kind !== "environment") return 0;
+    const environment = String(context.environment || "");
+    if (environment.endsWith("*")) return 0;
+    const { baseEnvironment, rows } = equationLineDirectives(context);
+    if (![
+      "equation",
+      "align",
+      "alignat",
+      "flalign",
+      "gather",
+      "multline",
+      "eqnarray"
+    ].includes(baseEnvironment)) {
+      return 0;
+    }
+    if (baseEnvironment === "multline" || baseEnvironment === "equation") {
+      return rows.some((row) => row.suppressed) ? 0 : 1;
+    }
+    return rows.filter((row) => !row.suppressed).length;
+  }
+
+  function equationPreviewNumbering(sourceValue, context) {
+    const source = String(sourceValue || "");
+    const environment = String(context?.environment || "");
+    const starred = environment.endsWith("*");
+    const directives = equationLineDirectives(context);
+    const automaticallyNumbered = (
+      context?.kind === "environment" &&
+      !starred &&
+      [
+        "equation",
+        "align",
+        "alignat",
+        "flalign",
+        "gather",
+        "multline",
+        "eqnarray"
+      ].includes(directives.baseEnvironment)
+    );
+    let counter = equationContexts(source).contexts
+      .filter((candidate) => candidate.closeEnd <= context.openStart)
+      .reduce((total, candidate) => {
+        const completeContext = {
+          ...candidate,
+          source: source.slice(candidate.contentStart, candidate.contentEnd)
+        };
+        return total + equationCounterIncrement(completeContext);
+      }, 0);
+    const numbers = directives.rows.map(() => null);
+
+    if (directives.baseEnvironment === "multline") {
+      const tagIndex = directives.rows.findIndex((row) => row.tag);
+      const suppressed = directives.rows.some((row) => row.suppressed);
+      if (automaticallyNumbered && !suppressed) counter += 1;
+      const numberIndex = tagIndex >= 0 ? tagIndex : directives.rows.length - 1;
+      const tag = tagIndex >= 0 ? directives.rows[tagIndex].tag : null;
+      if (tag || (automaticallyNumbered && !suppressed)) {
+        numbers[numberIndex] = tag || { value: String(counter), starred: false };
+      }
+    } else {
+      directives.rows.forEach((row, index) => {
+        if (automaticallyNumbered && !row.suppressed) counter += 1;
+        if (row.tag) {
+          numbers[index] = row.tag;
+        } else if (automaticallyNumbered && !row.suppressed) {
+          numbers[index] = { value: String(counter), starred: false };
+        }
+      });
+    }
+
+    return {
+      ...directives,
+      numbers
+    };
+  }
+
+  function genericEnvironmentContexts(sourceValue, environmentNames) {
+    const source = String(sourceValue || "");
+    const masked = maskIgnoredLatex(source);
+    const names = new Set(environmentNames);
+    const tokenPattern = /\\(begin|end)\s*\{([^{}\r\n]+)\}/g;
+    const stack = [];
+    const contexts = [];
+    let match;
+
+    while ((match = tokenPattern.exec(masked))) {
+      const kind = match[1];
+      const environment = match[2].trim();
+      if (kind === "begin") {
+        stack.push({
+          environment,
+          openStart: match.index,
+          contentStart: match.index + match[0].length
+        });
+        continue;
+      }
+      let openingIndex = stack.length - 1;
+      while (
+        openingIndex >= 0 &&
+        stack[openingIndex].environment !== environment
+      ) {
+        openingIndex -= 1;
+      }
+      if (openingIndex < 0) continue;
+      const opening = stack[openingIndex];
+      stack.splice(openingIndex);
+      if (!names.has(environment)) continue;
+      contexts.push({
+        ...opening,
+        contentEnd: match.index,
+        closeEnd: match.index + match[0].length,
+        complete: true
+      });
+    }
+
+    for (const opening of stack) {
+      if (!names.has(opening.environment)) continue;
+      contexts.push({
+        ...opening,
+        contentEnd: source.length,
+        closeEnd: source.length,
+        complete: false
+      });
+    }
+    return contexts;
+  }
+
+  function figureContexts(sourceValue) {
+    const source = String(sourceValue || "");
+    return genericEnvironmentContexts(source, ["figure", "figure*"]).map((context) => ({
+      ...context,
+      kind: "figure",
+      display: true,
+      source: source.slice(context.contentStart, context.contentEnd)
+    }));
+  }
+
+  function findFigureContext(sourceValue, cursorValue) {
+    const source = String(sourceValue || "");
+    const cursor = Math.max(0, Math.min(Number(cursorValue) || 0, source.length));
+    const context = figureContexts(source)
+      .filter((candidate) => (
+        cursor >= candidate.openStart &&
+        cursor <= candidate.closeEnd
+      ))
+      .sort((left, right) => (
+        (left.closeEnd - left.openStart) - (right.closeEnd - right.openStart)
+      ))[0];
+    if (!context) return null;
+    return {
+      ...context,
+      cursorOffset: Math.max(
+        0,
+        Math.min(cursor - context.contentStart, context.contentEnd - context.contentStart)
+      )
+    };
+  }
+
+  function figurePreviewNumber(sourceValue, context) {
+    const source = String(sourceValue || "");
+    let number = 0;
+    for (const figure of figureContexts(source).sort(
+      (left, right) => left.openStart - right.openStart
+    )) {
+      const body = source.slice(figure.contentStart, figure.contentEnd);
+      const numbered = hasNumberedCaption(body);
+      if (numbered) number += 1;
+      if (figure.openStart === context?.openStart) return numbered ? number : null;
+    }
+    return null;
+  }
+
+  function hasNumberedCaption(sourceValue) {
+    const masked = maskIgnoredLatex(sourceValue);
+    return /\\caption(?!\*)\s*(?:\[[^\]\r\n]*\]\s*)?\{/.test(masked);
+  }
+
+  function tablePreviewNumber(sourceValue, context) {
+    const source = String(sourceValue || "");
+    const floats = genericEnvironmentContexts(source, ["table", "table*"])
+      .sort((left, right) => left.openStart - right.openStart);
+    const enclosing = floats
+      .filter((candidate) => (
+        candidate.openStart <= context.openStart &&
+        candidate.closeEnd >= context.closeEnd
+      ))
+      .sort((left, right) => (
+        (left.closeEnd - left.openStart) - (right.closeEnd - right.openStart)
+      ))[0];
+    if (!enclosing) return null;
+    const enclosingSource = source.slice(enclosing.contentStart, enclosing.contentEnd);
+    if (!hasNumberedCaption(enclosingSource)) return null;
+    const earlierNumberedTables = floats.filter((candidate) => (
+      candidate.openStart < enclosing.openStart &&
+      hasNumberedCaption(source.slice(candidate.contentStart, candidate.contentEnd))
+    )).length;
+    return earlierNumberedTables + 1;
+  }
+
+  function floatCaption(sourceValue, context, kindValue) {
+    const source = String(sourceValue || "");
+    const kind = kindValue === "table" ? "table" : "figure";
+    const environments = kind === "table"
+      ? ["table", "table*"]
+      : ["figure", "figure*"];
+    const enclosing = genericEnvironmentContexts(source, environments)
+      .filter((candidate) => (
+        candidate.openStart <= context?.openStart &&
+        candidate.closeEnd >= context?.closeEnd
+      ))
+      .sort((left, right) => (
+        (left.closeEnd - left.openStart) - (right.closeEnd - right.openStart)
+      ))[0];
+    if (!enclosing) return null;
+    const body = source.slice(enclosing.contentStart, enclosing.contentEnd);
+    const masked = maskIgnoredLatex(body);
+    const captionPattern = /\\caption(\*)?/g;
+    const match = captionPattern.exec(masked);
+    if (!match) return null;
+    let position = skipWhitespace(masked, match.index + match[0].length);
+    if (masked[position] === "[") {
+      const shortCaption = readBalanced(masked, position, "[", "]");
+      if (!shortCaption) return null;
+      position = skipWhitespace(masked, shortCaption.end);
+    }
+    if (masked[position] !== "{") return null;
+    const caption = readBalanced(masked, position, "{", "}");
+    if (!caption) return null;
+    const rawStart = enclosing.contentStart + position + 1;
+    const rawEnd = enclosing.contentStart + caption.end - 1;
+    const rawText = source.slice(rawStart, rawEnd);
+    const leadingWhitespace = rawText.length - rawText.trimStart().length;
+    const trailingWhitespace = rawText.length - rawText.trimEnd().length;
+    return {
+      text: rawText.trim(),
+      starred: Boolean(match[1]),
+      start: rawStart + leadingWhitespace,
+      end: Math.max(
+        rawStart + leadingWhitespace,
+        rawEnd - trailingWhitespace
+      )
+    };
+  }
+
+  function containsLabel(sourceValue, labelValue) {
+    const label = String(labelValue || "").trim();
+    const pattern = /\\label\s*\{([^{}]+)\}/g;
+    let match;
+    while ((match = pattern.exec(String(sourceValue || "")))) {
+      if (match[1].trim() === label) return true;
+    }
+    return false;
+  }
+
+  function referenceTarget(sourceValue, labelValue) {
+    const source = String(sourceValue || "");
+    const label = String(labelValue || "").trim();
+    if (!label) return null;
+    const labelPattern = /\\label\s*\{([^{}]+)\}/g;
+    let labelIndex = -1;
+    let labelMatch;
+    while ((labelMatch = labelPattern.exec(source))) {
+      if (labelMatch[1].trim() === label) {
+        labelIndex = labelMatch.index;
+        break;
+      }
+    }
+    if (labelIndex < 0) return null;
+
+    const equation = equationContexts(source).contexts.find((candidate) => (
+      labelIndex >= candidate.openStart && labelIndex <= candidate.closeEnd
+    ));
+    if (equation) {
+      const complete = {
+        ...equation,
+        source: source.slice(equation.contentStart, equation.contentEnd)
+      };
+      const numbering = equationPreviewNumbering(source, complete);
+      let rowIndex = numbering.rows.findIndex((row) => (
+        containsLabel(row.source, label)
+      ));
+      if (rowIndex < 0) {
+        rowIndex = numbering.numbers.findIndex(Boolean);
+      }
+      return {
+        label,
+        type: "equation",
+        number: numbering.numbers[rowIndex]?.value || "",
+        sourceIndex: equation.openStart,
+        context: complete,
+        numbering
+      };
+    }
+
+    const figure = figureContexts(source).find((candidate) => (
+      labelIndex >= candidate.openStart && labelIndex <= candidate.closeEnd
+    ));
+    if (figure) {
+      return {
+        label,
+        type: "figure",
+        number: figurePreviewNumber(source, figure),
+        sourceIndex: figure.openStart,
+        context: figure,
+        caption: floatCaption(source, figure, "figure")?.text || ""
+      };
+    }
+
+    const table = genericEnvironmentContexts(source, ["table", "table*"])
+      .find((candidate) => (
+        labelIndex >= candidate.openStart && labelIndex <= candidate.closeEnd
+      ));
+    if (table) {
+      return {
+        label,
+        type: "table",
+        number: tablePreviewNumber(source, table),
+        sourceIndex: table.openStart,
+        context: table,
+        caption: floatCaption(source, table, "table")?.text || ""
+      };
+    }
+
+    const counters = [0, 0, 0, 0];
+    const sectionPattern =
+      /\\(section|subsection|subsubsection|paragraph)(\*)?\s*\{([^{}]*)\}/g;
+    let section = null;
+    let sectionMatch;
+    while ((sectionMatch = sectionPattern.exec(source))) {
+      if (sectionMatch.index > labelIndex) break;
+      const level = [
+        "section",
+        "subsection",
+        "subsubsection",
+        "paragraph"
+      ].indexOf(sectionMatch[1]);
+      let number = "";
+      if (!sectionMatch[2]) {
+        counters[level] += 1;
+        for (let index = level + 1; index < counters.length; index += 1) {
+          counters[index] = 0;
+        }
+        number = counters.slice(0, level + 1).filter(Boolean).join(".");
+      }
+      section = {
+        label,
+        type: "section",
+        number,
+        title: sectionMatch[3].trim(),
+        sourceIndex: sectionMatch.index
+      };
+    }
+    return section || {
+      label,
+      type: "label",
+      number: "",
+      sourceIndex: labelIndex
+    };
+  }
+
+  function equationNumberLatex(number) {
+    if (!number?.value) return "";
+    return number.starred
+      ? `{${number.value}}`
+      : `\\text{(}${number.value}\\text{)}`;
+  }
+
+  function previewBody(
+    context,
+    commandSide = null,
+    numbering = null,
+    includeCaret = true
+  ) {
+    const withCaret = includeCaret
+      ? injectCaret(context.source, context.cursorOffset, commandSide)
+      : String(context.source || "");
+    if (context.kind !== "environment") return withCaret;
+    const environment = String(context.environment || "").replace(/\*$/, "");
+    const numberedRows = numbering?.rows?.length
+      ? splitMathRows(withCaret).map(rowNumberDirective)
+      : null;
+    if (["align", "alignat", "flalign", "eqnarray"].includes(environment)) {
+      const body = numberedRows
+        ? numberedRows.map((row, index) => {
+          const number = equationNumberLatex(numbering.numbers[index]);
+          return `${row.source}&&${number ? `\\qquad\\qquad ${number}` : ""}`;
+        }).join("\\\\")
+        : withCaret;
+      return `\\begin{aligned}${body}\\end{aligned}`;
+    }
+    if (environment === "gather") {
+      if (!numberedRows) return `\\begin{gathered}${withCaret}\\end{gathered}`;
+      const body = numberedRows.map((row, index) => {
+        const number = equationNumberLatex(numbering.numbers[index]);
+        return `${row.source}&&${number ? `\\qquad\\qquad ${number}` : ""}`;
+      }).join("\\\\");
+      return `\\begin{aligned}${body}\\end{aligned}`;
+    }
+    if (environment === "multline") {
+      const body = (numberedRows || [{ source: withCaret }]).map((row, index) => {
+        const number = equationNumberLatex(numbering?.numbers?.[index]);
+        return `${row.source}&&${number ? `\\qquad\\qquad ${number}` : ""}`;
+      }).join("\\\\");
+      return `\\begin{aligned}${body}\\end{aligned}`;
+    }
+    const row = rowNumberDirective(withCaret);
+    const number = equationNumberLatex(numbering?.numbers?.[0]);
+    return `${row.source}${number ? `\\qquad\\qquad ${number}` : ""}`;
+  }
+
+  global.SmartTeXLatexContext = Object.freeze({
+    maskIgnoredLatex,
+    equationContexts,
+    findEquationContext,
+    tableContexts,
+    findTableContext,
+    figureContexts,
+    findFigureContext,
+    extractNewCommandDefinitions,
+    prepareDocumentCommands,
+    resolveCaretPlacement,
+    commandAwareCaretOffset,
+    injectCaret,
+    previewBody,
+    equationPreviewNumbering,
+    tablePreviewNumber,
+    figurePreviewNumber,
+    floatCaption,
+    referenceTarget
+  });
+})(globalThis);

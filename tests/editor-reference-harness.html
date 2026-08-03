@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX editor reference popup harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 80px;
+      background: #eef1f5;
+      font: 15px/1.5 system-ui, sans-serif;
+    }
+
+    .cm-content {
+      width: 780px;
+      padding: 24px;
+      background: #fff;
+      font: 15px/1.55 Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    #editor-reference-test-result {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      z-index: 2147483647;
+      padding: 7px 11px;
+      border-radius: 999px;
+      color: #fff;
+      background: #9a6700;
+      font: 700 12px/1.2 system-ui, sans-serif;
+    }
+
+    #editor-reference-test-result[data-result="passed"] {
+      background: #16803b;
+    }
+
+    #editor-reference-test-result[data-result="failed"] {
+      background: #cf222e;
+    }
+  </style>
+</head>
+<body>
+  <div class="file-tree-list" hidden>
+    <div
+      role="treeitem"
+      aria-label="figure.png"
+      data-path="figure.png"
+      data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='100'%3E%3Crect width='240' height='100' fill='%233158b8'/%3E%3C/svg%3E"
+    ></div>
+  </div>
+  <div class="cm-content">See Figure \ref{fig:test}.</div>
+  <output id="editor-reference-test-result">Editor reference test running</output>
+
+  <script>
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get() { return {}; },
+          async set() {}
+        }
+      }
+    };
+    const source = String.raw`\begin{document}
+See Figure \ref{fig:test}. Also \cite{Demo}.
+
+\begin{equation}
+E = mc^2
+\label{eq:nested}
+\end{equation}
+
+\begin{figure}
+\includegraphics{figure.png}
+\caption{A referenced figure with inline math $q^2$; see Eq.~\eqref{eq:nested}.}
+\label{fig:test}
+\end{figure}
+\end{document}`;
+    const referenceIndex = source.indexOf("\\ref{fig:test}") + 5;
+    const requests = [];
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      requests.push(request);
+      const response = {
+        requestId: request.requestId,
+        ok: true
+      };
+      if (request.type === "getIndexAtCoordinates") {
+        response.index = referenceIndex;
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+            detail: JSON.stringify(response)
+          }));
+        }, 160);
+        return;
+      }
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify(response)
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => {
+      window.setTimeout(resolve, milliseconds);
+    });
+
+    async function runEditorReferenceTest() {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value: source,
+          cursorIndex: source.indexOf("\\cite{Demo}") + 7,
+          selectionFrom: source.indexOf("\\cite{Demo}") + 7,
+          selectionTo: source.indexOf("\\cite{Demo}") + 7,
+          screen: { pageX: 220, pageY: 130, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "codemirror"
+        })
+      }));
+      await delay(25);
+
+      const editor = document.querySelector(".cm-content");
+      const rect = editor.getBoundingClientRect();
+      editor.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: rect.left + 150,
+        clientY: rect.top + 30
+      }));
+      await delay(110);
+      const popupSpinnerShown = Boolean(document.querySelector(
+        ".smarttex-popup-loading-spinner:not([hidden])"
+      ));
+
+      let popup = null;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        popup = document.querySelector(
+          ".smarttex-editor-reference-popup:not([hidden])"
+        );
+        if (popup) break;
+        await delay(25);
+      }
+
+      let image = null;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        image = popup?.querySelector(".smarttex-figure-popup-image");
+        if (image) break;
+        await delay(25);
+      }
+
+      const title = popup?.querySelector("a.smarttex-reference-popup-title");
+      const caption = popup?.querySelector("figcaption");
+      const nestedLink = caption?.querySelector("a.smarttex-caption-reference");
+      const popupWasVisible = Boolean(popup && !popup.hidden);
+
+      nestedLink?.dispatchEvent(new PointerEvent("pointerenter", {
+        bubbles: false
+      }));
+      await delay(250);
+      const nestedPopup = document.querySelector(
+        ".smarttex-nested-reference-popup:not([hidden])"
+      );
+      const nestedTitle = nestedPopup?.querySelector(
+        ".smarttex-reference-popup-title"
+      );
+      const nestedTarget = nestedPopup?.querySelector(
+        ".smarttex-reference-popup-target"
+      );
+      const parentPreserved = (
+        Boolean(popup && !popup.hidden) &&
+        title?.isConnected &&
+        nestedLink?.isConnected &&
+        popup.contains(caption)
+      );
+      const nestedWasVisible = Boolean(
+        nestedPopup && !nestedPopup.hidden && nestedTitle && nestedTarget
+      );
+
+      title?.click();
+      await delay(30);
+      const jump = requests.filter((request) => request.type === "setCursor").at(-1);
+
+      const checks = {
+        popupSpinnerShown,
+        coordinateLookup: requests.some(
+          (request) => request.type === "getIndexAtCoordinates"
+        ),
+        popupVisible: popupWasVisible,
+        linkedTitle: title?.textContent === "Figure 1",
+        targetPreview: Boolean(image),
+        caption: (
+          caption?.textContent.includes("Fig. 1:") &&
+          caption?.textContent.includes("A referenced figure") &&
+          Boolean(caption.querySelector(".katex"))
+        ),
+        nestedPopupPersistent: (
+          parentPreserved &&
+          nestedWasVisible &&
+          nestedTitle?.textContent === "Equation 1"
+        ),
+        jumpToEditor: (
+          jump?.index === source.indexOf("\\begin{figure}") &&
+          jump?.focus === true
+        )
+      };
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#editor-reference-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Editor reference test passed"
+        : `Editor reference test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.editorReferenceTest = passed
+        ? "passed"
+        : "failed";
+    }
+
+    runEditorReferenceTest().catch((error) => {
+      const output = document.querySelector("#editor-reference-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Editor reference test failed: ${error.message}`;
+      document.documentElement.dataset.editorReferenceTest = "failed";
+    });
+  </script>
+</body>
+</html>

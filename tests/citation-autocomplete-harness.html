@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX citation autocomplete harness</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background: #e8edf3;
+      font: 14px/1.4 system-ui, sans-serif;
+    }
+
+    .file-tree-list {
+      width: 240px;
+      padding: 12px;
+      background: #263447;
+    }
+
+    [role="treeitem"] {
+      margin: 3px 0;
+    }
+
+    .item-name-button {
+      width: 100%;
+      padding: 6px;
+      border: 0;
+      color: #fff;
+      background: transparent;
+      text-align: left;
+    }
+
+    #citation-test-result {
+      position: fixed;
+      z-index: 2147483647;
+      right: 12px;
+      bottom: 12px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      color: #fff;
+      background: #9a6700;
+      font: 700 12px/1.2 system-ui, sans-serif;
+    }
+
+    #citation-test-result[data-result="passed"] {
+      background: #16803b;
+    }
+
+    #citation-test-result[data-result="failed"] {
+      background: #cf222e;
+    }
+  </style>
+</head>
+<body>
+  <div class="file-tree-list" role="tree">
+    <div role="treeitem" aria-label="main.tex" aria-selected="true">
+      <button type="button" class="item-name-button"><span>main.tex</span></button>
+    </div>
+    <div role="treeitem" aria-label="refs.bib" aria-selected="false">
+      <button type="button" class="item-name-button"><span>refs.bib</span></button>
+    </div>
+  </div>
+  <output id="citation-test-result">Citation test running</output>
+
+  <script>
+    const REQUEST_EVENT = "smarttex:citation-editor-request";
+    const RESPONSE_EVENT = "smarttex:citation-editor-response";
+    const STATE_EVENT = "smarttex:editor-state";
+    const storageValues = {};
+    let bridgeActive = false;
+    let insertedKey = "";
+    let activeFile = "main.tex";
+    let selectedFile = "main.tex";
+    let fileSwitchTimer = null;
+    const files = {
+      "main.tex": String.raw`\documentclass{article}
+\bibliography{refs}
+\begin{document}
+Text \cite{Klu}
+\end{document}`,
+      "refs.bib": String.raw`@article{Kluge2024,
+  title = {A Lightweight Citation Test},
+  author = {Kluge, Thomas and Lovelace, Ada},
+  journal = {Journal of Browser Tests},
+  volume = {7},
+  pages = {12--18},
+  year = {2024},
+  keywords = {testing, citations}
+}
+
+@book{Einstein1916,
+  title = {Relativity},
+  author = {Einstein, Albert},
+  year = {1916},
+  publisher = {Test Press}
+}`
+    };
+    let cursorIndex = files["main.tex"].indexOf("Klu}") + 3;
+
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(key) {
+            return { [key]: storageValues[key] };
+          },
+          async set(values) {
+            Object.assign(storageValues, values);
+          }
+        }
+      }
+    };
+
+    function state() {
+      return {
+        value: files[activeFile],
+        cursorIndex: activeFile === "main.tex" ? cursorIndex : 0,
+        selectionFrom: activeFile === "main.tex" ? cursorIndex : 0,
+        selectionTo: activeFile === "main.tex" ? cursorIndex : 0,
+        screen: { pageX: 420, pageY: 280, lineHeight: 22 },
+        fileName: selectedFile,
+        focused: true,
+        editorKind: "harness"
+      };
+    }
+
+    function emitState() {
+      window.dispatchEvent(new CustomEvent(STATE_EVENT, {
+        detail: JSON.stringify(state())
+      }));
+    }
+
+    function selectFile(fileName) {
+      selectedFile = fileName;
+      document.querySelectorAll('[role="treeitem"]').forEach((item) => {
+        item.setAttribute(
+          "aria-selected",
+          item.getAttribute("aria-label") === fileName ? "true" : "false"
+        );
+      });
+      emitState();
+      window.clearTimeout(fileSwitchTimer);
+      fileSwitchTimer = window.setTimeout(() => {
+        activeFile = fileName;
+        emitState();
+      }, 360);
+    }
+
+    document.querySelectorAll(".item-name-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        selectFile(button.closest('[role="treeitem"]').getAttribute("aria-label"));
+      });
+    });
+
+    function citationToken() {
+      const value = files["main.tex"];
+      const before = value.slice(0, cursorIndex);
+      const match = before.match(/\\cite\s*\{([^{}]*)$/i);
+      if (!match) return null;
+      const argument = match[1];
+      const lastComma = argument.lastIndexOf(",");
+      const fragment = argument.slice(lastComma + 1);
+      const start = cursorIndex - fragment.length;
+      const after = value.slice(cursorIndex).match(/^[^,{}\s]*/)?.[0] || "";
+      return { start, end: cursorIndex + after.length };
+    }
+
+    window.addEventListener(REQUEST_EVENT, (event) => {
+      const request = JSON.parse(event.detail);
+      const response = { requestId: request.requestId, ok: true };
+      if (request.type === "getState") {
+        response.state = state();
+      } else if (request.type === "getCoordinates") {
+        response.screen = { pageX: 390, pageY: 270, lineHeight: 22 };
+      } else if (request.type === "setCitationAutocompleteActive") {
+        bridgeActive = request.active === true;
+        response.active = bridgeActive;
+      } else if (request.type === "replaceCitationToken") {
+        const token = citationToken();
+        if (!token) {
+          response.ok = false;
+          response.error = "Citation token unavailable";
+        } else {
+          files["main.tex"] = (
+            files["main.tex"].slice(0, token.start) +
+            request.text +
+            files["main.tex"].slice(token.end)
+          );
+          cursorIndex = token.start + request.text.length;
+          insertedKey = request.text;
+          response.token = token;
+          window.setTimeout(emitState, 0);
+        }
+      } else if (request.type !== "focus") {
+        response.ok = false;
+        response.error = `Unexpected request ${request.type}`;
+      }
+      window.dispatchEvent(new CustomEvent(RESPONSE_EVENT, {
+        detail: JSON.stringify(response)
+      }));
+    });
+  </script>
+  <script src="../bibtex-parser.js"></script>
+  <script src="../citation-autocomplete.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => {
+      window.setTimeout(resolve, milliseconds);
+    });
+
+    async function waitFor(callback, message, timeout = 5000) {
+      const deadline = performance.now() + timeout;
+      while (performance.now() < deadline) {
+        const value = callback();
+        if (value) return value;
+        await delay(25);
+      }
+      throw new Error(message);
+    }
+
+    async function runCitationTest() {
+      const checks = {};
+      emitState();
+      const popup = await waitFor(
+        () => {
+          const candidate = document.querySelector("#smarttex-citation-popup");
+          return candidate && !candidate.hidden ? candidate : null;
+        },
+        "Unparsed bibliography prompt did not open"
+      );
+      checks.parsePrompt = (
+        popup.textContent.includes("Bibliography not parsed") &&
+        Boolean(popup.querySelector(".smarttex-citation-parse"))
+      );
+      checks.promotion = (
+        popup.querySelector(".smarttex-citation-promotion a")?.href ===
+        "https://github.com/HighIander/Smart-Citations"
+      );
+      checks.nativeSuppressed = bridgeActive;
+
+      popup.querySelector(".smarttex-citation-parse").click();
+      const suggestion = await waitFor(
+        () => popup.querySelector(".smarttex-citation-item"),
+        "Parsed citation suggestion did not appear",
+        7000
+      );
+      checks.parsed = (
+        suggestion.textContent.includes("A Lightweight Citation Test") &&
+        suggestion.textContent.includes("Kluge2024") &&
+        suggestion.textContent.includes("Thomas Kluge")
+      );
+      checks.restoredManuscript = activeFile === "main.tex";
+      checks.cacheSaved = Object.values(storageValues).some((value) => (
+        value?.records?.length === 2 &&
+        value?.files?.includes("refs.bib")
+      ));
+
+      suggestion.click();
+      await waitFor(() => insertedKey, "Citation key was not inserted");
+      checks.inserted = (
+        insertedKey === "Kluge2024" &&
+        files["main.tex"].includes(String.raw`\cite{Kluge2024}`)
+      );
+
+      files["main.tex"] = files["main.tex"].replace(
+        String.raw`\cite{Kluge2024}`,
+        String.raw`\cite{Kluge2024,Ein}`
+      );
+      cursorIndex = files["main.tex"].indexOf(",Ein}") + 4;
+      emitState();
+      await waitFor(
+        () => !popup.hidden,
+        "Second citation context did not reopen"
+      );
+
+      const smartCitationsPopup = document.createElement("div");
+      smartCitationsPopup.id = "ctca-popup";
+      document.body.appendChild(smartCitationsPopup);
+      await delay(80);
+      checks.smartCitationsHandoff = popup.hidden && !bridgeActive;
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#citation-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Citation autocomplete test passed"
+        : `Citation autocomplete test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.citationTest = passed ? "passed" : "failed";
+    }
+
+    runCitationTest().catch((error) => {
+      const output = document.querySelector("#citation-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Citation autocomplete test failed: ${error.message}`;
+      document.documentElement.dataset.citationTest = "failed";
+    });
+  </script>
+</body>
+</html>
