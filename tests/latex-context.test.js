@@ -98,10 +98,10 @@ function tableAt(source, marker = "|") {
   assert.equal(model.rows[0].cells.length, 2);
   assert.equal(model.columns[0].align, "left");
   assert.equal(model.columns[1].align, "center");
-  assert.equal(model.columns[0].leftBorder, true);
-  assert.equal(model.columns[1].rightBorder, true);
-  assert.equal(model.rows[0].ruleBefore, true);
-  assert.equal(model.rows[1].ruleAfter, true);
+  assert.equal(model.columns[0].leftBorder, 1);
+  assert.equal(model.columns[1].rightBorder, 1);
+  assert.equal(model.rows[0].ruleBefore.full, 1);
+  assert.equal(model.rows[1].ruleAfter.full, 1);
 }
 
 {
@@ -208,6 +208,40 @@ function tableAt(source, marker = "|") {
   assert.match(html, /smarttex-rendered-caret/);
   assert.match(html, /katex-html[\s\S]*smarttex-rendered-caret/);
   assert.match(html, /mathbf/);
+}
+
+{
+  const markedSource = [
+    String.raw`\DeclareMathOperator{\erfcx}{erfcx}`,
+    String.raw`\DeclareMathOperator*{\argmax}{arg\,max}`,
+    String.raw`\begin{equation}`,
+    String.raw`\erfcx(x)+\argmax_{y}| f(y)`,
+    String.raw`\end{equation}`,
+    String.raw`\DeclareMathOperator{\laterop}{later}`
+  ].join("\n");
+  const cursor = markedSource.indexOf("|");
+  const source = markedSource.slice(0, cursor) + markedSource.slice(cursor + 1);
+  const context = tools.findEquationContext(source, cursor);
+  const prepared = tools.prepareDocumentCommands(
+    source,
+    context.openStart,
+    tools.previewBody(context)
+  );
+  assert.equal(prepared.macros["\\erfcx"], String.raw`\operatorname{erfcx}`);
+  assert.equal(prepared.macros["\\argmax"], String.raw`\operatorname*{arg\,max}`);
+  assert.equal(prepared.macros["\\laterop"], undefined);
+  const html = katex.renderToString(prepared.body, {
+    throwOnError: true,
+    strict: "ignore",
+    trust: true,
+    macros: {
+      ...prepared.macros,
+      "\\SmartTeXCaret": "\\htmlClass{smarttex-rendered-caret}{\\vphantom{|}}"
+    }
+  });
+  assert.match(html, /erfcx/);
+  assert.match(html, /arg/);
+  assert.match(html, /max/);
 }
 
 {
@@ -389,4 +423,37 @@ E=mc^2
   assert.equal(figure.caption, "Mass energy");
 }
 
+{
+  const source = String.raw`\begin{table}
+\caption{Selected caption text}
+\label{tab:caption}
+\begin{tabular}{cc}
+A & B \\
+\end{tabular}
+\end{table}`;
+  const cursor = source.indexOf("caption text") + 3;
+  const context = tools.findTableFloatContext(source, cursor);
+  assert.ok(context, "A table preview context should be found from its caption.");
+  assert.equal(context.kind, "table");
+  assert.equal(context.cursorInsideTable, false);
+  assert.equal(context.source.trim(), "A & B \\\\");
+  assert.ok(context.floatOpenStart < context.openStart);
+  assert.ok(context.floatCloseEnd > context.closeEnd);
+}
+
 console.log("SmartTeX LaTeX context tests passed.");
+
+
+{
+  const source = String.raw`\begin{figure}
+\caption{Maximum rates %and this is commented
+frequency, escaped \% sign, and \verb|% literal|.}
+\end{figure}`;
+  const context = tools.findFigureContext(source, source.indexOf("\\caption"));
+  const caption = tools.floatCaption(source, context, "figure");
+  assert.ok(caption);
+  assert.equal(
+    caption.text.replace(/\s+/g, " "),
+    String.raw`Maximum rates frequency, escaped \% sign, and \verb|% literal|.`
+  );
+}

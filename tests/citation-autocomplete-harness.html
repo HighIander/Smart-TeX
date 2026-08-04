@@ -53,6 +53,7 @@
   </style>
 </head>
 <body>
+  <script>document.body?.classList.add("smarttex-document-live");</script>
   <div class="file-tree-list" role="tree">
     <div role="treeitem" aria-label="main.tex" aria-selected="true">
       <button type="button" class="item-name-button"><span>main.tex</span></button>
@@ -73,6 +74,9 @@
     let activeFile = "main.tex";
     let selectedFile = "main.tex";
     let fileSwitchTimer = null;
+    let bibliographyFetches = 0;
+    let fileSwitches = 0;
+    const cursorVerticalMoves = [];
     const files = {
       "main.tex": String.raw`\documentclass{article}
 \bibliography{refs}
@@ -111,6 +115,25 @@ Text \cite{Klu}
       }
     };
 
+    globalThis.fetch = async (url, options = {}) => {
+      bibliographyFetches += 1;
+      await new Promise((resolve) => window.setTimeout(resolve, 220));
+      if (!String(url).endsWith("/refs.bib")) {
+        return {
+          ok: false,
+          status: 404,
+          headers: { get() { return "text/plain"; } },
+          async text() { return ""; }
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get() { return "text/plain; charset=utf-8"; } },
+        async text() { return files["refs.bib"]; }
+      };
+    };
+
     function state() {
       return {
         value: files[activeFile],
@@ -131,6 +154,7 @@ Text \cite{Klu}
     }
 
     function selectFile(fileName) {
+      fileSwitches += 1;
       selectedFile = fileName;
       document.querySelectorAll('[role="treeitem"]').forEach((item) => {
         item.setAttribute(
@@ -175,6 +199,14 @@ Text \cite{Klu}
       } else if (request.type === "setCitationAutocompleteActive") {
         bridgeActive = request.active === true;
         response.active = bridgeActive;
+      } else if (request.type === "resolveProjectFile") {
+        response.file = {
+          url: `https://project.test/files/${request.path}`,
+          path: request.path
+        };
+      } else if (request.type === "moveCursorVertical") {
+        cursorVerticalMoves.push(Number(request.direction) < 0 ? -1 : 1);
+        response.moved = true;
       } else if (request.type === "replaceCitationToken") {
         const token = citationToken();
         if (!token) {
@@ -225,19 +257,29 @@ Text \cite{Klu}
           const candidate = document.querySelector("#smarttex-citation-popup");
           return candidate && !candidate.hidden ? candidate : null;
         },
-        "Unparsed bibliography prompt did not open"
+        "Citation popup did not open"
       );
-      checks.parsePrompt = (
-        popup.textContent.includes("Bibliography not parsed") &&
-        Boolean(popup.querySelector(".smarttex-citation-parse"))
+      checks.backgroundSpinner = Boolean(await waitFor(
+        () => popup.querySelector(".smarttex-citation-list-parsing"),
+        "Initial background parsing spinner did not appear"
+      ));
+      checks.noInitialFileSwitch = (
+        activeFile === "main.tex" &&
+        selectedFile === "main.tex" &&
+        fileSwitches === 0
       );
       checks.promotion = (
         popup.querySelector(".smarttex-citation-promotion a")?.href ===
         "https://github.com/HighIander/Smart-Citations"
       );
       checks.nativeSuppressed = bridgeActive;
+      checks.refreshButtonAtTop = Boolean(
+        popup.querySelector(".smarttex-citation-header .smarttex-citation-refresh")
+      );
+      checks.livePreviewActiveDuringParse = document.body.classList.contains(
+        "smarttex-document-live"
+      );
 
-      popup.querySelector(".smarttex-citation-parse").click();
       const suggestion = await waitFor(
         () => popup.querySelector(".smarttex-citation-item"),
         "Parsed citation suggestion did not appear",
@@ -248,13 +290,64 @@ Text \cite{Klu}
         suggestion.textContent.includes("Kluge2024") &&
         suggestion.textContent.includes("Thomas Kluge")
       );
-      checks.restoredManuscript = activeFile === "main.tex";
+      checks.backgroundInitialRead = (
+        bibliographyFetches > 0 &&
+        selectedFile === "main.tex" &&
+        activeFile === "main.tex" &&
+        fileSwitches === 0
+      );
       checks.cacheSaved = Object.values(storageValues).some((value) => (
         value?.records?.length === 2 &&
         value?.files?.includes("refs.bib")
       ));
 
-      suggestion.click();
+      // The active query "Klu" displays exactly one citation. Arrow keys must
+      // therefore be forwarded to editor navigation rather than cycling the
+      // unchanged list selection.
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true
+      }));
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        bubbles: true,
+        cancelable: true
+      }));
+      await waitFor(
+        () => cursorVerticalMoves.length === 2,
+        "Single-result citation arrows were not forwarded to the editor"
+      );
+      checks.singleResultArrowNavigation = (
+        cursorVerticalMoves[0] === 1 && cursorVerticalMoves[1] === -1
+      );
+
+      files["refs.bib"] = files["refs.bib"].replace(
+        "A Lightweight Citation Test",
+        "A Refreshed Citation Test"
+      );
+      popup.querySelector(".smarttex-citation-refresh").click();
+      checks.refreshSpinner = Boolean(await waitFor(
+        () => popup.querySelector(".smarttex-citation-list-parsing"),
+        "Refresh background parsing spinner did not appear"
+      ));
+      const refreshedSuggestion = await waitFor(
+        () => {
+          const item = popup.querySelector(".smarttex-citation-item");
+          return item?.textContent.includes("A Refreshed Citation Test") ? item : null;
+        },
+        "Refresh button did not re-parse the bibliography while live preview was active",
+        7000
+      );
+      checks.refreshedWhileLive = (
+        refreshedSuggestion.textContent.includes("Kluge2024") &&
+        bibliographyFetches >= 2 &&
+        activeFile === "main.tex" &&
+        selectedFile === "main.tex" &&
+        fileSwitches === 0
+      );
+
+      refreshedSuggestion.click();
       await waitFor(() => insertedKey, "Citation key was not inserted");
       checks.inserted = (
         insertedKey === "Kluge2024" &&

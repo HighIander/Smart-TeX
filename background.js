@@ -7,8 +7,10 @@
   const SITES_KEY = "smarttex:editor-sites:v1";
   const DEFAULT_SITES = ["collabtex.helmholtz.cloud"];
   const BRIDGE_SCRIPT_ID = "smarttex-editor-bridge-v1";
+  const DEPENDENCY_SCRIPT_ID = "smarttex-preview-dependencies-v1";
   const CONTENT_SCRIPT_ID = "smarttex-equation-preview-v1";
   let registrationQueue = Promise.resolve();
+  const dependencyRepairByTarget = new Map();
 
   function bytesToBase64(bytes) {
     let binary = "";
@@ -96,19 +98,39 @@
     }
 
     const matches = (await configuredSites()).map(matchPattern);
-    const ids = [BRIDGE_SCRIPT_ID, CONTENT_SCRIPT_ID];
-    await extensionApi.scripting.unregisterContentScripts({ ids }).catch(() => {});
+    const ids = [BRIDGE_SCRIPT_ID, DEPENDENCY_SCRIPT_ID, CONTENT_SCRIPT_ID];
+    for (const id of ids) {
+      await extensionApi.scripting.unregisterContentScripts({ ids: [id] }).catch(() => {});
+    }
     if (!matches.length) return { supported: true, matches };
 
     await extensionApi.scripting.registerContentScripts([
       {
         id: BRIDGE_SCRIPT_ID,
         matches,
-        js: ["page-bridge.js"],
+        js: ["latex-context.js", "page-bridge.js"],
         runAt: "document_idle",
         allFrames: false,
         persistAcrossSessions: true,
         world: "MAIN"
+      },
+      {
+        id: DEPENDENCY_SCRIPT_ID,
+        matches,
+        js: [
+          "font-loader.js",
+          "vendor/katex/katex.min.js",
+          "latex-context.js",
+          "table-renderer.js",
+          "table-editor.js",
+          "figure-renderer.js",
+          "bibtex-parser.js",
+          "nextcloud-client.js"
+        ],
+        runAt: "document_start",
+        allFrames: false,
+        persistAcrossSessions: true,
+        world: "ISOLATED"
       },
       {
         id: CONTENT_SCRIPT_ID,
@@ -118,17 +140,12 @@
           "content.css"
         ],
         js: [
-          "font-loader.js",
-          "vendor/katex/katex.min.js",
-          "latex-context.js",
-          "table-renderer.js",
-          "figure-renderer.js",
-          "bibtex-parser.js",
-          "nextcloud-client.js",
+          "popup-gate.js",
           "content.js",
           "project-files.js",
           "document-preview.js",
-          "citation-autocomplete.js"
+          "citation-autocomplete.js",
+          "reference-autocomplete.js"
         ],
         runAt: "document_idle",
         allFrames: false,
@@ -171,7 +188,38 @@
     });
   });
 
-  extensionApi.runtime.onMessage.addListener((message) => {
+  extensionApi.runtime.onMessage.addListener((message, sender) => {
+    if (message?.type === "smarttex-reinject-preview-dependencies") {
+      const tabId = sender?.tab?.id;
+      if (!Number.isInteger(tabId) || !extensionApi.scripting?.executeScript) {
+        return Promise.resolve({ ok: false, error: "The active editor tab could not be resolved." });
+      }
+      const target = { tabId };
+      if (Number.isInteger(sender?.frameId) && sender.frameId >= 0) {
+        target.frameIds = [sender.frameId];
+      }
+      const repairKey = `${tabId}:${Number.isInteger(sender?.frameId) ? sender.frameId : 0}`;
+      if (dependencyRepairByTarget.has(repairKey)) {
+        return dependencyRepairByTarget.get(repairKey);
+      }
+      const repair = extensionApi.scripting.executeScript({
+        target,
+        files: [
+          "vendor/katex/katex.min.js",
+          "latex-context.js",
+          "table-renderer.js",
+          "table-editor.js",
+          "figure-renderer.js",
+          "bibtex-parser.js",
+          "nextcloud-client.js"
+        ],
+        world: "ISOLATED"
+      }).then(() => ({ ok: true }))
+        .catch((error) => ({ ok: false, error: error?.message || String(error) }))
+        .finally(() => dependencyRepairByTarget.delete(repairKey));
+      dependencyRepairByTarget.set(repairKey, repair);
+      return repair;
+    }
     if (message?.type === "smarttex-open-options") {
       return extensionApi.runtime.openOptionsPage()
         .then(() => ({ ok: true }))

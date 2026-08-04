@@ -3,14 +3,47 @@
 (() => {
   "use strict";
 
-  if (globalThis.__smartTeXDocumentPreviewLoaded || window.top !== window) return;
-  globalThis.__smartTeXDocumentPreviewLoaded = true;
+  if (window.top !== window) return;
+  const existingDocumentPreviewControls = document.getElementById("smarttex-document-preview-controls");
+  if (globalThis.__smartTeXDocumentPreviewLoaded && existingDocumentPreviewControls) return;
+  if (globalThis.__smartTeXDocumentPreviewLoaded && !existingDocumentPreviewControls) {
+    globalThis.__smartTeXDocumentPreviewLoaded = false;
+  }
+  if (globalThis.__smartTeXDocumentPreviewLoading) return;
+  globalThis.__smartTeXDocumentPreviewLoading = true;
+
+  const initializeWhenDependenciesAreReady = async () => {
+    const startedAt = Date.now();
+    let repairRequested = false;
+    while (!(globalThis.SmartTeXLatexContext && globalThis.SmartTeXTableRenderer && globalThis.SmartTeXTableEditor && globalThis.katex?.render)) {
+      if (!repairRequested) {
+        repairRequested = true;
+        try {
+          const api = globalThis.browser ?? globalThis.chrome;
+          await api?.runtime?.sendMessage?.({ type: "smarttex-reinject-preview-dependencies" });
+        } catch (_error) {
+          // The normal registered content-script order may still complete without fallback injection.
+        }
+      }
+      if (Date.now() - startedAt > 10000) {
+        throw new Error("SmartTeX: The full-document preview renderer could not be loaded.");
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+    if (globalThis.__smartTeXDocumentPreviewLoaded) return;
+    globalThis.__smartTeXDocumentPreviewLoaded = true;
+    globalThis.__smartTeXDocumentPreviewLoading = false;
 
   const STATE_EVENT = "smarttex:editor-state";
   const REQUEST_EVENT = "smarttex:citation-editor-request";
   const RESPONSE_EVENT = "smarttex:citation-editor-response";
+  const NAVIGATION_PUSH_EVENT = "smarttex:navigation-history-push";
+  const CITATION_REFRESH_REQUEST_EVENT = "smarttex:citation-refresh-request";
+  const CITATION_REFRESH_RESULT_EVENT = "smarttex:citation-refresh-result";
+  const CITATION_CACHE_UPDATED_EVENT = "smarttex:citation-cache-updated";
   const SETTINGS_KEY = "smarttex:document-preview-settings:v1";
   const FEATURES_KEY = "smarttex:features:v1";
+  const REFERENCE_POPUPS_KEY = "smarttex:reference-popups:v1";
   const QUIET_RENDER_DELAY_MS = 1000;
   const CONTINUOUS_RENDER_INTERVAL_MS = 5000;
   const CURSOR_RENDER_DELAY_MS = 80;
@@ -39,13 +72,11 @@
   );
   const extensionApi = globalThis.browser ?? globalThis.chrome;
   const contextTools = globalThis.SmartTeXLatexContext;
+  const popupInteractionReady = () => globalThis.SmartTeXPopupGate?.isReady?.() !== false;
   const tableRenderer = globalThis.SmartTeXTableRenderer;
+  const tableEditor = globalThis.SmartTeXTableEditor;
   const katex = globalThis.katex;
 
-  if (!contextTools || !tableRenderer || !katex?.render) {
-    console.error("SmartTeX: The full-document preview renderer could not be loaded.");
-    return;
-  }
 
   let currentState = null;
   let liveEnabled = false;
@@ -64,19 +95,34 @@
   let textScale = DEFAULT_TEXT_SCALE;
   let zoom = DEFAULT_ZOOM;
   let renderFigures = false;
+  let showCursorPosition = true;
+  let keepLiveViewSynchronized = false;
   let figureHoverPreviewsEnabled = true;
+  let showLiveDocumentPreviewButton = false;
+  let referencePopupTrigger = "hover";
   let preview = null;
   let observer = null;
   let fastCursorFrame = null;
   let fastStructureGeneration = 0;
   let pendingFastStructureSource = null;
   let lastRenderedSource = "";
+  let lastRenderedMetadata = null;
+  const textSegmentByNode = new WeakMap();
+  let citationCursorCheckSource = null;
+  let citationCursorCheckIndex = -1;
+  let citationCursorCheckResult = false;
   let zoomControls = null;
   let zoomStage = null;
   let zoomResizeObserver = null;
   let editingToolbar = null;
+  let navigationBackButton = null;
+  let navigationBackDivider = null;
+  const navigationHistory = [];
   let zoomOutput = null;
   let figureToggle = null;
+  let cursorPositionToggle = null;
+  let scrollSynchronizationToggle = null;
+  let scrollSynchronizationFrame = null;
   let requestCounter = 0;
   let suppressPreviewClick = false;
   let referencePopup = null;
@@ -85,17 +131,27 @@
   let nestedReferencePopup = null;
   let nestedReferencePopupTimer = null;
   let nestedReferencePopupGeneration = 0;
+  let referencePopupInteractionUntil = 0;
+  let referencePopupPointerDown = false;
   let popupLoadingSpinner = null;
   let popupLoadingSpinnerGeneration = 0;
+  let previewHoverTimer = 0;
+  let previewHoverIdleHandle = 0;
+  let previewHoverGeneration = 0;
   let citationRecords = new Map();
   let citationRecordsPromise = null;
   let citationRecordsLoaded = false;
+  let citationRefreshCounter = 0;
+  const pendingCitationRefreshes = new Map();
   let previewNavigationPreferredX = null;
   let previewKeyboardHandoff = false;
   let previewSelectionSyncTimer = null;
   let applyingPreviewSelection = false;
   let activitySpinner = null;
   let liveRenderBusy = false;
+  let activeToolbarDropdown = null;
+  let tableDialog = null;
+  let doubleTableBorders = false;
   const pendingRequests = new Map();
 
   function ensurePopupLoadingSpinner() {
@@ -120,21 +176,178 @@
   function popupInteractionActive(popup) {
     return Boolean(
       popup && !popup.hidden && (
-        elementIsHovered(popup) || popup.contains(document.activeElement)
+        referencePopupPointerDown ||
+        Date.now() < referencePopupInteractionUntil ||
+        elementIsHovered(popup) ||
+        popup.contains(document.activeElement)
       )
     );
   }
 
-  function keepReferencePopupOpen() {
+  function referencePopupUsesHover() {
+    return referencePopupTrigger !== "cursor";
+  }
+  function cancelScheduledPreviewHover() {
+    previewHoverGeneration += 1;
+    window.clearTimeout(previewHoverTimer);
+    previewHoverTimer = 0;
+    if (previewHoverIdleHandle) {
+      if (globalThis.cancelIdleCallback) {
+        globalThis.cancelIdleCallback(previewHoverIdleHandle);
+      } else {
+        window.clearTimeout(previewHoverIdleHandle);
+      }
+      previewHoverIdleHandle = 0;
+    }
+  }
+
+  function schedulePreviewHover(anchor, event, callback) {
+    cancelScheduledPreviewHover();
+    const generation = previewHoverGeneration;
+    const delay = event?.type === "focus" ? 0 : 55;
+    previewHoverTimer = window.setTimeout(() => {
+      previewHoverTimer = 0;
+      if (generation !== previewHoverGeneration || !anchor?.isConnected) return;
+      if (event?.type !== "focus" && !elementIsHovered(anchor)) return;
+      const spinnerGeneration = showPopupLoadingSpinner(event, anchor);
+      const run = () => {
+        previewHoverIdleHandle = 0;
+        window.requestAnimationFrame(() => {
+          if (generation !== previewHoverGeneration || !anchor?.isConnected) {
+            hidePopupLoadingSpinner(spinnerGeneration);
+            return;
+          }
+          try {
+            callback();
+          } finally {
+            hidePopupLoadingSpinner(spinnerGeneration);
+          }
+        });
+      };
+      previewHoverIdleHandle = globalThis.requestIdleCallback
+        ? globalThis.requestIdleCallback(run, { timeout: 80 })
+        : window.setTimeout(run, 0);
+    }, delay);
+  }
+
+
+  function updateNavigationBackButton() {
+    if (!navigationBackButton) return;
+    const available = navigationHistory.length > 0;
+    navigationBackButton.hidden = !available;
+    navigationBackButton.disabled = !available;
+    if (navigationBackDivider) navigationBackDivider.hidden = !available;
+    editingToolbar?.classList.toggle("smarttex-document-has-back", available);
+    navigationBackButton.title = available
+      ? "Back to the previous editor position"
+      : "No previous editor position";
+  }
+
+  function pushNavigationOrigin(value) {
+    const cursorIndex = Math.max(0, Number(value?.cursorIndex) || 0);
+    const anchor = Math.max(0, Number(value?.anchor ?? cursorIndex) || 0);
+    const head = Math.max(0, Number(value?.head ?? cursorIndex) || 0);
+    const origin = {
+      fileName: String(value?.fileName || ""),
+      cursorIndex,
+      anchor,
+      head
+    };
+    const previous = navigationHistory.at(-1);
+    if (
+      previous &&
+      previous.fileName === origin.fileName &&
+      previous.anchor === origin.anchor &&
+      previous.head === origin.head
+    ) {
+      updateNavigationBackButton();
+      return;
+    }
+    navigationHistory.push(origin);
+    if (navigationHistory.length > 50) navigationHistory.splice(0, navigationHistory.length - 50);
+    updateNavigationBackButton();
+  }
+
+  async function navigateBackInEditor() {
+    const destination = navigationHistory.pop();
+    updateNavigationBackButton();
+    if (!destination) return false;
+    try {
+      const response = await bridgeRequest("setSelection", {
+        anchor: destination.anchor,
+        head: destination.head,
+        focus: true
+      });
+      if (!response?.ok) throw new Error(response?.error || "Editor navigation failed.");
+      return true;
+    } catch (error) {
+      navigationHistory.push(destination);
+      updateNavigationBackButton();
+      console.warn("SmartTeX could not return to the previous editor position:", error);
+      return false;
+    }
+  }
+
+  function keepReferencePopupOpen(event) {
+    const type = String(event?.type || "");
+    referencePopupInteractionUntil = Math.max(
+      referencePopupInteractionUntil,
+      Date.now() + (/^(?:wheel|scroll)$/.test(type) ? 1000 : 500)
+    );
+    if (type === "pointerdown" || type === "mousedown") {
+      referencePopupPointerDown = true;
+    }
     window.clearTimeout(referencePopupTimer);
     window.clearTimeout(nestedReferencePopupTimer);
   }
 
   function bindReferencePopupInteractionGuards(popup) {
     popup.addEventListener("pointerenter", keepReferencePopupOpen);
+    popup.addEventListener("pointermove", keepReferencePopupOpen, { passive: true });
     popup.addEventListener("pointerdown", keepReferencePopupOpen, true);
+    popup.addEventListener("mousedown", keepReferencePopupOpen, true);
     popup.addEventListener("wheel", keepReferencePopupOpen, { passive: true });
-    popup.addEventListener("scroll", keepReferencePopupOpen, { passive: true });
+    popup.addEventListener("scroll", keepReferencePopupOpen, { passive: true, capture: true });
+  }
+
+  const POPUP_SCROLL_SELECTOR = [
+    ".smarttex-reference-popup-target",
+    ".smarttex-reference-popup-equation",
+    ".smarttex-figure-popup-viewport",
+    ".smarttex-table-scroll"
+  ].join(",");
+
+  function capturePopupScrollState(root) {
+    if (!root) return [];
+    const elements = [root, ...root.querySelectorAll(POPUP_SCROLL_SELECTOR)];
+    return elements.map((element, index) => ({
+      index,
+      left: Number(element.scrollLeft) || 0,
+      top: Number(element.scrollTop) || 0
+    }));
+  }
+
+  function restorePopupScrollState(root, state) {
+    if (!root || !Array.isArray(state) || !state.length) return;
+    const restore = () => {
+      const elements = [root, ...root.querySelectorAll(POPUP_SCROLL_SELECTOR)];
+      state.forEach((entry) => {
+        const element = elements[entry.index];
+        if (!element) return;
+        element.scrollLeft = Math.max(0, Number(entry.left) || 0);
+        element.scrollTop = Math.max(0, Number(entry.top) || 0);
+      });
+    };
+    restore();
+    window.requestAnimationFrame(restore);
+  }
+
+  function referencePopupKey(interaction) {
+    return [
+      interaction?.type || "reference",
+      interaction?.command || "ref",
+      ...(interaction?.labels || [])
+    ].join(":");
   }
 
   function popupPointerPosition(event, anchor = null) {
@@ -151,6 +364,7 @@
   }
 
   function showPopupLoadingSpinner(event, anchor = null) {
+    if (!popupInteractionReady()) return null;
     const spinner = ensurePopupLoadingSpinner();
     const position = popupPointerPosition(event, anchor);
     const generation = ++popupLoadingSpinnerGeneration;
@@ -379,7 +593,9 @@
     return {
       textScale,
       zoom,
-      renderFigures
+      renderFigures,
+      showCursorPosition,
+      keepLiveViewSynchronized
     };
   }
 
@@ -413,14 +629,17 @@
 
   function updateZoomLayout() {
     const page = zoomStage?.querySelector(".smarttex-document-page");
-    if (!page || !zoomStage?.isConnected) return;
+    if (!page || !zoomStage?.isConnected || !preview?.isConnected) return;
     let baseWidth = Number(page.dataset.smarttexZoomBaseWidth);
     if (!Number.isFinite(baseWidth) || baseWidth <= 0) {
       page.style.width = "";
       page.style.maxWidth = "";
       page.style.transform = "none";
       zoomStage.style.width = "100%";
+      zoomStage.style.minWidth = "1px";
       zoomStage.style.height = "auto";
+      zoomStage.style.marginInline = "auto";
+      preview.classList.remove("smarttex-document-horizontal-overflow");
       baseWidth = page.getBoundingClientRect().width;
       if (!Number.isFinite(baseWidth) || baseWidth <= 0) return;
       page.dataset.smarttexZoomBaseWidth = String(baseWidth);
@@ -429,8 +648,23 @@
     }
     page.style.transform = `scale(${zoom})`;
     page.style.transformOrigin = "top left";
-    zoomStage.style.width = `${Math.max(1, baseWidth * zoom)}px`;
+    const scaledWidth = Math.max(1, baseWidth * zoom);
+    zoomStage.style.width = `${scaledWidth}px`;
+    zoomStage.style.minWidth = `${scaledWidth}px`;
     zoomStage.style.height = `${Math.max(1, page.offsetHeight * zoom)}px`;
+
+    const previewStyle = getComputedStyle(preview);
+    const horizontalPadding = (
+      parseFloat(previewStyle.paddingLeft || "0") +
+      parseFloat(previewStyle.paddingRight || "0")
+    );
+    const availableWidth = Math.max(1, preview.clientWidth - horizontalPadding);
+    const horizontallyOverflowing = scaledWidth > availableWidth + 1;
+    preview.classList.toggle(
+      "smarttex-document-horizontal-overflow",
+      horizontallyOverflowing
+    );
+    zoomStage.style.marginInline = horizontallyOverflowing ? "0" : "auto";
   }
 
   function applyZoom(value, persist = false) {
@@ -447,6 +681,36 @@
     if (figureToggle) figureToggle.checked = renderFigures;
     if (persist) persistPreviewSettings();
     if (changed && liveEnabled) scheduleRender({ force: true });
+  }
+
+  function setShowCursorPosition(value, persist = false) {
+    const nextValue = value !== false;
+    const changed = showCursorPosition !== nextValue;
+    showCursorPosition = nextValue;
+    if (cursorPositionToggle) cursorPositionToggle.checked = showCursorPosition;
+    preview?.classList.toggle(
+      "smarttex-document-cursor-position-hidden",
+      !showCursorPosition
+    );
+    if (!showCursorPosition) {
+      const page = preview?.querySelector(".smarttex-document-page");
+      if (page) clearFastCursor(page);
+      clearPreviewSourceHighlight();
+    } else if (changed && currentState) {
+      scheduleFastCursorUpdate(currentState);
+    }
+    if (persist) persistPreviewSettings();
+  }
+
+  function setKeepLiveViewSynchronized(value, persist = false) {
+    keepLiveViewSynchronized = Boolean(value);
+    if (scrollSynchronizationToggle) {
+      scrollSynchronizationToggle.checked = keepLiveViewSynchronized;
+    }
+    if (persist) persistPreviewSettings();
+    if (keepLiveViewSynchronized && currentState) {
+      scheduleLiveViewScrollSynchronization(currentState, true);
+    }
   }
 
   function bridgeRequest(type, payload = {}, timeoutMs = 3000) {
@@ -553,7 +817,32 @@
     const figureLabel = document.createElement("span");
     figureLabel.textContent = "Render figures";
     figureRow.append(figureToggle, figureLabel);
-    menu.append(heading, row, figureRow);
+
+    const cursorRow = document.createElement("label");
+    cursorRow.className = "smarttex-document-preview-option-row";
+    cursorPositionToggle = document.createElement("input");
+    cursorPositionToggle.type = "checkbox";
+    cursorPositionToggle.checked = showCursorPosition;
+    cursorPositionToggle.addEventListener("change", () => {
+      setShowCursorPosition(cursorPositionToggle.checked, true);
+    });
+    const cursorLabel = document.createElement("span");
+    cursorLabel.textContent = "Show cursor position";
+    cursorRow.append(cursorPositionToggle, cursorLabel);
+
+    const synchronizationRow = document.createElement("label");
+    synchronizationRow.className = "smarttex-document-preview-option-row";
+    scrollSynchronizationToggle = document.createElement("input");
+    scrollSynchronizationToggle.type = "checkbox";
+    scrollSynchronizationToggle.checked = keepLiveViewSynchronized;
+    scrollSynchronizationToggle.addEventListener("change", () => {
+      setKeepLiveViewSynchronized(scrollSynchronizationToggle.checked, true);
+    });
+    const synchronizationLabel = document.createElement("span");
+    synchronizationLabel.textContent = "Keep live view synchronized to editor";
+    synchronizationRow.append(scrollSynchronizationToggle, synchronizationLabel);
+
+    menu.append(heading, row, figureRow, cursorRow, synchronizationRow);
     document.body.appendChild(menu);
     return menu;
   }
@@ -857,6 +1146,50 @@
         list?.environment === button.dataset.smarttexEnvironment ? "true" : "false"
       );
     }
+    let table = null;
+    try {
+      table = tableEditor.analyze(
+        range.source,
+        currentState.cursorIndex,
+        range.start,
+        range.end
+      );
+    } catch (_error) {
+      table = null;
+    }
+    for (const button of editingToolbar.querySelectorAll(
+      "button[data-smarttex-table-outside]"
+    )) {
+      button.hidden = Boolean(table);
+      button.disabled = false;
+    }
+    for (const button of document.querySelectorAll(
+      "button[data-smarttex-table-required]"
+    )) {
+      button.hidden = !table;
+      let disabled = !table;
+      const action = button.dataset.smarttexTableAction || "";
+      if (table && action === "remove-row") disabled = table.rows.length <= 1;
+      if (table && action === "remove-column") disabled = table.columnCount <= 1;
+      if (table && action === "move-column-left") {
+        disabled = table.current.logicalColumn <= 0 || table.hasMulticolumn;
+      }
+      if (table && action === "move-column-right") {
+        disabled = (
+          table.current.logicalColumn >= table.columnCount - 1 || table.hasMulticolumn
+        );
+      }
+      if (table && action === "move-row-up") {
+        disabled = table.current.rowIndex <= 0;
+      }
+      if (table && action === "move-row-down") {
+        disabled = table.current.rowIndex >= table.rows.length - 1;
+      }
+      button.disabled = disabled;
+    }
+    if (!table && activeToolbarDropdown?._smarttexAnchor?.dataset.smarttexTableRequired) {
+      closeToolbarDropdown();
+    }
   }
 
   function unusedLabel(prefix, base) {
@@ -913,6 +1246,213 @@
     );
   }
 
+
+  function reportTableEditingError(error) {
+    const message = error?.message || String(error || "Table editing failed.");
+    console.warn("SmartTeX table editing failed:", error);
+    globalThis.alert?.(message);
+  }
+
+  async function applyTableEdit(action) {
+    if (!currentState) return false;
+    const range = sourceSelectionRange();
+    let edit;
+    try {
+      edit = action(
+        String(currentState.value || ""),
+        currentState.cursorIndex,
+        range.start,
+        range.end
+      );
+    } catch (error) {
+      reportTableEditingError(error);
+      return false;
+    }
+    if (!edit) return false;
+    return replacePreviewSource(
+      edit.start,
+      edit.end,
+      edit.text,
+      edit.selectionStart,
+      edit.selectionEnd,
+      edit.focus !== false
+    );
+  }
+
+  function closeToolbarDropdown({ restoreEditorFocus = false } = {}) {
+    const menu = activeToolbarDropdown;
+    activeToolbarDropdown = null;
+    if (!menu) return;
+    menu.hidden = true;
+    menu._smarttexAnchor?.setAttribute("aria-expanded", "false");
+    if (restoreEditorFocus && currentState) {
+      bridgeRequest("setSelection", {
+        anchor: Number(currentState.selectionAnchor ?? currentState.cursorIndex) || 0,
+        head: Number(currentState.selectionHead ?? currentState.cursorIndex) || 0,
+        focus: true
+      }).catch(() => {});
+    }
+  }
+
+  function positionToolbarDropdown(menu, anchor) {
+    menu.hidden = false;
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    const anchorRect = anchor.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const margin = 8;
+    const gap = 5;
+    let left = Math.min(
+      window.innerWidth - menuRect.width - margin,
+      Math.max(margin, anchorRect.left)
+    );
+    let top = anchorRect.bottom + gap;
+    if (top + menuRect.height > window.innerHeight - margin) {
+      top = Math.max(margin, anchorRect.top - menuRect.height - gap);
+    }
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+  }
+
+  function toolbarDropdown(title, icon, options, { persistent = false, buildHeader = null } = {}) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.title = title;
+    button.setAttribute("aria-label", title);
+    button.setAttribute("aria-haspopup", "menu");
+    button.setAttribute("aria-expanded", "false");
+    button.innerHTML = icon;
+
+    const menu = document.createElement("div");
+    menu.className = "smarttex-document-toolbar-dropdown";
+    menu.hidden = true;
+    menu.setAttribute("role", "menu");
+    menu._smarttexAnchor = button;
+    if (typeof buildHeader === "function") {
+      const header = buildHeader(menu);
+      if (header) menu.appendChild(header);
+    }
+    for (const option of options) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "smarttex-document-toolbar-dropdown-item";
+      item.setAttribute("role", "menuitem");
+      if (option.tableAction) {
+        item.dataset.smarttexTableRequired = "true";
+        item.dataset.smarttexTableAction = option.tableAction;
+      }
+      item.innerHTML = option.icon
+        ? `<span class="smarttex-document-toolbar-dropdown-icon">${option.icon}</span>` +
+          `<span>${option.label}</span>`
+        : option.label;
+      item.addEventListener("pointerdown", (event) => event.preventDefault());
+      item.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        Promise.resolve(option.action()).catch(reportTableEditingError);
+        if (!persistent && option.keepOpen !== true) closeToolbarDropdown();
+      });
+      menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (activeToolbarDropdown === menu && !menu.hidden) {
+        closeToolbarDropdown({ restoreEditorFocus: true });
+        return;
+      }
+      closeToolbarDropdown();
+      activeToolbarDropdown = menu;
+      button.setAttribute("aria-expanded", "true");
+      menu.classList.toggle(
+        "smarttex-editor-dark",
+        editingToolbar?.classList.contains("smarttex-editor-dark") || false
+      );
+      positionToolbarDropdown(menu, button);
+    });
+    return button;
+  }
+
+  function closeTableDialog() {
+    if (!tableDialog) return;
+    tableDialog.remove();
+    tableDialog = null;
+  }
+
+  function showAddTableDialog() {
+    closeToolbarDropdown();
+    closeTableDialog();
+    const range = sourceSelectionRange();
+    const overlay = document.createElement("div");
+    overlay.className = "smarttex-table-dialog-overlay";
+    overlay.innerHTML = `
+      <form class="smarttex-table-dialog" role="dialog" aria-modal="true" aria-label="Add table">
+        <div class="smarttex-table-dialog-heading">
+          <strong>Add table</strong>
+          <button type="button" class="smarttex-table-dialog-close" aria-label="Close">&times;</button>
+        </div>
+        <label>Rows<input name="rows" type="number" min="1" max="100" value="3" required></label>
+        <label>Columns<input name="columns" type="number" min="1" max="50" value="3" required></label>
+        <label>Caption<input name="caption" type="text" value=""></label>
+        <label>Label<input name="label" type="text" value="${unusedLabel("tab", "table")}"></label>
+        <div class="smarttex-table-dialog-actions">
+          <button type="button" data-action="cancel">Cancel</button>
+          <button type="submit" class="smarttex-table-dialog-primary">Insert</button>
+        </div>
+      </form>`;
+    tableDialog = overlay;
+    document.body.appendChild(overlay);
+    const form = overlay.querySelector("form");
+    form.classList.toggle(
+      "smarttex-editor-dark",
+      editingToolbar?.classList.contains("smarttex-editor-dark") || false
+    );
+    const close = () => closeTableDialog();
+    overlay.querySelector(".smarttex-table-dialog-close")?.addEventListener("click", close);
+    overlay.querySelector('[data-action="cancel"]')?.addEventListener("click", close);
+    overlay.addEventListener("pointerdown", (event) => {
+      if (event.target === overlay) close();
+    });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const created = tableEditor.createTable({
+        rows: data.get("rows"),
+        columns: data.get("columns"),
+        caption: data.get("caption"),
+        label: data.get("label"),
+        selectedText: range.text
+      });
+      close();
+      replacePreviewSource(
+        range.start,
+        range.end,
+        created.text,
+        range.start + created.selectionStart,
+        range.start + created.selectionEnd,
+        true
+      ).catch(reportTableEditingError);
+    });
+    window.requestAnimationFrame(() => form.elements.rows?.focus());
+  }
+
+  function tableBorderMenuHeader() {
+    const header = document.createElement("label");
+    header.className = "smarttex-table-border-mode";
+    header.innerHTML = `
+      <span>Single</span>
+      <input type="checkbox" ${doubleTableBorders ? "checked" : ""}>
+      <span class="smarttex-table-border-switch" aria-hidden="true"></span>
+      <span>Double</span>`;
+    const input = header.querySelector("input");
+    input.addEventListener("change", () => {
+      doubleTableBorders = input.checked;
+    });
+    return header;
+  }
+
   function toolbarIcon(markup) {
     return `<svg viewBox="0 0 24 24" aria-hidden="true">${markup}</svg>`;
   }
@@ -940,6 +1480,15 @@
       });
       return item;
     };
+    navigationBackButton = button(
+      "Back to the previous editor position",
+      toolbarIcon('<path d="m14 5-7 7 7 7"/><path d="M8 12h11"/>'),
+      navigateBackInEditor
+    );
+    navigationBackButton.classList.add("smarttex-document-back-button");
+    navigationBackButton.hidden = true;
+    navigationBackButton.disabled = true;
+
     const bold = button(
       "Bold",
       '<span class="smarttex-toolbar-letter"><strong>B</strong></span>',
@@ -1026,13 +1575,234 @@
       ),
       insertEquationEnvironment
     );
+    const tableGridIcon = (extra = "") => toolbarIcon(
+      '<rect x="3" y="4" width="18" height="16" rx="1.5"/>' +
+      '<path d="M3 10h18M3 15h18M9 4v16M15 4v16"/>' + extra
+    );
+    const addTable = button(
+      "Add table",
+      tableGridIcon('<circle cx="19" cy="5" r="4" class="smarttex-toolbar-icon-badge"/>' +
+        '<path d="M19 3v4M17 5h4" class="smarttex-toolbar-icon-badge-mark"/>'),
+      showAddTableDialog
+    );
+    addTable.dataset.smarttexTableOutside = "true";
+    const tableStructure = toolbarDropdown(
+      "Add or remove table rows and columns",
+      toolbarIcon(
+        '<rect x="8" y="5" width="8" height="14" rx="1" class="smarttex-table-icon-current"/>' +
+        '<rect x="2" y="5" width="4" height="14" rx="1" class="smarttex-table-icon-add"/>' +
+        '<rect x="18" y="5" width="4" height="14" rx="1" class="smarttex-table-icon-remove"/>' +
+        '<path d="M3 12h2M19 12h2" class="smarttex-table-icon-mark"/>'
+      ),
+      [
+        {
+          label: "Add row above",
+          tableAction: "add-row",
+          icon: toolbarIcon(
+            '<rect x="4" y="11" width="16" height="7" rx="1" class="smarttex-table-icon-current"/>' +
+            '<rect x="4" y="3" width="16" height="6" rx="1" class="smarttex-table-icon-add"/>' +
+            '<path d="M12 4.5v3M10.5 6h3" class="smarttex-table-icon-mark"/>'
+          ),
+          action: () => applyTableEdit((source, cursor, start, end) => (
+            tableEditor.addRow(source, cursor, "above", start, end)
+          ))
+        },
+        {
+          label: "Add row below",
+          tableAction: "add-row",
+          icon: toolbarIcon(
+            '<rect x="4" y="5" width="16" height="7" rx="1" class="smarttex-table-icon-current"/>' +
+            '<rect x="4" y="14" width="16" height="6" rx="1" class="smarttex-table-icon-add"/>' +
+            '<path d="M12 15.5v3M10.5 17h3" class="smarttex-table-icon-mark"/>'
+          ),
+          action: () => applyTableEdit((source, cursor, start, end) => (
+            tableEditor.addRow(source, cursor, "below", start, end)
+          ))
+        },
+        {
+          label: "Remove current row",
+          tableAction: "remove-row",
+          icon: toolbarIcon(
+            '<rect x="4" y="4" width="16" height="7" rx="1" class="smarttex-table-icon-current"/>' +
+            '<rect x="4" y="13" width="16" height="7" rx="1" class="smarttex-table-icon-remove"/>' +
+            '<path d="M9 16.5h6" class="smarttex-table-icon-mark"/>'
+          ),
+          action: () => applyTableEdit(tableEditor.removeRow)
+        },
+        {
+          label: "Add column left",
+          tableAction: "add-column",
+          icon: toolbarIcon(
+            '<rect x="11" y="4" width="7" height="16" rx="1" class="smarttex-table-icon-current"/>' +
+            '<rect x="3" y="4" width="6" height="16" rx="1" class="smarttex-table-icon-add"/>' +
+            '<path d="M6 9v6M3 12h6" class="smarttex-table-icon-mark"/>'
+          ),
+          action: () => applyTableEdit((source, cursor, start, end) => (
+            tableEditor.addColumn(source, cursor, "left", start, end)
+          ))
+        },
+        {
+          label: "Add column right",
+          tableAction: "add-column",
+          icon: toolbarIcon(
+            '<rect x="6" y="4" width="7" height="16" rx="1" class="smarttex-table-icon-current"/>' +
+            '<rect x="15" y="4" width="6" height="16" rx="1" class="smarttex-table-icon-add"/>' +
+            '<path d="M18 9v6M15 12h6" class="smarttex-table-icon-mark"/>'
+          ),
+          action: () => applyTableEdit((source, cursor, start, end) => (
+            tableEditor.addColumn(source, cursor, "right", start, end)
+          ))
+        },
+        {
+          label: "Remove current column",
+          tableAction: "remove-column",
+          icon: toolbarIcon(
+            '<rect x="4" y="4" width="7" height="16" rx="1" class="smarttex-table-icon-current"/>' +
+            '<rect x="13" y="4" width="7" height="16" rx="1" class="smarttex-table-icon-remove"/>' +
+            '<path d="M15 12h3" class="smarttex-table-icon-mark"/>'
+          ),
+          action: () => applyTableEdit(tableEditor.removeColumn)
+        }
+      ]
+    );
+    tableStructure.dataset.smarttexTableRequired = "true";
+    tableStructure.dataset.smarttexTableAction = "structure";
+
+    const moveTablePart = toolbarDropdown(
+      "Move table rows or columns",
+      toolbarIcon(
+        '<rect x="8" y="4" width="8" height="16" rx="1" class="smarttex-table-icon-current"/>' +
+        '<path d="M6 8H2m2-2-2 2 2 2M18 16h4m-2-2 2 2-2 2"/>'
+      ),
+      [
+        {
+          label: "Move current row up",
+          tableAction: "move-row-up",
+          icon: toolbarIcon(
+            '<rect x="5" y="9" width="14" height="9" rx="1" class="smarttex-table-icon-current"/>' +
+            '<path d="M12 7V2M9 5l3-3 3 3"/>'
+          ),
+          action: () => applyTableEdit((source, cursor, start, end) => (
+            tableEditor.moveRow(source, cursor, "up", start, end)
+          ))
+        },
+        {
+          label: "Move current row down",
+          tableAction: "move-row-down",
+          icon: toolbarIcon(
+            '<rect x="5" y="5" width="14" height="9" rx="1" class="smarttex-table-icon-current"/>' +
+            '<path d="M12 16v5M9 18l3 3 3-3"/>'
+          ),
+          action: () => applyTableEdit((source, cursor, start, end) => (
+            tableEditor.moveRow(source, cursor, "down", start, end)
+          ))
+        },
+        {
+          label: "Move current column left",
+          tableAction: "move-column-left",
+          icon: toolbarIcon(
+            '<rect x="10" y="4" width="9" height="16" rx="1" class="smarttex-table-icon-current"/>' +
+            '<path d="M8 12H3M6 9l-3 3 3 3"/>'
+          ),
+          action: () => applyTableEdit((source, cursor, start, end) => (
+            tableEditor.moveColumn(source, cursor, "left", start, end)
+          ))
+        },
+        {
+          label: "Move current column right",
+          tableAction: "move-column-right",
+          icon: toolbarIcon(
+            '<rect x="5" y="4" width="9" height="16" rx="1" class="smarttex-table-icon-current"/>' +
+            '<path d="M16 12h5M18 9l3 3-3 3"/>'
+          ),
+          action: () => applyTableEdit((source, cursor, start, end) => (
+            tableEditor.moveColumn(source, cursor, "right", start, end)
+          ))
+        }
+      ]
+    );
+    moveTablePart.dataset.smarttexTableRequired = "true";
+    moveTablePart.dataset.smarttexTableAction = "move";
+    const borderOptionIcon = (sides) => toolbarIcon(
+      '<rect x="5" y="5" width="14" height="14" rx="0.5" class="smarttex-border-guide"/>' +
+      sides
+    );
+    const borders = toolbarDropdown(
+      "Table borders",
+      toolbarIcon(
+        '<rect x="3" y="3" width="18" height="18" rx="1" class="smarttex-table-border-toolbar-outline"/>' +
+        '<path d="M3 10h18M3 15h18M10 3v18M15 3v18" class="smarttex-border-guide"/>'
+      ),
+      [
+        {
+          label: "No borders in selection",
+          icon: borderOptionIcon(
+            '<path d="M4 4l16 16" class="smarttex-border-remove"/>' +
+            '<path d="M20 4 4 20" class="smarttex-border-remove"/>'
+          ),
+          action: () => applyTableEdit((source, cursor, start, end) => (
+            tableEditor.removeBorders(source, cursor, start, end)
+          ))
+        },
+        {
+          label: "Toggle line to left",
+          icon: borderOptionIcon('<path d="M5 4v16" class="smarttex-border-active"/>'),
+          action: () => applyTableEdit((source, cursor, start, end) => tableEditor.toggleBorder(source, cursor, "left", doubleTableBorders, start, end))
+        },
+        {
+          label: "Toggle line to right",
+          icon: borderOptionIcon('<path d="M19 4v16" class="smarttex-border-active"/>'),
+          action: () => applyTableEdit((source, cursor, start, end) => tableEditor.toggleBorder(source, cursor, "right", doubleTableBorders, start, end))
+        },
+        {
+          label: "Toggle line below",
+          icon: borderOptionIcon('<path d="M4 19h16" class="smarttex-border-active"/>'),
+          action: () => applyTableEdit((source, cursor, start, end) => tableEditor.toggleBorder(source, cursor, "below", doubleTableBorders, start, end))
+        },
+        {
+          label: "Toggle line above",
+          icon: borderOptionIcon('<path d="M4 5h16" class="smarttex-border-active"/>'),
+          action: () => applyTableEdit((source, cursor, start, end) => tableEditor.toggleBorder(source, cursor, "above", doubleTableBorders, start, end))
+        },
+        {
+          label: "Toggle line around current cell",
+          icon: borderOptionIcon('<rect x="5" y="5" width="14" height="14" class="smarttex-border-active"/>'),
+          action: () => applyTableEdit((source, cursor, start, end) => tableEditor.toggleBorder(source, cursor, "cell", doubleTableBorders, start, end))
+        },
+        {
+          label: "Toggle line around table",
+          icon: borderOptionIcon('<rect x="3" y="3" width="18" height="18" class="smarttex-border-active"/>'),
+          action: () => applyTableEdit((source, cursor, start, end) => tableEditor.toggleBorder(source, cursor, "table", doubleTableBorders, start, end))
+        }
+      ],
+      { persistent: true, buildHeader: tableBorderMenuHeader }
+    );
+    borders.dataset.smarttexTableRequired = "true";
+    borders.dataset.smarttexTableAction = "borders";
+    const beautifyTable = button(
+      "Beautify table source",
+      toolbarIcon(
+        '<path d="M4 6h4M11 6h9M4 12h7M14 12h6M4 18h10M17 18h3"/>' +
+        '<path d="M8 3v6M11 9V3M11 9h3M14 9V3M14 15v6M17 21v-6M14 15h3"/>'
+      ),
+      () => applyTableEdit((source, cursor, start, end) => (
+        tableEditor.beautify(source, cursor, start, end)
+      ))
+    );
+    beautifyTable.dataset.smarttexTableRequired = "true";
+    beautifyTable.dataset.smarttexTableAction = "beautify";
     const divider = () => {
       const item = document.createElement("span");
       item.className = "smarttex-document-toolbar-divider";
       item.setAttribute("aria-hidden", "true");
       return item;
     };
+    navigationBackDivider = divider();
+    navigationBackDivider.classList.add("smarttex-document-back-divider");
+    navigationBackDivider.hidden = true;
     toolbar.append(
+      navigationBackButton,
+      navigationBackDivider,
       bold,
       italic,
       underline,
@@ -1042,9 +1812,16 @@
       enumerate,
       divider(),
       addFigure,
-      addEquation
+      addEquation,
+      divider(),
+      addTable,
+      tableStructure,
+      moveTablePart,
+      borders,
+      beautifyTable
     );
     updateEditingToolbarState();
+    updateNavigationBackButton();
     return toolbar;
   }
 
@@ -1190,6 +1967,20 @@
     }
   }
 
+  function applyLiveDocumentPreviewButtonVisibility() {
+    if (!controlsGroup) return;
+    controlsGroup.hidden = !showLiveDocumentPreviewButton;
+    controlsGroup.setAttribute(
+      "aria-hidden",
+      showLiveDocumentPreviewButton ? "false" : "true"
+    );
+    if (!showLiveDocumentPreviewButton && liveEnabled) {
+      liveEnabled = false;
+      applyLiveMode();
+    }
+    if (!showLiveDocumentPreviewButton) closeSettingsMenu();
+  }
+
   function attachPdfIntegration() {
     const found = locatePdfIntegration();
     if (!found) return;
@@ -1203,6 +1994,7 @@
     if (controlsGroup.parentElement !== integration.toolbar) {
       integration.toolbar.appendChild(controlsGroup);
     }
+    applyLiveDocumentPreviewButtonVisibility();
     if (!settingsMenu || !settingsMenu.isConnected) settingsMenu = createSettingsMenu();
     if (!preview || !preview.isConnected) {
       preview = document.createElement("section");
@@ -1210,6 +2002,10 @@
       preview.hidden = true;
       preview.tabIndex = 0;
       preview.setAttribute("aria-label", "SmartTeX live document preview");
+      preview.classList.toggle(
+        "smarttex-document-cursor-position-hidden",
+        !showCursorPosition
+      );
       applyTextScale(textScale);
       bindPreviewInteractions(preview);
     }
@@ -1260,6 +2056,10 @@
     if (!liveEnabled && fastCursorFrame !== null) {
       cancelAnimationFrame(fastCursorFrame);
       fastCursorFrame = null;
+    }
+    if (!liveEnabled && scrollSynchronizationFrame !== null) {
+      cancelAnimationFrame(scrollSynchronizationFrame);
+      scrollSynchronizationFrame = null;
     }
     attachPdfIntegration();
     applyLiveMode();
@@ -1458,12 +2258,19 @@
       }
     }
 
-    const bibitemPattern = /\\bibitem(?:\s*\[[^\]]*\])?\s*\{([^{}]+)\}/g;
+    const citationNumbers = new Map();
+    const bibitemPattern = /\\bibitem(?:\s*\[([^\]]*)\])?\s*\{([^{}]+)\}/g;
     let bibitemMatch;
+    let nextCitationNumber = 0;
     while ((bibitemMatch = bibitemPattern.exec(source))) {
+      nextCitationNumber += 1;
+      const label = bibitemMatch[2].trim();
+      const number = String(bibitemMatch[1] || nextCitationNumber).trim();
+      citationNumbers.set(label, number);
       register({
-        label: bibitemMatch[1].trim(),
+        label,
         type: "citation",
+        number,
         sourceIndex: bibitemMatch.index,
         index: bibitemMatch.index
       });
@@ -1473,16 +2280,28 @@
     const interactionPattern = /\\(eqref|ref|pageref|cite|citep|citet|parencite|textcite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]+)\}/g;
     let interactionMatch;
     while ((interactionMatch = interactionPattern.exec(source))) {
+      const labels = interactionMatch[2]
+        .split(",")
+        .map((label) => label.trim())
+        .filter(Boolean);
+      const type = /cite/i.test(interactionMatch[1]) ? "citation" : "reference";
+      if (type === "citation") {
+        for (const label of labels) {
+          if (citationNumbers.has(label)) continue;
+          nextCitationNumber += 1;
+          citationNumbers.set(label, String(nextCitationNumber));
+        }
+      }
       interactions.push({
         command: interactionMatch[1],
-        labels: interactionMatch[2].split(",").map((label) => label.trim()).filter(Boolean),
+        labels,
         placeholder: `[${interactionMatch[2]}]`,
         sourceIndex: interactionMatch.index,
         sourceEnd: interactionPattern.lastIndex,
-        type: /cite/i.test(interactionMatch[1]) ? "citation" : "reference"
+        type
       });
     }
-    return { targets, targetList, sections, interactions };
+    return { targets, targetList, sections, interactions, citationNumbers };
   }
 
   function removeComments(value) {
@@ -1737,6 +2556,50 @@
     appendFormattedTextWithCaret(parent, normalized);
   }
 
+  function indexTextSegmentNodes(segment, firstNode, lastNode) {
+    const indexTree = (node) => {
+      if (!node) return;
+      textSegmentByNode.set(node, segment);
+      for (const child of node.childNodes || []) indexTree(child);
+    };
+    let node = firstNode;
+    while (node) {
+      indexTree(node);
+      if (node === lastNode) break;
+      node = node.nextSibling;
+    }
+  }
+
+  function reindexTextSegments(page) {
+    for (const segment of page?.smarttexTextSegments || []) {
+      if (!segment.startAnchor?.isConnected || !segment.endAnchor?.isConnected) continue;
+      const firstNode = segment.startAnchor.nextSibling;
+      const lastNode = segment.endAnchor.previousSibling;
+      if (firstNode && lastNode) indexTextSegmentNodes(segment, firstNode, lastNode);
+    }
+  }
+
+  function textSegmentForDomPoint(point) {
+    if (!point?.node) return null;
+    const candidates = [];
+    if (point.node.nodeType === Node.ELEMENT_NODE) {
+      const children = point.node.childNodes || [];
+      const offset = Math.max(0, Math.min(Number(point.offset) || 0, children.length));
+      if (children[offset]) candidates.push(children[offset]);
+      if (offset > 0 && children[offset - 1]) candidates.push(children[offset - 1]);
+    }
+    candidates.push(point.node);
+    for (const candidate of candidates) {
+      let node = candidate;
+      while (node) {
+        const segment = textSegmentByNode.get(node);
+        if (segment) return segment;
+        node = node.parentNode;
+      }
+    }
+    return null;
+  }
+
   async function appendTextChunk(
     parent,
     source,
@@ -1749,6 +2612,7 @@
     if (!source) return true;
     let text = source;
     if (
+      showCursorPosition &&
       state.cursorIndex >= absoluteStart &&
       state.cursorIndex <= absoluteStart + source.length
     ) {
@@ -1829,15 +2693,19 @@
         const segmentRange = document.createRange();
         segmentRange.setStartAfter(startAnchor);
         segmentRange.setEndBefore(endAnchor);
-        flow.segments.push({
+        const segment = {
           element,
           startAnchor,
           endAnchor,
           chunkStart: absoluteStart,
           chunkEnd: absoluteStart + source.length,
+          sourceStart: rangeStart,
+          sourceEnd: rangeEnd,
           partIndex,
           leadingWhitespace: segmentRange.toString().match(/^\s*/)?.[0] || ""
-        });
+        };
+        flow.segments.push(segment);
+        indexTextSegmentNodes(segment, firstAddedNode, lastAddedNode);
       }
       setSourceRange(element, rangeStart, rangeEnd);
       if (element !== flow.paragraph) {
@@ -1880,6 +2748,7 @@
 
   function renderEquationBlock(parent, context, state) {
     const active = (
+      showCursorPosition &&
       state.cursorIndex >= context.openStart &&
       state.cursorIndex <= context.closeEnd
     );
@@ -1911,7 +2780,7 @@
       context.contentEnd,
       Number(state.selectionTo ?? state.cursorIndex) || 0
     );
-    const hasSelection = selectionEnd > selectionStart;
+    const hasSelection = showCursorPosition && selectionEnd > selectionStart;
     const selectedContext = hasSelection
       ? {
           ...renderContext,
@@ -1997,6 +2866,7 @@
 
   function renderTableBlock(parent, context, state) {
     const active = (
+      showCursorPosition &&
       state.cursorIndex >= context.openStart &&
       state.cursorIndex <= context.closeEnd
     );
@@ -2122,12 +2992,47 @@
       pdfClass: "smarttex-document-figure-image smarttex-document-figure-pdf"
     });
     if (!placeholder.parentNode) return;
+    for (const attribute of [
+      "data-smarttex-local-width-ratio",
+      "data-smarttex-fixed-width-px",
+      "data-smarttex-image-scale"
+    ]) {
+      if (placeholder.hasAttribute(attribute)) {
+        media.setAttribute(attribute, placeholder.getAttribute(attribute));
+      }
+    }
+    const layout = placeholder.closest(".smarttex-figure-layout");
     media.loading = "lazy";
     placeholder.replaceWith(media);
+    renderer.observePopupLayout?.(layout.closest(".smarttex-figure-popup-viewport") ? layout : null);
   }
 
-  function appendFigureImage(images, path) {
+  function configureDocumentFigureImage(node, imageModel) {
+    const localRatio = Number(imageModel?.width?.localRatio);
+    const fixedWidth = Number(imageModel?.width?.fixedPx);
+    const scale = Number(imageModel?.scale);
+    node.dataset.smarttexLocalWidthRatio = String(
+      Number.isFinite(localRatio) && localRatio > 0 ? localRatio : 1
+    );
+    if (Number.isFinite(fixedWidth) && fixedWidth > 0) {
+      node.dataset.smarttexFixedWidthPx = String(fixedWidth);
+    }
+    const imageScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    node.dataset.smarttexImageScale = String(imageScale);
+    if (Number.isFinite(fixedWidth) && fixedWidth > 0) {
+      node.style.width = `${fixedWidth * imageScale}px`;
+    } else {
+      const widthPercent = Math.max(
+        5,
+        (Number.isFinite(localRatio) && localRatio > 0 ? localRatio : 1) * imageScale * 100
+      );
+      node.style.width = `${widthPercent}%`;
+    }
+  }
+
+  function appendFigureImage(images, path, imageModel = null) {
     const placeholder = figurePlaceholder(path);
+    configureDocumentFigureImage(placeholder, imageModel);
     placeholder.classList.add("smarttex-document-figure-resolving");
     placeholder.textContent = `Locating ${path}…`;
     images.appendChild(placeholder);
@@ -2158,27 +3063,86 @@
     });
   }
 
+  function createDocumentFigureLayout(
+    sourceValue,
+    { resolveImages = true, popup = false, layoutModel: suppliedLayoutModel = null } = {}
+  ) {
+    const renderer = globalThis.SmartTeXFigureRenderer;
+    const layoutModel = suppliedLayoutModel || renderer?.parseFigureLayout?.(sourceValue || "") || {
+      desiredWidthPx: 520,
+      rows: []
+    };
+    const viewport = document.createElement("div");
+    viewport.className = popup
+      ? "smarttex-figure-popup-viewport smarttex-document-figure-popup-viewport"
+      : "smarttex-document-figure-layout-viewport";
+    const images = document.createElement("div");
+    images.className = "smarttex-document-figure-images smarttex-figure-layout";
+    images.dataset.smarttexDesiredWidthPx = String(layoutModel.desiredWidthPx || 520);
+    let imageCount = 0;
+    for (const rowModel of layoutModel.rows || []) {
+      const row = document.createElement("div");
+      row.className = "smarttex-figure-layout-row";
+      for (const panelModel of rowModel.items || []) {
+        const panel = document.createElement("div");
+        panel.className = "smarttex-figure-layout-panel";
+        const widthRatio = Math.max(0.05, Number(panelModel.widthRatio) || 1);
+        panel.dataset.smarttexWidthRatio = String(widthRatio);
+        panel.style.setProperty("--smarttex-panel-width-ratio", String(widthRatio));
+        panel.style.flexBasis = `${Math.min(135, widthRatio * 100)}%`;
+        const fixedPanelWidth = Number(panelModel.fixedWidthPx);
+        if (Number.isFinite(fixedPanelWidth) && fixedPanelWidth > 0) {
+          panel.dataset.smarttexFixedPanelWidthPx = String(fixedPanelWidth);
+          panel.style.setProperty("--smarttex-panel-fixed-width", `${fixedPanelWidth}px`);
+          panel.classList.add("smarttex-figure-layout-panel-fixed");
+        }
+        for (const imageModel of panelModel.images || []) {
+          imageCount += 1;
+          if (resolveImages) appendFigureImage(panel, imageModel.path, imageModel);
+          else {
+            const placeholder = figurePlaceholder(imageModel.path);
+            configureDocumentFigureImage(placeholder, imageModel);
+            panel.appendChild(placeholder);
+          }
+        }
+        row.appendChild(panel);
+      }
+      images.appendChild(row);
+    }
+    if (!imageCount) {
+      const row = document.createElement("div");
+      row.className = "smarttex-figure-layout-row";
+      const panel = document.createElement("div");
+      panel.className = "smarttex-figure-layout-panel";
+      panel.dataset.smarttexWidthRatio = "1";
+      panel.style.setProperty("--smarttex-panel-width-ratio", "1");
+      panel.style.flexBasis = "100%";
+      panel.appendChild(figurePlaceholder("Figure"));
+      row.appendChild(panel);
+      images.appendChild(row);
+    }
+    viewport.appendChild(images);
+    if (popup) renderer?.observePopupLayout?.(images);
+    return { viewport, images };
+  }
+
   function renderFigureBlock(parent, context, state, referenceModel) {
     const block = document.createElement("figure");
     block.className = "smarttex-document-figure";
     setSourceRange(block, context.openStart, context.closeEnd);
     const body = String(context.source || "");
-    const paths = [...body.matchAll(
-      /\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^{}]+)\}/g
-    )].map((match) => match[1].trim());
-    const images = document.createElement("div");
-    images.className = "smarttex-document-figure-images";
-    for (const path of paths) {
-      if (renderFigures) {
-        appendFigureImage(images, path);
-      } else {
-        images.appendChild(figurePlaceholder(path));
-      }
-    }
-    if (!paths.length) images.appendChild(figurePlaceholder("Figure"));
-    block.appendChild(images);
+    const layoutModel = globalThis.SmartTeXFigureRenderer?.parseFigureLayout?.(body) || {
+      desiredWidthPx: 520,
+      rows: []
+    };
+    const figureLayout = createDocumentFigureLayout(body, {
+      resolveImages: renderFigures,
+      popup: false,
+      layoutModel
+    });
+    block.appendChild(figureLayout.viewport);
     if (!renderFigures) enableFigureHoverPreview(
-      images,
+      figureLayout.viewport,
       context,
       state,
       referenceModel
@@ -2189,12 +3153,22 @@
       "figure"
     );
     const number = contextTools.figurePreviewNumber(state.value, context);
+    const preparedCaption = captionModel?.text
+      ? contextTools.prepareDocumentCommands(
+          state.value,
+          context.openStart,
+          captionModel.text
+        )
+      : null;
+    context.smarttexFigurePreviewData = {
+      source: state.value,
+      layoutModel,
+      captionModel,
+      number,
+      preparedCaption
+    };
     if (captionModel?.text) {
-      const prepared = contextTools.prepareDocumentCommands(
-        state.value,
-        context.openStart,
-        captionModel.text
-      );
+      const prepared = preparedCaption;
       const caption = document.createElement("figcaption");
       caption.className = "smarttex-document-figure-caption";
       setSourceRange(caption, captionModel.start, captionModel.end);
@@ -2216,6 +3190,7 @@
         renderedCaption
       );
       if (
+        showCursorPosition &&
         state.cursorIndex >= captionModel.start &&
         state.cursorIndex <= captionModel.end
       ) {
@@ -2245,23 +3220,29 @@
       "smarttex-document-figure smarttex-reference-popup-target " +
       "smarttex-document-figure-hover-popup";
     const body = String(context.source || "");
-    const paths = [...body.matchAll(
-      /\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^{}]+)\}/g
-    )].map((match) => match[1].trim());
-    const images = document.createElement("div");
-    images.className = "smarttex-document-figure-images";
-    for (const path of paths) appendFigureImage(images, path);
-    if (!paths.length) images.appendChild(figurePlaceholder("Figure"));
-    figure.appendChild(images);
+    const cached = context.smarttexFigurePreviewData?.source === state.value
+      ? context.smarttexFigurePreviewData
+      : null;
+    const layoutModel = cached?.layoutModel ||
+      globalThis.SmartTeXFigureRenderer?.parseFigureLayout?.(body) || {
+        desiredWidthPx: 520,
+        rows: []
+      };
+    const figureLayout = createDocumentFigureLayout(body, {
+      resolveImages: true,
+      popup: true,
+      layoutModel
+    });
+    figure.appendChild(figureLayout.viewport);
 
-    const captionModel = contextTools.floatCaption(
-      state.value,
-      context,
-      "figure"
-    );
-    const number = contextTools.figurePreviewNumber(state.value, context);
+    const captionModel = cached
+      ? cached.captionModel
+      : contextTools.floatCaption(state.value, context, "figure");
+    const number = cached
+      ? cached.number
+      : contextTools.figurePreviewNumber(state.value, context);
     if (captionModel?.text) {
-      const prepared = contextTools.prepareDocumentCommands(
+      const prepared = cached?.preparedCaption || contextTools.prepareDocumentCommands(
         state.value,
         context.openStart,
         captionModel.text
@@ -2311,7 +3292,19 @@
     referencePopupGeneration += 1;
     const popup = ensureReferencePopup();
     hideNestedReferencePopup();
-    popup.replaceChildren(figureHoverPreviewBlock(context, state, referenceModel));
+    const figureSource = String(context.source || "");
+    let figureHash = 2166136261;
+    for (let index = 0; index < figureSource.length; index += 1) {
+      figureHash ^= figureSource.charCodeAt(index);
+      figureHash = Math.imul(figureHash, 16777619);
+    }
+    const popupKey = `figure:${context.openStart}:${context.closeEnd}:${figureHash >>> 0}`;
+    if (popup.__smarttexFigureKey !== popupKey) {
+      popup.replaceChildren(figureHoverPreviewBlock(context, state, referenceModel));
+      popup.__smarttexFigureKey = popupKey;
+      popup.__smarttexKey = "";
+      popup.__smarttexModel = null;
+    }
     popup.hidden = false;
     positionReferencePopup(anchor, popup);
   }
@@ -2322,18 +3315,13 @@
     anchor.tabIndex = 0;
     anchor.title = "Hover to preview this figure";
     const show = (event) => {
-      const spinnerGeneration = showPopupLoadingSpinner(event, anchor);
-      window.requestAnimationFrame(() => {
-        try {
-          showFigureHoverPopup(
-            anchor,
-            context,
-            currentState?.value === state.value ? currentState : state,
-            referenceModel
-          );
-        } finally {
-          hidePopupLoadingSpinner(spinnerGeneration);
-        }
+      schedulePreviewHover(anchor, event, () => {
+        showFigureHoverPopup(
+          anchor,
+          context,
+          currentState?.value === state.value ? currentState : state,
+          referenceModel
+        );
       });
     };
     anchor.addEventListener("pointerenter", show);
@@ -2390,7 +3378,15 @@
         Math.min(rendered.length, cursor - (source.length - rendered.length))
       );
     }
-    return prefix;
+    const currentChangedLength = Math.max(0, currentChangedEnd - prefix);
+    const renderedChangedEnd = rendered.length - suffix;
+    const renderedChangedLength = Math.max(0, renderedChangedEnd - prefix);
+    if (currentChangedLength <= 0 || renderedChangedLength <= 0) return prefix;
+    const ratio = (cursor - prefix) / currentChangedLength;
+    return Math.max(
+      prefix,
+      Math.min(renderedChangedEnd, prefix + Math.round(ratio * renderedChangedLength))
+    );
   }
 
   function mapRenderedIndexToCurrentSource(sourceValue, renderedIndexValue, bias) {
@@ -2423,7 +3419,17 @@
         Math.min(source.length, renderedIndex + (source.length - rendered.length))
       );
     }
-    return bias === "end" ? source.length - suffix : prefix;
+    const renderedChangedLength = Math.max(0, renderedChangedEnd - prefix);
+    const currentChangedEnd = source.length - suffix;
+    const currentChangedLength = Math.max(0, currentChangedEnd - prefix);
+    if (renderedChangedLength <= 0 || currentChangedLength <= 0) {
+      return bias === "end" ? currentChangedEnd : prefix;
+    }
+    const ratio = (renderedIndex - prefix) / renderedChangedLength;
+    return Math.max(
+      prefix,
+      Math.min(currentChangedEnd, prefix + Math.round(ratio * currentChangedLength))
+    );
   }
 
   function renderedPartLocation(source, offsetValue, metadata) {
@@ -2487,9 +3493,414 @@
     };
   }
 
+  function preferredVisibleSourceOffsets(sourceValue, offsetValue) {
+    const source = String(sourceValue || "");
+    const offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
+    const offsets = [];
+    const add = (value) => {
+      const bounded = Math.max(0, Math.min(Number(value) || 0, source.length));
+      if (!offsets.includes(bounded)) offsets.push(bounded);
+    };
+
+    const containingMatch = (pattern, callback) => {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(source))) {
+        const start = match.index;
+        const end = pattern.lastIndex;
+        if (offset < start || offset > end) continue;
+        callback(match, start, end);
+        return true;
+      }
+      return false;
+    };
+
+    // Labels and environment delimiters are entirely invisible in the live
+    // view. A cursor inside them belongs at the first visible position that
+    // follows the command, not at a proportional point in a neighbouring block.
+    containingMatch(/\\label\s*\{[^{}]*\}/g, (_match, _start, end) => add(end));
+    containingMatch(/\\(?:begin|end)\s*\{[^{}\r\n]+\}/g, (_match, start, end) => {
+      add(end);
+      add(start);
+    });
+
+    // Structural headings and captions render their argument but not the
+    // command syntax. Map positions in the command prefix or braces to the
+    // corresponding edge of the visible argument.
+    containingMatch(
+      /\\(?:section|subsection|subsubsection|paragraph|caption)\*?\s*(?:\[[^\]]*\]\s*)?\{([^{}]*)\}/g,
+      (match, start, end) => {
+        const relative = match[0].lastIndexOf(match[1]);
+        const argumentStart = start + Math.max(0, relative);
+        const argumentEnd = argumentStart + match[1].length;
+        if (offset <= argumentStart) add(argumentStart);
+        else if (offset >= argumentEnd) add(argumentEnd);
+        else add(offset);
+        add(argumentStart);
+        add(argumentEnd);
+        add(end);
+      }
+    );
+
+    // Text-formatting commands preserve their argument. This also prevents the
+    // caret from jumping to the preceding paragraph when it sits on the command
+    // name or an opening/closing brace.
+    containingMatch(
+      /\\(?:textbf|textit|emph|underline|texttt|mbox)\s*\{([^{}]*)\}/g,
+      (match, start, end) => {
+        const relative = match[0].lastIndexOf(match[1]);
+        const argumentStart = start + Math.max(0, relative);
+        const argumentEnd = argumentStart + match[1].length;
+        if (offset <= argumentStart) add(argumentStart);
+        else if (offset >= argumentEnd) add(argumentEnd);
+        else add(offset);
+        add(argumentStart);
+        add(argumentEnd);
+        add(end);
+      }
+    );
+
+    // Generic command prefixes are stripped by plainLatex while a following
+    // braced argument often remains visible. Prefer the argument start; for
+    // commands without an argument prefer the command end.
+    containingMatch(/\\[A-Za-z@]+\*?(?:\s*\[[^\]]*\])?/g, (_match, _start, end) => {
+      let next = end;
+      while (/\s/.test(source[next] || "")) next += 1;
+      add(source[next] === "{" ? next + 1 : end);
+      add(end);
+    });
+
+    // Preserve exact positions in ordinary visible text, including positions
+    // immediately before or after a single space. The former ordering searched
+    // past whitespace first and therefore moved a caret before a word separator
+    // to the other side of that separator.
+    add(offset);
+
+    // Paragraph separators have no rendered glyph. Only expand across a
+    // whitespace run when it contains a line break; ordinary spaces were
+    // already handled exactly above. Prefer the next visible character, then
+    // the preceding one, so blank lines resolve to the following paragraph.
+    let whitespaceStart = offset;
+    while (whitespaceStart > 0 && /[ \t\r\n]/.test(source[whitespaceStart - 1])) {
+      whitespaceStart -= 1;
+    }
+    let whitespaceEnd = offset;
+    while (whitespaceEnd < source.length && /[ \t\r\n]/.test(source[whitespaceEnd])) {
+      whitespaceEnd += 1;
+    }
+    const whitespaceRun = source.slice(whitespaceStart, whitespaceEnd);
+    if (/\r|\n/.test(whitespaceRun)) {
+      add(whitespaceEnd);
+      add(whitespaceStart);
+    }
+    return offsets;
+  }
+
+  function resolveVisibleRenderedLocation(
+    sourceValue,
+    offsetValue,
+    metadata,
+    baselineParts = null
+  ) {
+    const source = String(sourceValue || "");
+    const offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
+    const parts = baselineParts || renderedPartTexts(source, metadata);
+    const validated = (candidate) => validatedRenderedPartLocation(
+      source,
+      candidate,
+      metadata,
+      parts
+    );
+
+    for (const candidate of preferredVisibleSourceOffsets(source, offset)) {
+      const location = validated(candidate);
+      if (location) return location;
+    }
+
+    // Most invalid positions are only a few characters away from a visible
+    // boundary (for example inside \label{...}, \begin{...}, or blank lines).
+    // Search locally with a rightward bias, matching the natural placement at
+    // the start of the following visible item.
+    const localRadius = Math.min(source.length, 512);
+    for (let distance = 1; distance <= localRadius; distance += 1) {
+      if (offset + distance <= source.length) {
+        const right = validated(offset + distance);
+        if (right) return right;
+      }
+      if (offset - distance >= 0) {
+        const left = validated(offset - distance);
+        if (left) return left;
+      }
+    }
+
+    // Long generated commands are uncommon, but a bounded coarse search avoids
+    // falling back to proportional element ranges if one is encountered.
+    const stride = Math.max(1, Math.floor(source.length / 256));
+    let best = null;
+    for (let candidate = 0; candidate <= source.length; candidate += stride) {
+      const location = validated(candidate);
+      if (!location) continue;
+      const distance = Math.abs(candidate - offset);
+      if (!best || distance < best.distance || (
+        distance === best.distance && candidate > best.location.sourceOffset
+      )) {
+        best = { location, distance };
+      }
+    }
+    const endLocation = validated(source.length);
+    if (endLocation) {
+      const distance = Math.abs(source.length - offset);
+      if (!best || distance < best.distance) best = { location: endLocation, distance };
+    }
+    return best?.location || null;
+  }
+
+  function textWithinSegment(segment) {
+    if (!segment?.startAnchor?.isConnected || !segment?.endAnchor?.isConnected) {
+      return "";
+    }
+    try {
+      const range = document.createRange();
+      range.setStartAfter(segment.startAnchor);
+      range.setEndBefore(segment.endAnchor);
+      return range.toString();
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function normalizedWhitespaceMap(value) {
+    const source = String(value || "");
+    let text = "";
+    const normalizedToRaw = [0];
+    const rawToNormalized = new Array(source.length + 1).fill(0);
+    let index = 0;
+    while (index < source.length) {
+      rawToNormalized[index] = text.length;
+      if (/[\s~]/.test(source[index])) {
+        const runStart = index;
+        const beforeWhitespace = text.length;
+        rawToNormalized[runStart] = beforeWhitespace;
+        while (index < source.length && /[\s~]/.test(source[index])) {
+          index += 1;
+        }
+        if (text && !text.endsWith(" ")) {
+          text += " ";
+          normalizedToRaw.push(index);
+        }
+        for (let raw = runStart + 1; raw <= index; raw += 1) {
+          rawToNormalized[raw] = text.length;
+        }
+        continue;
+      }
+      text += source[index];
+      index += 1;
+      normalizedToRaw.push(index);
+      rawToNormalized[index] = text.length;
+    }
+    rawToNormalized[source.length] = text.length;
+    return { text, normalizedToRaw, rawToNormalized };
+  }
+
+  function literalSourceContext(sourceValue, cursorValue, maximum = 96) {
+    const source = String(sourceValue || "");
+    const cursor = Math.max(0, Math.min(Number(cursorValue) || 0, source.length));
+    const blocked = /[\\{}$%]/;
+    let start = cursor;
+    let end = cursor;
+    while (start > 0 && cursor - start < maximum) {
+      const character = source[start - 1];
+      if (blocked.test(character)) break;
+      if (character === "\n" && source[start - 2] === "\n") break;
+      start -= 1;
+    }
+    while (end < source.length && end - cursor < maximum) {
+      const character = source[end];
+      if (blocked.test(character)) break;
+      if (character === "\n" && source[end + 1] === "\n") break;
+      end += 1;
+    }
+    const mapped = normalizedWhitespaceMap(source.slice(start, end));
+    const caret = mapped.rawToNormalized[cursor - start] ?? 0;
+    const windowStart = Math.max(0, caret - 46);
+    const windowEnd = Math.min(mapped.text.length, caret + 46);
+    const text = mapped.text.slice(windowStart, windowEnd);
+    if (text.replace(/\s/g, "").length < 3) return null;
+    return {
+      text,
+      caret: caret - windowStart,
+      sourceStart: start,
+      sourceEnd: end
+    };
+  }
+
+  function occurrencesOf(haystackValue, needleValue) {
+    const haystack = String(haystackValue || "");
+    const needle = String(needleValue || "");
+    if (!needle) return [];
+    const result = [];
+    let index = 0;
+    while ((index = haystack.indexOf(needle, index)) >= 0) {
+      result.push(index);
+      index += Math.max(1, needle.length);
+    }
+    return result;
+  }
+
+  function fastVisibleOffsetForSourceCursor(segment, source, cursor) {
+    const context = literalSourceContext(source, cursor);
+    if (!context) return null;
+    const visibleRaw = textWithinSegment(segment);
+    if (!visibleRaw) return null;
+    const visible = normalizedWhitespaceMap(visibleRaw);
+    const occurrences = occurrencesOf(visible.text, context.text);
+    if (!occurrences.length) return null;
+    const sourceStart = Number.isFinite(Number(segment.sourceStart))
+      ? Number(segment.sourceStart)
+      : Number(segment.chunkStart) || 0;
+    const sourceEnd = Number.isFinite(Number(segment.sourceEnd))
+      ? Number(segment.sourceEnd)
+      : Number(segment.chunkEnd) || source.length;
+    const sourceSpan = Math.max(1, sourceEnd - sourceStart);
+    const coarse = Math.max(0, Math.min(
+      visible.text.length,
+      (cursor - sourceStart) / sourceSpan * visible.text.length
+    ));
+    const normalizedOffset = occurrences
+      .map((start) => start + context.caret)
+      .sort((left, right) => Math.abs(left - coarse) - Math.abs(right - coarse))[0];
+    return visible.normalizedToRaw[Math.max(
+      0,
+      Math.min(normalizedOffset, visible.normalizedToRaw.length - 1)
+    )] ?? null;
+  }
+
+  function fastTextPartForCursor(page, state) {
+    if (!page || !state || state.value !== lastRenderedSource) return null;
+    const source = String(state.value || "");
+    const cursor = Math.max(0, Math.min(Number(state.cursorIndex) || 0, source.length));
+    const allCandidates = (page.smarttexTextSegments || []).filter((segment) => (
+      segment.startAnchor?.isConnected &&
+      segment.endAnchor?.isConnected &&
+      cursor >= segment.chunkStart &&
+      cursor <= segment.chunkEnd
+    ));
+    const nearbyCandidates = allCandidates.filter((segment) => {
+      const start = Number(segment.sourceStart ?? segment.chunkStart) || 0;
+      const end = Number(segment.sourceEnd ?? segment.chunkEnd) || source.length;
+      return cursor >= start - 512 && cursor <= end + 512;
+    });
+    const candidates = nearbyCandidates.length ? nearbyCandidates : allCandidates;
+    let best = null;
+    for (const segment of candidates) {
+      const visibleOffset = fastVisibleOffsetForSourceCursor(segment, source, cursor);
+      if (visibleOffset === null) continue;
+      const visible = textWithinSegment(segment);
+      const sourceStart = Number(segment.sourceStart ?? segment.chunkStart) || 0;
+      const sourceEnd = Number(segment.sourceEnd ?? segment.chunkEnd) || source.length;
+      const outside = cursor < sourceStart
+        ? sourceStart - cursor
+        : cursor > sourceEnd
+          ? cursor - sourceEnd
+          : 0;
+      const score = outside * 1000 + Math.abs(
+        visibleOffset - visible.length * (cursor - sourceStart) / Math.max(1, sourceEnd - sourceStart)
+      );
+      if (!best || score < best.score) {
+        best = {
+          score,
+          segment,
+          value: visible.slice(0, visibleOffset) + TEXT_CARET + visible.slice(visibleOffset)
+        };
+      }
+    }
+    return best ? { segment: best.segment, value: best.value } : null;
+  }
+
+  function escapedLiteralPattern(value) {
+    return String(value || "")
+      .split(/(\s+)/)
+      .filter(Boolean)
+      .map((part) => /^\s+$/.test(part)
+        ? "[\\s~]+"
+        : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("");
+  }
+
+  function fastSourceIndexForTextSegment(segment, visibleOffsetValue) {
+    const visibleRaw = textWithinSegment(segment);
+    if (!visibleRaw) return null;
+    const visible = normalizedWhitespaceMap(visibleRaw);
+    const rawOffset = Math.max(0, Math.min(Number(visibleOffsetValue) || 0, visibleRaw.length));
+    const target = visible.rawToNormalized[rawOffset] ?? 0;
+    const chunkStart = Math.max(0, Number(segment.chunkStart) || 0);
+    const chunkEnd = Math.min(
+      lastRenderedSource.length,
+      Number(segment.chunkEnd) || lastRenderedSource.length
+    );
+    const segmentStart = Math.max(
+      chunkStart,
+      Math.min(chunkEnd, Number(segment.sourceStart ?? chunkStart) || chunkStart)
+    );
+    const segmentEnd = Math.max(
+      segmentStart,
+      Math.min(chunkEnd, Number(segment.sourceEnd ?? chunkEnd) || chunkEnd)
+    );
+    const segmentSpan = Math.max(1, segmentEnd - segmentStart);
+    const coarse = segmentStart + target / Math.max(1, visible.text.length) * segmentSpan;
+
+    const findNearestCandidate = (searchStart, searchEnd) => {
+      const source = lastRenderedSource.slice(searchStart, searchEnd);
+      for (const radius of [56, 42, 30, 20, 12]) {
+        const leftStart = Math.max(0, target - radius);
+        const rightEnd = Math.min(visible.text.length, target + radius);
+        const leftText = visible.text.slice(leftStart, target);
+        const rightText = visible.text.slice(target, rightEnd);
+        if ((leftText + rightText).replace(/\s/g, "").length < 4) continue;
+        let pattern;
+        try {
+          pattern = new RegExp(
+            `(${escapedLiteralPattern(leftText)})(${escapedLiteralPattern(rightText)})`,
+            "g"
+          );
+        } catch (_error) {
+          continue;
+        }
+        const candidates = [];
+        let match;
+        while ((match = pattern.exec(source))) {
+          candidates.push(searchStart + match.index + match[1].length);
+          if (!match[0]) pattern.lastIndex += 1;
+        }
+        if (candidates.length) {
+          return candidates.sort((left, right) => (
+            Math.abs(left - coarse) - Math.abs(right - coarse)
+          ))[0];
+        }
+      }
+      return null;
+    };
+
+    // The proportional source ranges are usually close enough to make this a
+    // tiny search. If formatting commands made the estimate coarse, retry the
+    // same literal-context search over the complete source chunk before using
+    // the substantially more expensive render-based fallback.
+    const padding = Math.min(384, Math.max(96, Math.ceil(segmentSpan * 0.2)));
+    const localStart = Math.max(chunkStart, segmentStart - padding);
+    const localEnd = Math.min(chunkEnd, segmentEnd + padding);
+    const local = findNearestCandidate(localStart, localEnd);
+    if (local !== null) return local;
+    if (localStart !== chunkStart || localEnd !== chunkEnd) {
+      return findNearestCandidate(chunkStart, chunkEnd);
+    }
+    return null;
+  }
+
   function sourceIndexForTextSegment(segment, visibleOffset) {
+    const fastIndex = fastSourceIndexForTextSegment(segment, visibleOffset);
+    if (fastIndex !== null) return fastIndex;
     const source = lastRenderedSource.slice(segment.chunkStart, segment.chunkEnd);
-    const metadata = documentMetadata(
+    const metadata = lastRenderedMetadata || documentMetadata(
       lastRenderedSource.slice(0, documentBounds(lastRenderedSource).start)
     );
     const baselineParts = renderedPartTexts(source, metadata);
@@ -2574,7 +3985,17 @@
         if (!match[0]) pattern.lastIndex += 1;
       }
       if (exactCandidates.length) {
-        return segment.chunkStart + Math.max(...exactCandidates);
+        const sourceStart = Number(segment.sourceStart ?? segment.chunkStart) || 0;
+        const sourceEnd = Number(segment.sourceEnd ?? segment.chunkEnd) || lastRenderedSource.length;
+        const coarse = Math.max(0, Math.min(
+          source.length,
+          sourceStart - segment.chunkStart +
+            targetOffset / Math.max(1, visibleText.length) * Math.max(1, sourceEnd - sourceStart)
+        ));
+        const candidate = exactCandidates.sort((left, right) => (
+          Math.abs(left - coarse) - Math.abs(right - coarse)
+        ))[0];
+        return segment.chunkStart + candidate;
       }
     }
 
@@ -2638,7 +4059,7 @@
 
     const refinementRadius = Math.min(
       source.length,
-      Math.min(768, Math.max(256, Math.ceil(source.length / 64)))
+      Math.min(160, Math.max(64, Math.ceil(source.length / 256)))
     );
     const refinementStart = Math.max(
       0,
@@ -2669,17 +4090,85 @@
     return segment.chunkStart + best;
   }
 
-  function pointFromViewport(clientX, clientY) {
-    const position = document.caretPositionFromPoint?.(clientX, clientY);
-    if (position) return {
-      node: position.offsetNode,
-      offset: position.offset
+  function nearestTextPointInElement(element, clientX, clientY) {
+    if (!element?.isConnected) return null;
+    const caretRect = (node, offset) => {
+      try {
+        const range = document.createRange();
+        range.setStart(node, Math.max(0, Math.min(offset, node.data.length)));
+        range.collapse(true);
+        const rect = range.getBoundingClientRect();
+        return Number.isFinite(rect.left) && Number.isFinite(rect.top) ? rect : null;
+      } catch (_error) {
+        return null;
+      }
     };
+    const scoreRect = (rect) => {
+      if (!rect) return Number.POSITIVE_INFINITY;
+      const centerY = rect.top + (rect.height || 0) / 2;
+      return Math.abs(clientY - centerY) * 1000 + Math.abs(clientX - rect.left);
+    };
+
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let best = null;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      // KaTeX and mapped caption nodes have dedicated source mappings. This
+      // fallback is for ordinary prose whose native caret hit test occasionally
+      // returns the previously rendered visual caret instead of the click target.
+      if (node.parentElement?.closest(".katex")) continue;
+      const length = node.data.length;
+      let low = 0;
+      let high = length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        const rect = caretRect(node, middle);
+        if (!rect) break;
+        const centerY = rect.top + (rect.height || 0) / 2;
+        const lineTolerance = Math.max(2, (rect.height || 14) * 0.45);
+        if (centerY < clientY - lineTolerance) {
+          low = middle + 1;
+        } else if (centerY > clientY + lineTolerance) {
+          high = middle;
+        } else if (rect.left < clientX) {
+          low = middle + 1;
+        } else {
+          high = middle;
+        }
+      }
+      for (let offset = Math.max(0, low - 3); offset <= Math.min(length, low + 3); offset += 1) {
+        const rect = caretRect(node, offset);
+        const score = scoreRect(rect);
+        if (!best || score < best.score) best = { node, offset, score };
+      }
+    }
+    return best ? { node: best.node, offset: best.offset } : null;
+  }
+
+  function pointFromViewport(clientX, clientY, preferredElement = null) {
+    const pointBelongsToPreferredElement = (point) => {
+      if (!point?.node || !preferredElement) return true;
+      return point.node === preferredElement || preferredElement.contains(point.node);
+    };
+    const position = document.caretPositionFromPoint?.(clientX, clientY);
+    if (position) {
+      const point = {
+        node: position.offsetNode,
+        offset: position.offset
+      };
+      if (pointBelongsToPreferredElement(point)) return point;
+    }
     const range = document.caretRangeFromPoint?.(clientX, clientY);
-    return range ? {
-      node: range.startContainer,
-      offset: range.startOffset
-    } : null;
+    if (range) {
+      const point = {
+        node: range.startContainer,
+        offset: range.startOffset
+      };
+      if (pointBelongsToPreferredElement(point)) return point;
+    }
+    return preferredElement
+      ? nearestTextPointInElement(preferredElement, clientX, clientY)
+      : null;
   }
 
   function mappedInlineSourceIndex(point, clientX, clientY) {
@@ -2731,6 +4220,23 @@
     );
     if (inlineMappedIndex !== null) return inlineMappedIndex;
     const segments = page.smarttexTextSegments || [];
+    const directSegment = textSegmentForDomPoint(point);
+    if (
+      directSegment?.startAnchor?.isConnected &&
+      directSegment?.endAnchor?.isConnected
+    ) {
+      try {
+        const prefix = document.createRange();
+        prefix.setStartAfter(directSegment.startAnchor);
+        prefix.setEnd(point.node, point.offset);
+        return sourceIndexForTextSegment(
+          directSegment,
+          prefix.toString().length
+        );
+      } catch (_error) {
+        // Fall back to the defensive range scan for unusual DOM boundary points.
+      }
+    }
     for (const segment of segments) {
       if (!segment.startAnchor?.isConnected || !segment.endAnchor?.isConnected) continue;
       const range = document.createRange();
@@ -2877,7 +4383,7 @@
       0,
       Math.min(Number(indexValue) || 0, lastRenderedSource.length)
     );
-    const metadata = documentMetadata(
+    const metadata = lastRenderedMetadata || documentMetadata(
       lastRenderedSource.slice(0, documentBounds(lastRenderedSource).start)
     );
     const segments = page.smarttexTextSegments || [];
@@ -2888,11 +4394,15 @@
       ])
     ).values()].filter((chunk) => index >= chunk.start && index <= chunk.end);
     for (const chunk of chunks) {
-      const location = renderedPartLocation(
-        lastRenderedSource.slice(chunk.start, chunk.end),
+      const chunkSource = lastRenderedSource.slice(chunk.start, chunk.end);
+      const baselineParts = renderedPartTexts(chunkSource, metadata);
+      const location = resolveVisibleRenderedLocation(
+        chunkSource,
         index - chunk.start,
-        metadata
+        metadata,
+        baselineParts
       );
+      if (!location) continue;
       const segment = segments.find((candidate) => (
         candidate.chunkStart === chunk.start &&
         candidate.chunkEnd === chunk.end &&
@@ -2913,7 +4423,13 @@
 
   function refreshPreviewSourceHighlight(state) {
     clearPreviewSourceHighlight();
-    if (!preview || preview.hidden || !state || !lastRenderedSource) return;
+    if (
+      !showCursorPosition ||
+      !preview ||
+      preview.hidden ||
+      !state ||
+      !lastRenderedSource
+    ) return;
     const selectionFrom = Number(state.selectionFrom ?? state.cursorIndex) || 0;
     const selectionTo = Number(state.selectionTo ?? state.cursorIndex) || 0;
     if (selectionFrom === selectionTo) return;
@@ -2947,6 +4463,84 @@
     } catch (_error) {
       return { x: 0, y: 0 };
     }
+  }
+
+  function editorScrollViewport() {
+    return document.querySelector(
+      "#ide-redesign-panel-editor .cm-scroller, " +
+      "#ide-redesign-panel-editor .ace_scroller, " +
+      "[data-testid*='editor' i] .cm-scroller, " +
+      "[data-testid*='editor' i] .ace_scroller, " +
+      ".editor-pane .cm-scroller, .editor-pane .ace_scroller"
+    );
+  }
+
+  function editorCursorViewportRatio(state) {
+    const scroller = editorScrollViewport();
+    const cursorY = Number(state?.screen?.pageY) - window.scrollY;
+    if (!scroller || !Number.isFinite(cursorY)) return 0.5;
+    const rect = scroller.getBoundingClientRect();
+    if (!Number.isFinite(rect.height) || rect.height <= 1) return 0.5;
+    return Math.max(0.08, Math.min(0.92, (cursorY - rect.top) / rect.height));
+  }
+
+  function previewSourceRect(state) {
+    const page = preview?.querySelector(".smarttex-document-page");
+    if (!page || !lastRenderedSource || !state) return null;
+    const renderedIndex = mapCursorToRenderedSource(
+      state.value,
+      state.cursorIndex
+    );
+    const point = domPointForRenderedIndex(page, renderedIndex);
+    if (point?.node) {
+      try {
+        const range = document.createRange();
+        range.setStart(point.node, point.offset);
+        range.collapse(true);
+        const rect = range.getBoundingClientRect();
+        if (Number.isFinite(rect.top) && (rect.height || rect.width || rect.top)) {
+          return rect;
+        }
+      } catch (_error) {
+        // Fall back to the nearest source-ranged rendered block below.
+      }
+    }
+    return renderedSourceElement(page, renderedIndex)?.getBoundingClientRect?.() || null;
+  }
+
+  function synchronizeLiveViewScrollToEditor(state, force = false) {
+    if (
+      !keepLiveViewSynchronized ||
+      !liveEnabled ||
+      !preview ||
+      preview.hidden ||
+      !state
+    ) return;
+    const target = previewSourceRect(state);
+    if (!target) return;
+    const previewRect = preview.getBoundingClientRect();
+    if (!previewRect.height) return;
+    const ratio = editorCursorViewportRatio(state);
+    const desiredY = previewRect.top + previewRect.height * ratio;
+    const targetY = Number.isFinite(target.top)
+      ? target.top + Math.min(Math.max(target.height || 0, 0), 24) / 2
+      : desiredY;
+    const delta = targetY - desiredY;
+    if (!force && Math.abs(delta) < 3) return;
+    const maximum = Math.max(0, preview.scrollHeight - preview.clientHeight);
+    preview.scrollTop = Math.max(0, Math.min(maximum, preview.scrollTop + delta));
+  }
+
+  function scheduleLiveViewScrollSynchronization(state = currentState, force = false) {
+    if (!keepLiveViewSynchronized || !state) return;
+    if (scrollSynchronizationFrame !== null) {
+      cancelAnimationFrame(scrollSynchronizationFrame);
+    }
+    const snapshot = { ...state };
+    scrollSynchronizationFrame = requestAnimationFrame(() => {
+      scrollSynchronizationFrame = null;
+      synchronizeLiveViewScrollToEditor(snapshot, force);
+    });
   }
 
   function syncPreviewSelectionToEditor() {
@@ -3419,6 +5013,7 @@
 
   function bindPreviewInteractions(element) {
     let pan = null;
+    let textSelectionPointer = null;
     element.addEventListener("focus", () => {
       element.classList.add("smarttex-document-focused");
     });
@@ -3434,6 +5029,21 @@
       }
     });
     element.addEventListener("pointerdown", (event) => {
+      if (
+        event.button === 0 &&
+        !event.altKey &&
+        !event.target.closest(
+          "button, a, input, label, select, " +
+          ".smarttex-document-reference-popup"
+        )
+      ) {
+        textSelectionPointer = {
+          id: event.pointerId,
+          x: event.clientX,
+          y: event.clientY,
+          moved: false
+        };
+      }
       if (
         !(
           event.button === 1 ||
@@ -3454,6 +5064,12 @@
       element.setPointerCapture?.(event.pointerId);
     });
     element.addEventListener("pointermove", (event) => {
+      if (textSelectionPointer?.id === event.pointerId) {
+        textSelectionPointer.moved ||= Math.hypot(
+          event.clientX - textSelectionPointer.x,
+          event.clientY - textSelectionPointer.y
+        ) >= 4;
+      }
       if (!pan || pan.id !== event.pointerId) return;
       const deltaX = event.clientX - pan.x;
       const deltaY = event.clientY - pan.y;
@@ -3477,10 +5093,32 @@
       element.releasePointerCapture?.(event.pointerId);
     };
     element.addEventListener("pointerup", endPan);
-    element.addEventListener("pointerup", () => {
+    element.addEventListener("pointerup", (event) => {
+      if (textSelectionPointer?.id === event.pointerId) {
+        const page = element.querySelector(".smarttex-document-page");
+        const selection = document.getSelection();
+        if (
+          textSelectionPointer.moved &&
+          selection &&
+          !selection.isCollapsed &&
+          page?.contains(selection.anchorNode) &&
+          page.contains(selection.focusNode)
+        ) {
+          suppressPreviewClick = true;
+          window.setTimeout(() => {
+            suppressPreviewClick = false;
+          }, 0);
+        }
+        textSelectionPointer = null;
+      }
       window.setTimeout(syncPreviewSelectionToEditor, 0);
     });
-    element.addEventListener("pointercancel", endPan);
+    element.addEventListener("pointercancel", (event) => {
+      endPan(event);
+      if (textSelectionPointer?.id === event.pointerId) {
+        textSelectionPointer = null;
+      }
+    });
     element.addEventListener("click", (event) => {
       if (suppressPreviewClick) {
         suppressPreviewClick = false;
@@ -3492,18 +5130,23 @@
       if (!page) return;
       previewNavigationPreferredX = null;
       previewKeyboardHandoff = false;
+      // Resolve the DOM point before focusing the preview. Focus can trigger a
+      // synchronous caret refresh and replace text nodes under the mouse,
+      // making the first click resolve against the old visual caret instead of
+      // the text that was actually clicked.
+      const point = pointFromViewport(
+        event.clientX,
+        event.clientY,
+        event.target.closest(
+          "p, h1, h2, h3, h4, h5, figcaption, td, th, " +
+          ".smarttex-document-caption-source"
+        )
+      );
       element.focus({ preventScroll: true });
-      const selection = document.getSelection();
-      if (
-        selection &&
-        !selection.isCollapsed &&
-        page.contains(selection.anchorNode) &&
-        page.contains(selection.focusNode)
-      ) {
-        syncPreviewSelectionToEditor();
-        return;
-      }
-      const point = pointFromViewport(event.clientX, event.clientY);
+      // A stale non-collapsed DOM selection must not consume a later plain
+      // click. Genuine drag selections are detected from the pointer gesture
+      // above and suppress this click, while a normal click always remaps the
+      // requested position to the editor on the first attempt.
       const index = renderedIndexForDomPoint(
         page,
         point,
@@ -3630,7 +5273,13 @@
   }
 
   function revealPreviewCaret(caret) {
-    if (!caret || !preview || preview.hidden) return;
+    if (
+      keepLiveViewSynchronized ||
+      !showCursorPosition ||
+      !caret ||
+      !preview ||
+      preview.hidden
+    ) return;
     const caretRect = caret.getBoundingClientRect();
     const previewRect = preview.getBoundingClientRect();
     const margin = Math.min(56, Math.max(24, preview.clientHeight * 0.12));
@@ -3678,6 +5327,8 @@
         Math.max(0, Math.min(remaining, node.data.length))
       );
       tail.parentNode.insertBefore(caret, tail);
+      textSegmentByNode.set(tail, segment);
+      textSegmentByNode.set(caret, segment);
       return caret;
     }
     element.appendChild(caret);
@@ -3906,8 +5557,12 @@
   }
 
   function exactTextPartForCursor(page, state, renderedIndex) {
+    const fastPart = fastTextPartForCursor(page, state);
+    if (fastPart) return fastPart;
     const source = String(state.value || "");
-    const metadata = documentMetadata(source.slice(0, documentBounds(source).start));
+    const metadata = source === lastRenderedSource && lastRenderedMetadata
+      ? lastRenderedMetadata
+      : documentMetadata(source.slice(0, documentBounds(source).start));
     const segments = page.smarttexTextSegments || [];
     const chunks = [];
     for (const segment of segments) {
@@ -3949,12 +5604,15 @@
         0,
         Math.min(state.cursorIndex - currentStart, currentChunk.length)
       );
-      const placement = contextTools.resolveCaretPlacement(currentChunk, rawOffset);
-      const caretOffset = contextTools.commandAwareCaretOffset(
+      const baselineParts = renderedPartTexts(currentChunk, metadata);
+      const location = resolveVisibleRenderedLocation(
         currentChunk,
         rawOffset,
-        placement.commandSide
+        metadata,
+        baselineParts
       );
+      if (!location) continue;
+      const caretOffset = location.sourceOffset;
       const markedChunk = (
         currentChunk.slice(0, caretOffset) +
         TEXT_CARET +
@@ -3965,10 +5623,11 @@
       for (const part of parts) {
         if (/^\n{2,}$/.test(part) || !part.trim()) continue;
         const paragraph = part.trim();
-        if (!paragraph.includes(TEXT_CARET)) {
+        if (partIndex !== location.partIndex) {
           partIndex += 1;
           continue;
         }
+        if (!paragraph.includes(TEXT_CARET)) break;
         const marker = paragraph[0];
         const content = ["\uE110", "\uE111", "\uE112", "\uE113", "\uE114"]
           .includes(marker)
@@ -3979,7 +5638,7 @@
           candidate.chunkEnd === chunk.end &&
           candidate.partIndex === partIndex
         ));
-        if (!segment) return null;
+        if (!segment) break;
         return {
           segment,
           value: segment.leadingWhitespace + normalizedSeparatedText(content)
@@ -4006,13 +5665,21 @@
       fragment,
       showCaret ? String(value || "") : String(value || "").replaceAll(TEXT_CARET, "")
     );
+    const firstInsertedNode = fragment.firstChild;
+    const lastInsertedNode = fragment.lastChild;
     range.insertNode(fragment);
+    if (firstInsertedNode && lastInsertedNode) {
+      indexTextSegmentNodes(segment, firstInsertedNode, lastInsertedNode);
+    }
     segment.fastPatched = true;
     const caret = showCaret
       ? segment.element.querySelector(".smarttex-document-text-caret")
       : null;
     caret?.classList.add("smarttex-document-fast-caret");
-    return caret;
+    // In cursor-hidden mode callers still need a truthy result to commit the
+    // immediately patched prose source. Returning the segment element keeps
+    // that path independent from whether a visual caret was requested.
+    return showCaret ? caret : segment.element;
   }
 
   function referenceDecoratedText(value, model) {
@@ -4075,6 +5742,7 @@
     caret.className = "smarttex-document-text-caret smarttex-document-fast-caret";
     caret.setAttribute("aria-label", "Editor cursor");
     segment.endAnchor.parentNode.insertBefore(caret, segment.endAnchor);
+    textSegmentByNode.set(caret, segment);
     return caret;
   }
 
@@ -4161,15 +5829,32 @@
     const next = String(nextValue || "");
     const diff = difference || sourceEditDifference(previous, next);
     if (!diff) return false;
+    const structuralCommand = /\\(?:begin|end)\s*\{(?:itemize|enumerate|description|figure\*?|table\*?)\}|\\(?:section|subsection|subsubsection|paragraph)\*?\b|\\item\b/;
+    const changedPrevious = previous.slice(diff.oldStart, diff.oldEnd);
+    const changedNext = next.slice(diff.newStart, diff.newEnd);
+    if (structuralCommand.test(changedPrevious) || structuralCommand.test(changedNext)) {
+      return true;
+    }
+
+    const radius = 384;
     const previousWindow = previous.slice(
-      Math.max(0, diff.oldStart - 2),
-      Math.min(previous.length, diff.oldEnd + 2)
+      Math.max(0, diff.oldStart - radius),
+      Math.min(previous.length, diff.oldEnd + radius)
     );
     const nextWindow = next.slice(
-      Math.max(0, diff.newStart - 2),
-      Math.min(next.length, diff.newEnd + 2)
+      Math.max(0, diff.newStart - radius),
+      Math.min(next.length, diff.newEnd + radius)
     );
-    return /[\r\n]/.test(previousWindow) || /[\r\n]/.test(nextWindow);
+    const structureSignature = (value) => {
+      const text = removeComments(value);
+      const separators = text.match(/(?:\r?\n[ \t]*){2,}/g) || [];
+      const parts = text
+        .split(/(?:\r?\n[ \t]*){2,}/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+      return `${separators.length}:${parts.length}`;
+    };
+    return structureSignature(previousWindow) !== structureSignature(nextWindow);
   }
 
   function blockFlowContexts(sourceValue) {
@@ -4449,6 +6134,16 @@
         difference,
         "end"
       );
+      if (Number.isFinite(Number(segment.sourceStart))) {
+        segment.sourceStart = remapSourceIndexAfterEdit(
+          segment.sourceStart, difference, "start"
+        );
+      }
+      if (Number.isFinite(Number(segment.sourceEnd))) {
+        segment.sourceEnd = remapSourceIndexAfterEdit(
+          segment.sourceEnd, difference, "end"
+        );
+      }
       retainedSegments.push(segment);
     }
     remapExistingSourceMappings(page, difference);
@@ -4465,6 +6160,7 @@
         left.chunkStart - right.chunkStart || left.partIndex - right.partIndex
       ));
     page.smarttexReferenceModel = referenceModel;
+    lastRenderedMetadata = metadata;
     decorateReferenceTargets(page, source, referenceModel);
     decorateReferenceLinks(page, referenceModel);
     lastRenderedSource = source;
@@ -4634,6 +6330,16 @@
         difference,
         "end"
       );
+      if (Number.isFinite(Number(segment.sourceStart))) {
+        segment.sourceStart = remapSourceIndexAfterEdit(
+          segment.sourceStart, difference, "start"
+        );
+      }
+      if (Number.isFinite(Number(segment.sourceEnd))) {
+        segment.sourceEnd = remapSourceIndexAfterEdit(
+          segment.sourceEnd, difference, "end"
+        );
+      }
     }
 
     // Character-accurate mappings are only attached inside rendered captions
@@ -4720,6 +6426,17 @@
     }
     const page = preview.querySelector(".smarttex-document-page");
     if (!page) return { handled: false, contentPatched: false };
+    const cursorVisible = showCursorPosition;
+    if (!cursorVisible) {
+      clearFastCursor(page);
+      clearPreviewSourceHighlight();
+      // Cursor visibility is a display option only. Keep processing source
+      // changes so literal text and toolbar edits remain immediate in the live
+      // view even when the visual caret and selection highlight are disabled.
+      if (state.value === lastRenderedSource) {
+        return { handled: true, contentPatched: false };
+      }
+    }
     const renderedIndex = mapCursorToRenderedSource(
       state.value,
       state.cursorIndex
@@ -4748,6 +6465,14 @@
     // immediately after inserting or deleting paragraph separators.
     const exactPart = exactTextPartForCursor(page, state, renderedIndex);
     if (exactPart) {
+      if (!cursorVisible) {
+        const patched = replaceTextSegmentWithCaret(
+          exactPart,
+          { showCaret: false }
+        );
+        contentPatched = Boolean(patched) && changeTouchesActiveSelection;
+        return { handled: Boolean(patched), contentPatched };
+      }
       if (hasSelection) {
         if (
           state.value !== lastRenderedSource ||
@@ -4796,9 +6521,13 @@
       if (target.matches(
         ".smarttex-document-equation, .smarttex-document-inline-equation"
       )) {
+        // Equation selections must be rerendered even when the source text did
+        // not change. The previous short-circuit invoked the renderer only for
+        // source edits, so moving an editor selection into mathematics left the
+        // live view without its corresponding selection highlight.
+        const refreshed = refreshActiveRenderedBlock(target, state);
         contentPatched = (
-          changeTouchesActiveSelection &&
-          Boolean(refreshActiveRenderedBlock(target, state))
+          changeTouchesActiveSelection && Boolean(refreshed)
         );
       }
       refreshPreviewSourceHighlight(state);
@@ -4853,6 +6582,7 @@
       ) {
         commitFastRenderedSource(snapshot.value, snapshot);
       }
+      scheduleLiveViewScrollSynchronization(snapshot);
     });
   }
 
@@ -4908,7 +6638,10 @@
   function referenceDisplay(interaction, model) {
     const first = model.targets.get(interaction.labels[0]);
     if (interaction.type === "citation") {
-      return `[${interaction.labels.join(", ")}]`;
+      const numbers = interaction.labels.map((label) => (
+        model.citationNumbers?.get(label) || "?"
+      ));
+      return `[${numbers.join(", ")}]`;
     }
     const value = first?.number || interaction.labels[0] || "?";
     return interaction.command === "eqref" ? `(${value})` : value;
@@ -4949,13 +6682,9 @@
       navigateReference(interaction, model);
     });
     const show = (event) => {
-      const spinnerGeneration = showPopupLoadingSpinner(event, link);
-      window.requestAnimationFrame(() => {
-        try {
-          showReferencePopup(link, interaction, model);
-        } finally {
-          hidePopupLoadingSpinner(spinnerGeneration);
-        }
+      if (!referencePopupUsesHover()) return;
+      schedulePreviewHover(link, event, () => {
+        showReferencePopup(link, interaction, model);
       });
     };
     link.addEventListener("pointerenter", show);
@@ -5000,13 +6729,9 @@
       navigateReference(interaction, model);
     });
     const show = (event) => {
-      const spinnerGeneration = showPopupLoadingSpinner(event, link);
-      window.requestAnimationFrame(() => {
-        try {
-          showNestedReferencePopup(link, interaction, model);
-        } finally {
-          hidePopupLoadingSpinner(spinnerGeneration);
-        }
+      if (!referencePopupUsesHover()) return;
+      schedulePreviewHover(link, event, () => {
+        showNestedReferencePopup(link, interaction, model);
       });
     };
     link.addEventListener("pointerenter", show);
@@ -5058,6 +6783,7 @@
       }
       node.replaceWith(fragment);
     }
+    reindexTextSegments(page);
   }
 
   function ensureReferencePopup() {
@@ -5078,7 +6804,11 @@
     return `smarttex:citation-cache:v1:${window.location.origin}:${project}`;
   }
 
-  function loadCitationRecords() {
+  function loadCitationRecords({ force = false } = {}) {
+    if (force) {
+      citationRecordsPromise = null;
+      citationRecordsLoaded = false;
+    }
     if (citationRecordsPromise) return citationRecordsPromise;
     citationRecordsPromise = Promise.resolve(
       extensionApi?.storage?.local?.get?.(citationCacheKey())
@@ -5098,6 +6828,56 @@
       return citationRecords;
     });
     return citationRecordsPromise;
+  }
+
+  function requestCitationRefresh(button) {
+    if (!button || button.disabled) return Promise.resolve(false);
+    const requestId = `preview-${Date.now()}-${++citationRefreshCounter}`;
+    button.disabled = true;
+    button.classList.add("smarttex-citation-popup-refreshing");
+    button.innerHTML = '<span class="smarttex-citation-refresh-spinner" aria-hidden="true"></span> Refreshing…';
+    return new Promise((resolve) => {
+      const timeout = window.setTimeout(() => {
+        pendingCitationRefreshes.delete(requestId);
+        button.disabled = false;
+        button.classList.remove("smarttex-citation-popup-refreshing");
+        button.innerHTML = '<span aria-hidden="true">↻</span> Refresh';
+        resolve(false);
+      }, 30000);
+      pendingCitationRefreshes.set(requestId, { button, resolve, timeout });
+      window.dispatchEvent(new CustomEvent(CITATION_REFRESH_REQUEST_EVENT, {
+        detail: JSON.stringify({ requestId, source: "live-preview-popup" })
+      }));
+    });
+  }
+
+  function appendCitationRefreshControl(container, onRefreshed) {
+    const bar = document.createElement("div");
+    bar.className = "smarttex-citation-popup-toolbar";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "smarttex-citation-popup-refresh";
+    button.title = "Re-parse bibliography files";
+    button.setAttribute("aria-label", "Refresh bibliography");
+    button.innerHTML = '<span aria-hidden="true">↻</span> Refresh';
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      requestCitationRefresh(button).then((ok) => {
+        if (!ok) return;
+        return loadCitationRecords({ force: true }).then(() => onRefreshed?.());
+      });
+    });
+    bar.appendChild(button);
+    container.appendChild(bar);
   }
 
   function citationRecordCard(record, label) {
@@ -5152,7 +6932,21 @@
   }
 
   function renderCitationPopupCards(popup, labels) {
+    const scrollState = capturePopupScrollState(popup);
     popup.replaceChildren();
+    appendCitationRefreshControl(popup, () => {
+      if (popup.isConnected && !popup.hidden) {
+        renderCitationPopupCards(popup, labels);
+        const anchor = popup.__smarttexAnchor;
+        if (anchor?.isConnected) {
+          if (popup === nestedReferencePopup) {
+            positionNestedReferencePopup(anchor, popup);
+          } else if (popup === referencePopup) {
+            positionReferencePopup(anchor, popup);
+          }
+        }
+      }
+    });
     const visibleLabels = labels.slice(0, 8);
     for (const label of visibleLabels) {
       const targetText = citationRecords.get(label)
@@ -5171,6 +6965,7 @@
       more.textContent = `+${labels.length - visibleLabels.length} more citations`;
       popup.appendChild(more);
     }
+    restorePopupScrollState(popup, scrollState);
   }
 
   function popupCitationTargetText(label) {
@@ -5185,13 +6980,46 @@
     const source = String(currentState?.value || "");
     const cursor = Number(currentState?.cursorIndex);
     if (!Number.isInteger(cursor) || !source) return false;
-    const masked = contextTools.maskIgnoredLatex(source);
-    const pattern = /\\(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{[^{}]*\}/gi;
-    let match;
-    while ((match = pattern.exec(masked))) {
-      if (cursor >= match.index && cursor <= pattern.lastIndex) return true;
+    if (
+      source === citationCursorCheckSource &&
+      cursor === citationCursorCheckIndex
+    ) return citationCursorCheckResult;
+
+    let result = false;
+    if (source === lastRenderedSource) {
+      const model = preview?.querySelector(".smarttex-document-page")
+        ?.smarttexReferenceModel;
+      result = Boolean(model?.interactions?.some((interaction) => (
+        interaction.type === "citation" &&
+        cursor >= interaction.sourceIndex &&
+        cursor <= interaction.sourceEnd
+      )));
+    } else {
+      // Only inspect a small line-aligned window around the cursor. Masking the
+      // complete LaTeX document here made a single preview hover block the UI
+      // for large manuscripts.
+      const roughStart = Math.max(0, cursor - 4096);
+      const previousLine = source.lastIndexOf("\n", roughStart);
+      const start = previousLine < 0 ? 0 : previousLine + 1;
+      const roughEnd = Math.min(source.length, cursor + 4096);
+      const nextLine = source.indexOf("\n", roughEnd);
+      const end = nextLine < 0 ? source.length : nextLine;
+      const masked = contextTools.maskIgnoredLatex(source.slice(start, end));
+      const pattern = /\\(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{[^{}]*\}/gi;
+      let match;
+      while ((match = pattern.exec(masked))) {
+        const absoluteStart = start + match.index;
+        const absoluteEnd = start + pattern.lastIndex;
+        if (cursor >= absoluteStart && cursor <= absoluteEnd) {
+          result = true;
+          break;
+        }
+      }
     }
-    return false;
+    citationCursorCheckSource = source;
+    citationCursorCheckIndex = cursor;
+    citationCursorCheckResult = result;
+    return result;
   }
 
   function ensureNestedReferencePopup() {
@@ -5262,6 +7090,7 @@
   }
 
   function renderReferencePopupContent(popup, interaction, model) {
+    const scrollState = capturePopupScrollState(popup);
     popup.replaceChildren();
     if (interaction.type === "citation") {
       renderCitationPopupCards(popup, interaction.labels);
@@ -5283,9 +7112,11 @@
         popup.appendChild(missing);
       }
     }
+    restorePopupScrollState(popup, scrollState);
   }
 
   function showReferencePopup(anchor, interaction, model) {
+    if (!popupInteractionReady()) return;
     if (interaction.type === "citation" && cursorIsInsideCitationCommand()) {
       hideReferencePopup();
       hideNestedReferencePopup();
@@ -5295,7 +7126,18 @@
     hideNestedReferencePopup();
     const generation = ++referencePopupGeneration;
     const popup = ensureReferencePopup();
-    renderReferencePopupContent(popup, interaction, model);
+    const popupKey = referencePopupKey(interaction);
+    popup.__smarttexAnchor = anchor;
+    if (
+      popup.hidden ||
+      popup.__smarttexKey !== popupKey ||
+      popup.__smarttexModel !== model
+    ) {
+      renderReferencePopupContent(popup, interaction, model);
+      popup.__smarttexFigureKey = "";
+      popup.__smarttexKey = popupKey;
+      popup.__smarttexModel = model;
+    }
     popup.hidden = false;
     positionReferencePopup(anchor, popup);
     if (interaction.type === "citation" && !citationRecordsLoaded) {
@@ -5312,7 +7154,7 @@
   }
 
   function showNestedReferencePopup(anchor, interaction, model) {
-    if (!interaction?.labels?.length) return;
+    if (!popupInteractionReady() || !interaction?.labels?.length) return;
     if (interaction.type === "citation" && cursorIsInsideCitationCommand()) {
       hideNestedReferencePopup();
       return;
@@ -5321,7 +7163,18 @@
     window.clearTimeout(nestedReferencePopupTimer);
     const generation = ++nestedReferencePopupGeneration;
     const popup = ensureNestedReferencePopup();
-    renderReferencePopupContent(popup, interaction, model);
+    const popupKey = referencePopupKey(interaction);
+    popup.__smarttexAnchor = anchor;
+    if (
+      popup.hidden ||
+      popup.__smarttexKey !== popupKey ||
+      popup.__smarttexModel !== model
+    ) {
+      renderReferencePopupContent(popup, interaction, model);
+      popup.__smarttexFigureKey = "";
+      popup.__smarttexKey = popupKey;
+      popup.__smarttexModel = model;
+    }
     popup.hidden = false;
     positionNestedReferencePopup(anchor, popup);
     if (interaction.type === "citation" && !citationRecordsLoaded) {
@@ -5344,6 +7197,7 @@
   }
 
   function scheduleHideNestedReferencePopup() {
+    cancelScheduledPreviewHover();
     window.clearTimeout(nestedReferencePopupTimer);
     nestedReferencePopupTimer = window.setTimeout(() => {
       if (
@@ -5355,7 +7209,10 @@
   }
 
   function hideReferencePopup() {
+    cancelScheduledPreviewHover();
     window.clearTimeout(referencePopupTimer);
+    referencePopupInteractionUntil = 0;
+    referencePopupPointerDown = false;
     referencePopupGeneration += 1;
     hidePopupLoadingSpinner();
     hideNestedReferencePopup();
@@ -5363,6 +7220,7 @@
   }
 
   function scheduleHideReferencePopup() {
+    cancelScheduledPreviewHover();
     window.clearTimeout(referencePopupTimer);
     referencePopupTimer = window.setTimeout(() => {
       if (
@@ -5372,6 +7230,16 @@
       hideReferencePopup();
     }, 180);
   }
+
+  document.addEventListener("pointerup", () => {
+    referencePopupPointerDown = false;
+  }, true);
+  document.addEventListener("pointercancel", () => {
+    referencePopupPointerDown = false;
+  }, true);
+  window.addEventListener("blur", () => {
+    referencePopupPointerDown = false;
+  });
 
   async function renderDocument(state, generation) {
     if (!preview || !liveEnabled || generation !== renderGeneration) return;
@@ -5384,6 +7252,7 @@
     const referenceModel = documentReferenceModel(source);
     const metadata = documentMetadata(source.slice(0, bounds.start));
     const previousScrollTop = preview.scrollTop;
+    const previousScrollLeft = preview.scrollLeft;
     const page = document.createElement("article");
     page.className = "smarttex-document-page";
     page.dataset.fileName = String(state.fileName || "");
@@ -5446,6 +7315,7 @@
     }
     page.smarttexTextSegments = flow.segments;
     page.smarttexReferenceModel = referenceModel;
+    lastRenderedMetadata = metadata;
     decorateReferenceTargets(page, source, referenceModel);
     decorateReferenceLinks(page, referenceModel);
     if (!zoomControls) zoomControls = createZoomControls();
@@ -5458,18 +7328,29 @@
     if (globalThis.ResizeObserver) {
       zoomResizeObserver = new ResizeObserver(() => updateZoomLayout());
       zoomResizeObserver.observe(page);
+      zoomResizeObserver.observe(preview);
     }
     applyZoom(zoom);
     lastRenderedSource = source;
     preview.scrollTop = previousScrollTop;
+    preview.scrollLeft = previousScrollLeft;
     preview.dataset.lastRenderedAt = String(Date.now());
     refreshPreviewSourceHighlight(state);
     requestAnimationFrame(() => {
       if (generation !== renderGeneration || !liveEnabled) return;
+      if (keepLiveViewSynchronized) {
+        scheduleLiveViewScrollSynchronization(
+          currentState?.value === state.value ? currentState : state,
+          true
+        );
+      }
       const caret = preview.querySelector(
         ".smarttex-rendered-caret, .smarttex-table-rendered-caret, .smarttex-document-text-caret"
       );
-      if (!caret) return;
+      if (!caret) {
+        if (showCursorPosition && currentState) scheduleFastCursorUpdate(currentState);
+        return;
+      }
       const caretRect = caret.getBoundingClientRect();
       const previewRect = preview.getBoundingClientRect();
       if (
@@ -5538,6 +7419,14 @@
     }, delay);
   }
 
+  window.addEventListener(NAVIGATION_PUSH_EVENT, (event) => {
+    try {
+      pushNavigationOrigin(JSON.parse(String(event.detail || "{}")));
+    } catch (_error) {
+      // Ignore malformed navigation-history events from unrelated page scripts.
+    }
+  });
+
   window.addEventListener(STATE_EVENT, (event) => {
     const previousValue = currentState?.value;
     const previousFileName = currentState?.fileName;
@@ -5560,29 +7449,42 @@
       previousFileName !== currentState?.fileName
     );
     if (fileChanged) {
+      if (
+        navigationHistory.length &&
+        navigationHistory.at(-1)?.fileName !== String(currentState?.fileName || "")
+      ) {
+        navigationHistory.length = 0;
+        updateNavigationBackButton();
+      }
       if (fastCursorFrame !== null) {
         cancelAnimationFrame(fastCursorFrame);
         fastCursorFrame = null;
       }
       lastRenderedSource = "";
+      lastRenderedMetadata = null;
       lastSeenFingerprint = "";
       pendingContentSince = null;
       scheduleRender({ force: true });
       return;
     }
-    const pendingStructuralUpdate = (
-      pendingFastStructureSource === currentState?.value
-    );
-    let fastMode = "none";
-    if (contentChanged || pendingStructuralUpdate) {
-      fastMode = updatePreviewAfterSourceMutation(previousValue, currentState);
-    } else {
+    if (!contentChanged) {
+      // Cursor, selection, and editor-scroll changes are handled by the exact
+      // fast mapping path. Rebuilding the complete document after every such
+      // event caused avoidable latency and brief caret/selection desynchrony,
+      // especially around structural commands and while a paragraph-region
+      // update was still pending.
       scheduleFastCursorUpdate(currentState);
+      return;
     }
+
+    const fastMode = updatePreviewAfterSourceMutation(
+      previousValue,
+      currentState
+    );
     if (fastMode === "force") {
       scheduleRender({ force: true, contentChanged: true });
     } else {
-      scheduleRender({ contentChanged });
+      scheduleRender({ contentChanged: true });
     }
   });
 
@@ -5594,48 +7496,118 @@
     ) {
       closeSettingsMenu();
     }
+    if (
+      activeToolbarDropdown &&
+      !activeToolbarDropdown.contains(event.target) &&
+      !activeToolbarDropdown._smarttexAnchor?.contains(event.target)
+    ) {
+      closeToolbarDropdown();
+    }
   }, true);
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !settingsMenu?.hidden) {
+    if (event.key !== "Escape") return;
+    if (!settingsMenu?.hidden) {
       closeSettingsMenu();
       settingsButton?.focus({ preventScroll: true });
     }
+    if (activeToolbarDropdown) closeToolbarDropdown({ restoreEditorFocus: true });
+    if (tableDialog) closeTableDialog();
   }, true);
 
   window.addEventListener("resize", () => {
     positionSettingsMenu();
     positionActivitySpinner();
+    if (activeToolbarDropdown && !activeToolbarDropdown.hidden) {
+      positionToolbarDropdown(
+        activeToolbarDropdown,
+        activeToolbarDropdown._smarttexAnchor
+      );
+    }
   }, { passive: true });
 
   if (extensionApi?.storage?.local?.get) {
     extensionApi.storage.local.get(FEATURES_KEY).then((stored) => {
       const features = stored?.[FEATURES_KEY];
       figureHoverPreviewsEnabled = features?.figures !== false;
+      showLiveDocumentPreviewButton = features?.liveDocumentPreview === true;
+      applyLiveDocumentPreviewButtonVisibility();
     }).catch(() => {
       figureHoverPreviewsEnabled = true;
+      showLiveDocumentPreviewButton = false;
+      applyLiveDocumentPreviewButtonVisibility();
+    });
+    extensionApi.storage.local.get(REFERENCE_POPUPS_KEY).then((stored) => {
+      referencePopupTrigger = stored?.[REFERENCE_POPUPS_KEY]?.trigger === "cursor"
+        ? "cursor"
+        : "hover";
+      if (!referencePopupUsesHover()) hideReferencePopup();
+    }).catch(() => {
+      referencePopupTrigger = "hover";
     });
     extensionApi.storage.local.get(SETTINGS_KEY).then((stored) => {
       const settings = stored?.[SETTINGS_KEY] || {};
       applyTextScale(settings.textScale);
       applyZoom(settings.zoom);
       setRenderFigures(settings.renderFigures);
+      setShowCursorPosition(settings.showCursorPosition !== false);
+      setKeepLiveViewSynchronized(settings.keepLiveViewSynchronized === true);
     }).catch((error) => {
       console.warn("SmartTeX could not load the live-preview settings:", error);
       applyTextScale(DEFAULT_TEXT_SCALE);
       applyZoom(DEFAULT_ZOOM);
       setRenderFigures(false);
+      setShowCursorPosition(true);
+      setKeepLiveViewSynchronized(false);
     });
   }
 
   extensionApi?.storage?.onChanged?.addListener((changes, areaName) => {
-    if (areaName !== "local" || !changes?.[FEATURES_KEY]) return;
-    const features = changes[FEATURES_KEY].newValue;
-    figureHoverPreviewsEnabled = features?.figures !== false;
-    if (!figureHoverPreviewsEnabled) hideReferencePopup();
+    if (areaName !== "local") return;
+    if (changes?.[FEATURES_KEY]) {
+      const features = changes[FEATURES_KEY].newValue;
+      figureHoverPreviewsEnabled = features?.figures !== false;
+      showLiveDocumentPreviewButton = features?.liveDocumentPreview === true;
+      applyLiveDocumentPreviewButtonVisibility();
+      if (!figureHoverPreviewsEnabled) hideReferencePopup();
+    }
+    if (changes?.[REFERENCE_POPUPS_KEY]) {
+      referencePopupTrigger = changes[REFERENCE_POPUPS_KEY].newValue?.trigger === "cursor"
+        ? "cursor"
+        : "hover";
+      hideReferencePopup();
+    }
   });
 
   attachPdfIntegration();
+  window.addEventListener(CITATION_REFRESH_RESULT_EVENT, (event) => {
+    let detail = {};
+    try {
+      detail = JSON.parse(String(event.detail || "{}"));
+    } catch (_error) {
+      return;
+    }
+    const requestId = String(detail.requestId || "");
+    const pending = pendingCitationRefreshes.get(requestId);
+    if (!pending) return;
+    window.clearTimeout(pending.timeout);
+    pendingCitationRefreshes.delete(requestId);
+    if (pending.button?.isConnected) {
+      pending.button.disabled = false;
+      pending.button.classList.remove("smarttex-citation-popup-refreshing");
+      pending.button.innerHTML = detail.ok
+        ? '<span aria-hidden="true">✓</span> Refreshed'
+        : '<span aria-hidden="true">↻</span> Refresh';
+      pending.button.title = detail.message || "Re-parse bibliography files";
+    }
+    pending.resolve(detail.ok === true);
+  });
+
+  window.addEventListener(CITATION_CACHE_UPDATED_EVENT, () => {
+    citationRecordsPromise = null;
+    citationRecordsLoaded = false;
+  });
+
   loadCitationRecords();
   observer = new MutationObserver((mutations) => {
     if (mutations.some((mutation) => mutation.type === "childList")) {
@@ -5678,4 +7650,10 @@
     }
     pendingRequests.clear();
   }, { once: true });
+  };
+
+  initializeWhenDependenciesAreReady().catch((error) => {
+    globalThis.__smartTeXDocumentPreviewLoading = false;
+    console.error(error?.message || "SmartTeX: The full-document preview renderer could not be loaded.", error);
+  });
 })();

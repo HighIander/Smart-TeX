@@ -46,6 +46,7 @@
   <script src="../vendor/katex/katex.min.js"></script>
   <script src="../latex-context.js"></script>
   <script src="../table-renderer.js"></script>
+  <script src="../table-editor.js"></script>
   <script src="../figure-renderer.js"></script>
   <script src="../document-preview.js"></script>
   <script>
@@ -108,6 +109,22 @@
       );
     }
 
+    async function cursorMapsTo(
+      value,
+      cursorIndex,
+      paragraphNeedle,
+      expectedPrefix
+    ) {
+      dispatch(value, cursorIndex);
+      await delay(80);
+      const context = renderedCaretContext();
+      return Boolean(
+        context &&
+        context.paragraph.textContent.includes(paragraphNeedle) &&
+        context.prefix === expectedPrefix
+      );
+    }
+
     async function run() {
       const source = String.raw`\documentclass{article}
 \newcommand{\hlc}[1]{\textbf{#1}}
@@ -119,6 +136,8 @@ Earlier paragraph remains unchanged.
 In the following we assume an XFEL beam created by a stationary random process.
 \hlc{A }SASE XFEL pulse typically has a rather large bandwidth, and the following words must remain visible.
 We now only treat a single coherent slice.
+
+Temporary paragraph that will be removed completely.
 
 \begin{equation}
 E=mc^2
@@ -134,6 +153,35 @@ Far destination paragraph for a preceding fast text edit.
       const renderedAt = document.querySelector(
         ".smarttex-document-preview"
       ).dataset.lastRenderedAt;
+
+      const labelStart = source.indexOf("\\label{sec:Coherence}");
+      const sectionStart = source.indexOf("\\section{Coherence}");
+      const specialCommandChecks = {
+        labelInterior: await cursorMapsTo(
+          source,
+          labelStart + "\\label{sec:".length,
+          "In the following we assume an XFEL",
+          ""
+        ),
+        labelEnd: await cursorMapsTo(
+          source,
+          labelStart + "\\label{sec:Coherence}".length,
+          "In the following we assume an XFEL",
+          ""
+        ),
+        sectionPrefix: await cursorMapsTo(
+          source,
+          sectionStart + 4,
+          "Coherence",
+          ""
+        ),
+        sectionTitle: await cursorMapsTo(
+          source,
+          source.indexOf("Coherence", sectionStart) + 4,
+          "Coherence",
+          "Cohe"
+        )
+      };
 
       const fastEdited = source.replace(
         "Far destination paragraph",
@@ -230,7 +278,25 @@ Far destination paragraph for a preceding fast text edit.
         "single coherent slice. New paragraph"
       );
 
-      const literalEdit = removedAgain.replace(
+      const paragraphRemoved = removedAgain.replace(
+        "\n\nTemporary paragraph that will be removed completely.",
+        ""
+      );
+      dispatch(
+        paragraphRemoved,
+        paragraphRemoved.indexOf("\\begin{equation}") - 1
+      );
+      await delay(110);
+      const removedParagraphCorrect = (
+        !document.querySelector(".smarttex-document-page").textContent.includes(
+          "Temporary paragraph that will be removed completely."
+        ) &&
+        document.querySelectorAll(
+          ".smarttex-document-page .smarttex-document-equation"
+        ).length === 1
+      );
+
+      const literalEdit = paragraphRemoved.replace(
         "New paragraph starts",
         "New responsive paragraph starts"
       );
@@ -252,6 +318,8 @@ Far destination paragraph for a preceding fast text edit.
         cursorAfterInsertion,
         cursorBeforeInsertion,
         cursorAfterRemoval,
+        removedParagraphCorrect,
+        ...specialCommandChecks,
         lightweightCommit,
         immediate
       };

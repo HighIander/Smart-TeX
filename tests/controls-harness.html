@@ -65,6 +65,11 @@
       data-path="figures/preview.png"
       data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='360' height='140'%3E%3Crect width='360' height='140' fill='%233158b8'/%3E%3C/svg%3E"
     ></div>
+    <div
+      role="treeitem"
+      data-path="figures/preview-second.png"
+      data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='360' height='140'%3E%3Crect width='360' height='140' fill='%235b3da5'/%3E%3C/svg%3E"
+    ></div>
   </div>
   <div class="ide-redesign-toolbar-actions">
     <div id="ctca-project-cloud-slot" class="ide-redesign-toolbar-button-container ctca-project-cloud-slot">
@@ -81,6 +86,8 @@
     const storageListeners = [];
     const sentMessages = [];
     const editorRequests = [];
+    let coordinateMode = "fit";
+    let coordinateRequestCount = 0;
     globalThis.browser = {
       storage: {
         local: {
@@ -114,12 +121,28 @@
     window.addEventListener("smarttex:citation-editor-request", (event) => {
       const request = JSON.parse(event.detail);
       editorRequests.push(request);
+      const payload = {
+        requestId: request.requestId,
+        ok: true,
+        index: request.index
+      };
+      if (request.type === "getCoordinates") {
+        const opening = coordinateRequestCount % 2 === 0;
+        coordinateRequestCount += 1;
+        payload.screen = coordinateMode === "fit"
+          ? {
+            pageX: opening ? 300 : 330,
+            pageY: opening ? 260 : 430,
+            lineHeight: 22
+          }
+          : {
+            pageX: 300,
+            pageY: opening ? -120 : window.innerHeight + 120,
+            lineHeight: 22
+          };
+      }
       window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
-        detail: JSON.stringify({
-          requestId: request.requestId,
-          ok: true,
-          index: request.index
-        })
+        detail: JSON.stringify(payload)
       }));
     });
   </script>
@@ -139,13 +162,23 @@
 E=mc^2
 \label{eq:test}
 \end{equation}
-\begin{figure}
-\includegraphics{figures/preview}
+\begin{figure*}
+\begin{minipage}[b]{0.49\textwidth}
+\includegraphics[width=\linewidth]{figures/preview}
+\end{minipage}
+\hfill
+\begin{minipage}[b]{0.49\textwidth}
+\includegraphics[width=\linewidth]{figures/preview-second}
+\end{minipage}
 \caption{A popup figure from Eqn.~\eqref{eq:test}, with \hlc{distributed} data and $x^2$}
-\end{figure}`;
+\end{figure*}`;
     const figureCursor = figureSource.indexOf("includegraphics");
+    const oversizedFigureSource = String.raw`\begin{figure}
+\includegraphics[width=1200px]{figures/preview}
+\caption{Oversized figure}
+\end{figure}`;
 
-    function dispatch(value, cursorIndex) {
+    function dispatch(value, cursorIndex, focused = true) {
       window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
         detail: JSON.stringify({
           value,
@@ -154,7 +187,7 @@ E=mc^2
           selectionTo: cursorIndex,
           screen: { pageX: 480, pageY: 360, lineHeight: 24 },
           fileName: "main.tex",
-          focused: true,
+          focused,
           editorKind: "harness"
         })
       }));
@@ -180,6 +213,11 @@ E=mc^2
       dispatch(equationSource, equationCursor);
       await delay(150);
       checks.xSuppressesSameContext = popup.hidden;
+      dispatch(equationSource, equationCursor, false);
+      await delay(80);
+      dispatch(equationSource, equationCursor, true);
+      await delay(150);
+      checks.xSuppressesSameContextAfterFocusRoundTrip = popup.hidden;
 
       dispatch(equationSource, 0);
       await delay(80);
@@ -209,6 +247,34 @@ E=mc^2
         !popup.classList.contains("smarttex-preview-stale") &&
         Boolean(popup.querySelector(".katex"))
       );
+      document.documentElement.classList.add("smarttex-document-live");
+      checks.popupVisibleDuringLivePreview = getComputedStyle(popup).display !== "none";
+      document.documentElement.classList.remove("smarttex-document-live");
+
+      const operatorEnvironmentSource = String.raw`\DeclareMathOperator{\erfcx}{erfcx}
+\begin{equation}
+\erfcx(x)=1
+\end{equation}`;
+      coordinateMode = "fit";
+      dispatch(operatorEnvironmentSource, operatorEnvironmentSource.indexOf("=1"));
+      popup = await waitForPreview("equation");
+      await delay(80);
+      checks.declareMathOperatorPopup = popup.textContent.includes("erfcx");
+      checks.environmentAnchor = popup.dataset.anchorMode === "environment";
+
+      coordinateMode = "large";
+      document.dispatchEvent(new PointerEvent("pointermove", {
+        clientX: 180,
+        clientY: 520,
+        bubbles: true
+      }));
+      dispatch(operatorEnvironmentSource, operatorEnvironmentSource.indexOf("(x)"));
+      await delay(100);
+      checks.largeEnvironmentPointerFallback = (
+        popup.dataset.anchorMode === "pointer" &&
+        Math.abs(popup.getBoundingClientRect().left - 132) < 100
+      );
+      coordinateMode = "fit";
 
       changeFeatures({ equations: false, tables: true, figures: true });
       await delay(150);
@@ -231,38 +297,92 @@ E=mc^2
       }
       const figureImage = popup.querySelector(".smarttex-figure-popup-image");
       const figureRect = popup.getBoundingClientRect();
+      const figureRow = popup.querySelector(".smarttex-figure-layout-row");
+      const figurePanels = [...popup.querySelectorAll(".smarttex-figure-layout-panel")];
+      const firstPanelRect = figurePanels[0]?.getBoundingClientRect();
+      const secondPanelRect = figurePanels[1]?.getBoundingClientRect();
       const captionReference = popup.querySelector(
         ".smarttex-caption-reference"
       );
-      checks.figureSwitch = (
-        !popup.hidden &&
-        popup.querySelector(".smarttex-preview-title").textContent === "Figure preview" &&
-        popup.querySelector(".smarttex-preview-meta").textContent === "Figure 1" &&
-        popup.textContent.includes("A popup figure") &&
-        popup.querySelector("figcaption strong")?.textContent === "Fig. 1:" &&
-        popup.querySelector("figcaption .katex")?.textContent.includes("x2") &&
-        captionReference?.textContent === "(1)" &&
-        getComputedStyle(captionReference).pointerEvents === "auto" &&
-        popup.querySelector("figcaption mark")?.textContent === "distributed" &&
-        popup.querySelector("figcaption mark")?.style.backgroundColor === "cyan" &&
-        !popup.textContent.includes("\\hlc") &&
-        Boolean(figureImage) &&
-        popup.querySelector(".smarttex-equation-output").scrollWidth <=
-          popup.querySelector(".smarttex-equation-output").clientWidth + 1 &&
-        popup.querySelector(".smarttex-equation-output").scrollHeight <=
-          popup.querySelector(".smarttex-equation-output").clientHeight + 1 &&
-        figureRect.width <= window.innerWidth * 0.4 + 2 &&
-        figureImage.getBoundingClientRect().width <= window.innerWidth * 0.4 + 2 &&
-        figureImage.getBoundingClientRect().height <= window.innerHeight * 0.4 + 2
+      const figureChecks = {
+        visible: !popup.hidden,
+        title: popup.querySelector(".smarttex-preview-title").textContent === "Figure preview",
+        meta: popup.querySelector(".smarttex-preview-meta").textContent === "Figure 1",
+        captionText: popup.textContent.includes("A popup figure"),
+        captionLabel: popup.querySelector("figcaption strong")?.textContent === "Fig. 1:",
+        captionMath: popup.querySelector("figcaption .katex")?.textContent.includes("x2"),
+        captionReference: captionReference?.textContent === "(1)",
+        captionPointer: getComputedStyle(captionReference).pointerEvents === "auto",
+        highlight: popup.querySelector("figcaption mark")?.textContent === "distributed",
+        highlightColor: popup.querySelector("figcaption mark")?.style.backgroundColor === "cyan",
+        macroHidden: !popup.textContent.includes("\\hlc"),
+        image: Boolean(figureImage),
+        row: Boolean(figureRow),
+        panels: figurePanels.length === 2,
+        aligned: Boolean(firstPanelRect && secondPanelRect && Math.abs(firstPanelRect.top - secondPanelRect.top) < 3),
+        sideBySide: Boolean(firstPanelRect && secondPanelRect && secondPanelRect.left > firstPanelRect.right),
+        outputFits: popup.querySelector(".smarttex-equation-output").scrollWidth <=
+          popup.querySelector(".smarttex-equation-output").clientWidth + 1,
+        popupFits: figureRect.width <= window.innerWidth * 0.7 + 2,
+        panelWidth: figureImage.getBoundingClientRect().width < figureRow.getBoundingClientRect().width * 0.55
+      };
+      checks.figureSwitch = Object.values(figureChecks).every(Boolean);
+      window.smarttexFigureChecks = figureChecks;
+
+      dispatch(oversizedFigureSource, oversizedFigureSource.indexOf("includegraphics"));
+      popup = await waitForPreview("figure");
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if (
+          popup.querySelector(".smarttex-figure-popup-image") &&
+          popup.textContent.includes("Oversized figure")
+        ) break;
+        await delay(20);
+      }
+      const oversizedViewport = popup.querySelector(".smarttex-figure-popup-viewport");
+      const oversizedScrollable = Boolean(
+        oversizedViewport && oversizedViewport.scrollWidth > oversizedViewport.clientWidth
       );
-      captionReference.dispatchEvent(new PointerEvent("pointerenter"));
+      if (oversizedViewport) {
+        oversizedViewport.scrollLeft = Math.min(
+          140,
+          oversizedViewport.scrollWidth - oversizedViewport.clientWidth
+        );
+        oversizedViewport.dispatchEvent(new PointerEvent("pointerdown", {
+          bubbles: true,
+          pointerId: 7,
+          clientX: oversizedViewport.getBoundingClientRect().right - 5,
+          clientY: oversizedViewport.getBoundingClientRect().bottom - 5
+        }));
+        oversizedViewport.dispatchEvent(new PointerEvent("pointerup", {
+          bubbles: true,
+          pointerId: 7
+        }));
+      }
+      await delay(220);
+      checks.oversizedFigureScrollbar = Boolean(
+        oversizedScrollable &&
+        !popup.hidden &&
+        oversizedViewport.scrollLeft > 0
+      );
+
+      dispatch(figureSource, figureCursor);
+      popup = await waitForPreview("figure");
+      let captionReferenceAfterOversize = null;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        captionReferenceAfterOversize = popup.querySelector(
+          ".smarttex-caption-reference"
+        );
+        if (captionReferenceAfterOversize) break;
+        await delay(20);
+      }
+      captionReferenceAfterOversize.dispatchEvent(new PointerEvent("pointerenter"));
       await delay(30);
       checks.captionReferenceHover = Boolean(
         document.querySelector(
           ".smarttex-caption-reference-popup:not([hidden]) .katex"
         )
       );
-      captionReference.click();
+      captionReferenceAfterOversize.click();
       await delay(30);
       checks.captionReferenceClick = editorRequests.some((request) => (
         request.type === "setCursor" &&

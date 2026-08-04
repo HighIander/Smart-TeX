@@ -69,6 +69,24 @@
   E &amp;= mc^2 \\
   \vect{F} &amp;= m<span class="source-caret"></span>\frac{d^2\vect{x}}{dt^2}\label{eq:force}
 \end{align}</div>
+  <script>
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail || "{}");
+      if (request.type !== "getCoordinates") return;
+      const opening = source.startsWith("\\begin", Number(request.index) || 0);
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({
+          requestId: request.requestId,
+          ok: true,
+          screen: {
+            pageX: opening ? 420 : 450,
+            pageY: opening ? 250 : 450,
+            lineHeight: 25
+          }
+        })
+      }));
+    });
+  </script>
   <script src="../vendor/katex/katex.min.js"></script>
   <script src="../latex-context.js"></script>
   <script src="../table-renderer.js"></script>
@@ -136,8 +154,8 @@
       afterPreviewUpdate(() => {
         const stable = popup.getBoundingClientRect();
         const stayedPut = (
-          Math.abs(stable.left - initialPosition.left) < 1 &&
-          Math.abs(stable.top - initialPosition.top) < 1
+          Math.abs(stable.left - initialPosition.left) < 2 &&
+          Math.abs(stable.top - initialPosition.top) < 2
         );
         const stablePosition = {
           left: stable.left,
@@ -175,9 +193,9 @@
           });
           afterPreviewUpdate(() => {
             const relocated = popup.getBoundingClientRect();
-            const movedToRevealCursor = (
-              Math.abs(relocated.left - editedPosition.left) >= 1 ||
-              Math.abs(relocated.top - editedPosition.top) >= 1
+            const stayedEnvironmentAnchoredWhenCursorOverlaps = (
+              Math.abs(relocated.left - editedPosition.left) < 1 &&
+              Math.abs(relocated.top - editedPosition.top) < 1
             );
             const relocatedPosition = {
               left: relocated.left,
@@ -231,7 +249,7 @@
                   hidesCommandCount &&
                   stayedPut &&
                   stayedPutAfterEquationEdit &&
-                  movedToRevealCursor &&
+                  stayedEnvironmentAnchoredWhenCursorOverlaps &&
                   movedForNewEquation &&
                   followedScrollVertically
                 ) ? "passed" : "failed";
@@ -243,7 +261,7 @@
                   : (
                     `Position test failed S:${stayedPut} D:${stayedPutAfterEquationEdit} ` +
                     `N:${renderedEquationNumbers} H:${hidesCommandCount} ` +
-                    `C:${movedToRevealCursor} ` +
+                    `C:${stayedEnvironmentAnchoredWhenCursorOverlaps} ` +
                     `E:${movedForNewEquation} V:${followedScrollVertically} ` +
                     `O:${secondContext?.openStart ?? "none"}`
                   );

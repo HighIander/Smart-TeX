@@ -71,6 +71,32 @@
     }
   }
 
+
+  function removeLatexCommentsPreservingLength(sourceValue) {
+    const source = String(sourceValue || "");
+    const characters = source.split("");
+    for (let index = 0; index < source.length; index += 1) {
+      if (source[index] === "\\" && source.slice(index, index + 5) === "\\verb") {
+        let delimiterIndex = index + 5;
+        if (source[delimiterIndex] === "*") delimiterIndex += 1;
+        const delimiter = source[delimiterIndex];
+        if (delimiter && !/\s|[A-Za-z]/.test(delimiter)) {
+          const endDelimiter = source.indexOf(delimiter, delimiterIndex + 1);
+          index = endDelimiter < 0 ? source.length - 1 : endDelimiter;
+          continue;
+        }
+      }
+      if (source[index] !== "%" || isEscaped(source, index)) continue;
+      let end = index;
+      while (end < source.length && source[end] !== "\r" && source[end] !== "\n") {
+        characters[end] = " ";
+        end += 1;
+      }
+      index = end - 1;
+    }
+    return characters.join("");
+  }
+
   function maskIgnoredLatex(sourceValue) {
     const source = String(sourceValue || "");
     const characters = source.split("");
@@ -467,14 +493,59 @@
     return records;
   }
 
+  function parseDeclareMathOperatorRecords(sourceValue, beforeIndexValue = Infinity) {
+    const source = String(sourceValue || "");
+    const masked = maskIgnoredLatex(source);
+    const beforeIndex = Math.max(0, Math.min(
+      Number.isFinite(beforeIndexValue) ? Number(beforeIndexValue) : source.length,
+      source.length
+    ));
+    const pattern = /\\DeclareMathOperator(\*)?/g;
+    const records = [];
+    let match;
+
+    while ((match = pattern.exec(masked))) {
+      if (match.index >= beforeIndex || records.length >= 250) break;
+      let position = skipWhitespace(masked, match.index + match[0].length);
+      let name = "";
+      if (masked[position] === "{") {
+        const nameGroup = readBalanced(masked, position, "{", "}");
+        if (!nameGroup) continue;
+        name = source.slice(position + 1, nameGroup.end - 1).trim();
+        position = nameGroup.end;
+      } else {
+        const nameToken = readControlSequence(masked, position);
+        if (!nameToken) continue;
+        name = source.slice(nameToken.start, nameToken.end);
+        position = nameToken.end;
+      }
+      if (!/^\\(?:[A-Za-z@]+|.)$/.test(name)) continue;
+
+      position = skipWhitespace(masked, position);
+      const definition = readBalanced(masked, position, "{", "}");
+      if (!definition || definition.end > beforeIndex) continue;
+      records.push({
+        kind: "DeclareMathOperator",
+        name,
+        starred: Boolean(match[1]),
+        body: source.slice(position + 1, definition.end - 1),
+        raw: source.slice(match.index, definition.end).trim(),
+        start: match.index,
+        end: definition.end
+      });
+      pattern.lastIndex = definition.end;
+    }
+    return records;
+  }
+
   function extractNewCommandDefinitions(sourceValue, beforeIndexValue = Infinity) {
     return parseNewCommandRecords(sourceValue, beforeIndexValue)
       .map((record) => record.raw);
   }
 
-  function activeNewCommandRecords(records) {
+  function activeDocumentCommandRecords(records) {
     const active = new Map();
-    for (const record of records) {
+    for (const record of [...records].sort((left, right) => left.start - right.start)) {
       if (record.kind === "providecommand" && active.has(record.name)) continue;
       active.set(record.name, record);
     }
@@ -582,10 +653,12 @@
   }
 
   function prepareDocumentCommands(sourceValue, beforeIndexValue, bodyValue) {
-    const activeRecords = activeNewCommandRecords(
-      parseNewCommandRecords(sourceValue, beforeIndexValue)
-    );
+    const activeRecords = activeDocumentCommandRecords([
+      ...parseNewCommandRecords(sourceValue, beforeIndexValue),
+      ...parseDeclareMathOperatorRecords(sourceValue, beforeIndexValue)
+    ]);
     const optionalRecords = activeRecords
+      .filter((record) => record.kind !== "DeclareMathOperator")
       .filter((record) => record.optionalDefault !== null)
       .sort((left, right) => right.name.length - left.name.length);
     const macros = {
@@ -596,6 +669,11 @@
     };
 
     for (const record of activeRecords) {
+      if (record.kind === "DeclareMathOperator") {
+        const body = expandOptionalCommands(record.body, optionalRecords);
+        macros[record.name] = `\\operatorname${record.starred ? "*" : ""}{${body}}`;
+        continue;
+      }
       if (record.optionalDefault !== null) continue;
       macros[record.name] = expandOptionalCommands(record.body, optionalRecords);
     }
@@ -733,6 +811,33 @@
       }
     }
     return offset;
+  }
+
+  function cursorInsideControlSequence(sourceValue, offsetValue) {
+    const source = String(sourceValue || "");
+    const offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
+    const command = controlSequenceAround(source, offset);
+    return Boolean(
+      command &&
+      offset > command.start &&
+      offset < command.end
+    );
+  }
+
+  function cursorAtProtectedAtomBoundary(sourceValue, offsetValue) {
+    const source = String(sourceValue || "");
+    const offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
+
+    // A caret immediately after a superscript/subscript marker is rendered
+    // inside the following atom so that the preview remains valid LaTeX. Mark
+    // that relocated caret red when the atom is a group or a command, because
+    // inserting text at the literal source position would split the construct.
+    let previous = offset - 1;
+    while (previous >= 0 && /\s/.test(source[previous])) previous -= 1;
+    if (source[previous] !== "^" && source[previous] !== "_") return false;
+
+    const next = skipWhitespace(source, offset);
+    return source[next] === "{" || source[next] === "\\";
   }
 
   function injectCaret(sourceValue, offsetValue, commandSide = null) {
@@ -985,6 +1090,58 @@
     return contexts;
   }
 
+  function tableFloatContexts(sourceValue) {
+    const source = String(sourceValue || "");
+    return genericEnvironmentContexts(source, ["table", "table*"]).map((context) => ({
+      ...context,
+      kind: "table-float",
+      display: true,
+      source: source.slice(context.contentStart, context.contentEnd)
+    }));
+  }
+
+  function findTableFloatContext(sourceValue, cursorValue) {
+    const source = String(sourceValue || "");
+    const cursor = Math.max(0, Math.min(Number(cursorValue) || 0, source.length));
+    const floatContext = tableFloatContexts(source)
+      .filter((candidate) => (
+        cursor >= candidate.openStart &&
+        cursor <= candidate.closeEnd
+      ))
+      .sort((left, right) => (
+        (left.closeEnd - left.openStart) - (right.closeEnd - right.openStart)
+      ))[0];
+    if (!floatContext) return null;
+
+    const tableContext = tableContexts(source)
+      .filter((candidate) => (
+        candidate.openStart >= floatContext.contentStart &&
+        candidate.closeEnd <= floatContext.contentEnd
+      ))
+      .sort((left, right) => left.openStart - right.openStart)[0];
+    if (!tableContext) return null;
+
+    return {
+      ...tableContext,
+      source: source.slice(tableContext.contentStart, tableContext.contentEnd),
+      cursorOffset: Math.max(
+        0,
+        Math.min(
+          cursor - tableContext.contentStart,
+          tableContext.contentEnd - tableContext.contentStart
+        )
+      ),
+      cursorInsideTable: (
+        cursor >= tableContext.openStart &&
+        cursor <= tableContext.closeEnd
+      ),
+      floatOpenStart: floatContext.openStart,
+      floatContentStart: floatContext.contentStart,
+      floatContentEnd: floatContext.contentEnd,
+      floatCloseEnd: floatContext.closeEnd
+    };
+  }
+
   function figureContexts(sourceValue) {
     const source = String(sourceValue || "");
     return genericEnvironmentContexts(source, ["figure", "figure*"]).map((context) => ({
@@ -1089,10 +1246,14 @@
     const rawStart = enclosing.contentStart + position + 1;
     const rawEnd = enclosing.contentStart + caption.end - 1;
     const rawText = source.slice(rawStart, rawEnd);
-    const leadingWhitespace = rawText.length - rawText.trimStart().length;
-    const trailingWhitespace = rawText.length - rawText.trimEnd().length;
+    // TeX comments are active inside caption arguments as well. Replace the
+    // commented characters with spaces rather than deleting them so all
+    // source offsets used for cursor/selection mapping remain exact.
+    const renderedText = removeLatexCommentsPreservingLength(rawText);
+    const leadingWhitespace = renderedText.length - renderedText.trimStart().length;
+    const trailingWhitespace = renderedText.length - renderedText.trimEnd().length;
     return {
-      text: rawText.trim(),
+      text: renderedText.trim(),
       starred: Boolean(match[1]),
       start: rawStart + leadingWhitespace,
       end: Math.max(
@@ -1270,16 +1431,21 @@
 
   global.SmartTeXLatexContext = Object.freeze({
     maskIgnoredLatex,
+    removeLatexCommentsPreservingLength,
     equationContexts,
     findEquationContext,
     tableContexts,
     findTableContext,
+    tableFloatContexts,
+    findTableFloatContext,
     figureContexts,
     findFigureContext,
     extractNewCommandDefinitions,
     prepareDocumentCommands,
     resolveCaretPlacement,
     commandAwareCaretOffset,
+    cursorInsideControlSequence,
+    cursorAtProtectedAtomBoundary,
     injectCaret,
     previewBody,
     equationPreviewNumbering,

@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX table editing harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body { background: #fff; }
+    #ide-redesign-panel-editor { height: 50px; }
+    .toolbar-editor, .pdf-toolbar { display: flex; align-items: center; min-height: 42px; }
+    #ide-redesign-panel-pdf { display: grid; grid-template-rows: auto 1fr; height: calc(100vh - 50px); }
+    .pdf-native { background: #eee; }
+    #table-editing-test-result { position: fixed; right: 10px; bottom: 10px; z-index: 2147483647; }
+  </style>
+</head>
+<body>
+  <section id="ide-redesign-panel-editor">
+    <div class="toolbar toolbar-editor" role="toolbar"><button>Editor</button></div>
+  </section>
+  <section id="ide-redesign-panel-pdf">
+    <div class="pdf-toolbar" role="toolbar">
+      <button aria-label="Recompile">Recompile</button>
+      <button aria-label="Download PDF">Download PDF</button>
+    </div>
+    <div class="pdf-native"><iframe title="PDF preview"></iframe></div>
+  </section>
+  <output id="table-editing-test-result">Table editing test running</output>
+  <script>
+    const settings = {};
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(key) { return { [key]: settings[key] }; },
+          async set(values) { Object.assign(settings, values); }
+        }
+      }
+    };
+    let activeSource = "";
+    let activeCursor = 0;
+    const edits = [];
+    function dispatch(value = activeSource, cursor = activeCursor) {
+      activeSource = value;
+      activeCursor = cursor;
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex: cursor,
+          selectionFrom: cursor,
+          selectionTo: cursor,
+          selectionAnchor: cursor,
+          selectionHead: cursor,
+          screen: { pageX: 260, pageY: 180, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "harness"
+        })
+      }));
+    }
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      if (request.type === "replaceRange") {
+        edits.push(request);
+        activeSource = activeSource.slice(0, request.start) + request.text + activeSource.slice(request.end);
+        activeCursor = request.selectionEnd;
+      }
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({ requestId: request.requestId, ok: true })
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../table-editor.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../document-preview.js"></script>
+  <script>
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    async function waitFor(selector, predicate = () => true) {
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const element = document.querySelector(selector);
+        if (element && predicate(element)) return element;
+        await delay(25);
+      }
+      throw new Error(`${selector} did not become ready`);
+    }
+    async function waitForEdit(count) {
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        if (edits.length >= count) return edits[count - 1];
+        await delay(25);
+      }
+      throw new Error(`Edit ${count} did not arrive`);
+    }
+    async function run() {
+      const checks = {};
+      const initial = String.raw`Before
+\begin{table}
+\caption{Example}
+\label{tab:example}
+\begin{tabular}{lc}
+A & B \\
+C & D \\
+\end{tabular}
+\end{table}
+After`;
+      dispatch(initial, initial.indexOf("D"));
+      const toolbar = await waitFor(".smarttex-document-editing-toolbar");
+      const structureButton = toolbar.querySelector(
+        'button[aria-label="Add or remove table rows and columns"]'
+      );
+      const addTable = toolbar.querySelector('button[aria-label="Add table"]');
+      const moveButton = toolbar.querySelector('button[aria-label="Move table rows or columns"]');
+      const borderButton = toolbar.querySelector('button[aria-label="Table borders"]');
+      const beautifyButton = toolbar.querySelector('button[aria-label="Beautify table source"]');
+      checks.tableButtonsEnabled = Boolean(structureButton && !structureButton.disabled);
+      checks.insideVisibility = Boolean(
+        addTable?.hidden &&
+        !structureButton?.hidden &&
+        !moveButton?.hidden &&
+        !borderButton?.hidden &&
+        !beautifyButton?.hidden
+      );
+      structureButton.click();
+      const addAbove = await waitFor(
+        ".smarttex-document-toolbar-dropdown:not([hidden]) .smarttex-document-toolbar-dropdown-item",
+        (element) => element.textContent.includes("above")
+      );
+      addAbove.click();
+      const rowEdit = await waitForEdit(1);
+      const rowSource = initial.slice(0, rowEdit.start) + rowEdit.text + initial.slice(rowEdit.end);
+      const rowAnalysis = SmartTeXTableEditor.analyze(rowSource, rowEdit.selectionEnd);
+      checks.addRow = rowAnalysis?.rows.length === 3;
+
+      dispatch(rowSource, rowSource.indexOf("D"));
+      borderButton.click();
+      const borderMenu = await waitFor(".smarttex-document-toolbar-dropdown:not([hidden])");
+      const borderMode = borderMenu.querySelector('.smarttex-table-border-mode input');
+      borderMode.checked = true;
+      borderMode.dispatchEvent(new Event("change", { bubbles: true }));
+      [...borderMenu.querySelectorAll(".smarttex-document-toolbar-dropdown-item")]
+        .find((item) => item.textContent.includes("right")).click();
+      const borderEdit = await waitForEdit(2);
+      checks.doubleRightBorder = /\\multicolumn\{1\}\{c\|\|\}\{D\}/.test(borderEdit.text);
+
+      dispatch("Text before.", "Text before.".length);
+      await delay(30);
+      checks.outsideVisibility = Boolean(
+        !addTable?.hidden &&
+        structureButton?.hidden &&
+        moveButton?.hidden &&
+        borderButton?.hidden &&
+        beautifyButton?.hidden
+      );
+      addTable.click();
+      const dialog = await waitFor(".smarttex-table-dialog");
+      dialog.elements.rows.value = "2";
+      dialog.elements.columns.value = "2";
+      dialog.elements.caption.value = "Created caption";
+      dialog.elements.label.value = "tab:created";
+      dialog.requestSubmit();
+      const tableEdit = await waitForEdit(3);
+      checks.addTable = (
+        tableEdit.text.includes("\\caption{Created caption}") &&
+        tableEdit.text.includes("\\label{tab:created}") &&
+        tableEdit.text.includes("\\begin{tabular}{cc}") &&
+        (tableEdit.text.match(/\\\\/g) || []).length === 2
+      );
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#table-editing-test-result");
+      output.textContent = passed
+        ? "Table editing test passed"
+        : `Table editing test failed: ${JSON.stringify(checks)}`;
+      output.dataset.result = passed ? "passed" : "failed";
+      document.documentElement.dataset.tableEditingTest = passed ? "passed" : "failed";
+    }
+    run().catch((error) => {
+      const output = document.querySelector("#table-editing-test-result");
+      output.textContent = `Table editing test failed: ${error.message}`;
+      output.dataset.result = "failed";
+      document.documentElement.dataset.tableEditingTest = "failed";
+      console.error(error);
+    });
+  </script>
+</body>
+</html>

@@ -67,7 +67,7 @@
 See Figure \ref{fig:test}. Also \cite{Demo}.
 
 \begin{equation}
-E = mc^2
+E = mc^2 + \frac{a_{1}^4+b_{1}^4}{1+x_{1}^2} + \frac{a_{2}^4+b_{2}^4}{1+x_{2}^2} + \frac{a_{3}^4+b_{3}^4}{1+x_{3}^2} + \frac{a_{4}^4+b_{4}^4}{1+x_{4}^2} + \frac{a_{5}^4+b_{5}^4}{1+x_{5}^2} + \frac{a_{6}^4+b_{6}^4}{1+x_{6}^2} + \frac{a_{7}^4+b_{7}^4}{1+x_{7}^2} + \frac{a_{8}^4+b_{8}^4}{1+x_{8}^2} + \frac{a_{9}^4+b_{9}^4}{1+x_{9}^2} + \frac{a_{10}^4+b_{10}^4}{1+x_{10}^2} + \frac{a_{11}^4+b_{11}^4}{1+x_{11}^2} + \frac{a_{12}^4+b_{12}^4}{1+x_{12}^2} + \frac{a_{13}^4+b_{13}^4}{1+x_{13}^2} + \frac{a_{14}^4+b_{14}^4}{1+x_{14}^2} + \frac{a_{15}^4+b_{15}^4}{1+x_{15}^2} + \frac{a_{16}^4+b_{16}^4}{1+x_{16}^2} + \frac{a_{17}^4+b_{17}^4}{1+x_{17}^2} + \frac{a_{18}^4+b_{18}^4}{1+x_{18}^2} + \frac{a_{19}^4+b_{19}^4}{1+x_{19}^2} + \frac{a_{20}^4+b_{20}^4}{1+x_{20}^2} + \frac{a_{21}^4+b_{21}^4}{1+x_{21}^2} + \frac{a_{22}^4+b_{22}^4}{1+x_{22}^2} + \frac{a_{23}^4+b_{23}^4}{1+x_{23}^2} + \frac{a_{24}^4+b_{24}^4}{1+x_{24}^2} + \frac{a_{25}^4+b_{25}^4}{1+x_{25}^2} + \frac{a_{26}^4+b_{26}^4}{1+x_{26}^2} + \frac{a_{27}^4+b_{27}^4}{1+x_{27}^2} + \frac{a_{28}^4+b_{28}^4}{1+x_{28}^2} + \frac{a_{29}^4+b_{29}^4}{1+x_{29}^2} + \frac{a_{30}^4+b_{30}^4}{1+x_{30}^2}
 \label{eq:nested}
 \end{equation}
 
@@ -181,9 +181,154 @@ E = mc^2
         nestedPopup && !nestedPopup.hidden && nestedTitle && nestedTarget
       );
 
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-active", {
+        detail: JSON.stringify({ owner: "reference-autocomplete", active: true })
+      }));
+      await delay(20);
+      const normalPopupHiddenForAutocomplete = Boolean(popup?.hidden);
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-active", {
+        detail: JSON.stringify({ owner: "reference-autocomplete", active: false })
+      }));
+
       title?.click();
       await delay(30);
       const jump = requests.filter((request) => request.type === "setCursor").at(-1);
+
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-preview", {
+        detail: JSON.stringify({
+          owner: "reference-autocomplete",
+          label: "eq:nested",
+          command: "eqref",
+          anchorRect: { left: 420, right: 700, top: 180, bottom: 210 },
+          ownerRect: { left: 180, right: 710, top: 120, bottom: 420 }
+        })
+      }));
+      await delay(90);
+      const autocompletePopup = document.querySelector(
+        ".smarttex-editor-reference-popup:not([hidden])"
+      );
+      const autocompleteTitle = autocompletePopup?.querySelector(
+        ".smarttex-reference-popup-title"
+      );
+      const autocompleteOwned = (
+        autocompletePopup?.dataset.smarttexAutocompleteOwner === "reference"
+      );
+      const autocompleteSurface = document.createElement("div");
+      autocompleteSurface.id = "smarttex-reference-autocomplete-popup";
+      document.body.appendChild(autocompleteSurface);
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-active", {
+        detail: JSON.stringify({ owner: "reference-autocomplete", active: true })
+      }));
+      autocompleteSurface.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: 440,
+        clientY: 195
+      }));
+      await delay(240);
+      window.dispatchEvent(new CustomEvent(
+        "smarttex:reference-autocomplete-preview-hide",
+        { detail: JSON.stringify({ owner: "reference-autocomplete", force: false }) }
+      ));
+      await delay(40);
+      const autocompletePreviewStayedOpen = Boolean(
+        autocompletePopup &&
+        !autocompletePopup.hidden &&
+        autocompletePopup.dataset.smarttexAutocompleteOwner === "reference"
+      );
+
+      editor.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: rect.left + 150,
+        clientY: rect.top + 30
+      }));
+      await delay(360);
+      const differentTargetPopup = document.querySelector(
+        ".smarttex-nested-reference-popup:not([hidden])"
+      );
+      const differentTargetAllowed = Boolean(
+        autocompletePopup &&
+        !autocompletePopup.hidden &&
+        autocompletePopup.querySelector(".smarttex-reference-popup-title")?.textContent ===
+          "Equation 1" &&
+        differentTargetPopup?.querySelector(".smarttex-reference-popup-title")?.textContent ===
+          "Figure 1"
+      );
+
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-preview", {
+        detail: JSON.stringify({
+          owner: "reference-autocomplete",
+          label: "fig:test",
+          command: "ref",
+          anchorRect: { left: 420, right: 700, top: 180, bottom: 210 },
+          ownerRect: { left: 180, right: 710, top: 120, bottom: 420 }
+        })
+      }));
+      await delay(90);
+      editor.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: rect.left + 150,
+        clientY: rect.top + 30
+      }));
+      await delay(360);
+      const sameTargetNotDuplicated = Boolean(
+        autocompletePopup &&
+        !autocompletePopup.hidden &&
+        autocompletePopup.querySelector(".smarttex-reference-popup-title")?.textContent ===
+          "Figure 1" &&
+        !document.querySelector(".smarttex-nested-reference-popup:not([hidden])")
+      );
+
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-preview", {
+        detail: JSON.stringify({
+          owner: "reference-autocomplete",
+          label: "eq:nested",
+          command: "eqref",
+          anchorRect: { left: 420, right: 700, top: 180, bottom: 210 },
+          ownerRect: { left: 180, right: 710, top: 120, bottom: 420 }
+        })
+      }));
+      await delay(90);
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-active", {
+        detail: JSON.stringify({ owner: "reference-autocomplete", active: false })
+      }));
+      autocompleteSurface.remove();
+      const equationScroller = autocompletePopup?.querySelector(
+        ".smarttex-reference-popup-equation"
+      );
+      const scrollableEquation = Boolean(
+        equationScroller && equationScroller.scrollWidth > equationScroller.clientWidth
+      );
+      if (equationScroller) {
+        equationScroller.scrollLeft = Math.min(
+          120,
+          Math.max(1, equationScroller.scrollWidth - equationScroller.clientWidth)
+        );
+      }
+      const scrollBeforeRepeat = Number(equationScroller?.scrollLeft) || 0;
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-preview", {
+        detail: JSON.stringify({
+          owner: "reference-autocomplete",
+          label: "eq:nested",
+          command: "eqref",
+          anchorRect: { left: 420, right: 700, top: 180, bottom: 210 },
+          ownerRect: { left: 180, right: 710, top: 120, bottom: 420 }
+        })
+      }));
+      equationScroller?.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        deltaX: 20
+      }));
+      await delay(240);
+      const scrollPositionPreserved = Boolean(
+        equationScroller &&
+        !autocompletePopup.hidden &&
+        equationScroller.scrollLeft >= Math.max(1, scrollBeforeRepeat - 1)
+      );
+      window.dispatchEvent(new CustomEvent(
+        "smarttex:reference-autocomplete-preview-hide"
+      ));
+      await delay(20);
+      const autocompleteHidden = Boolean(autocompletePopup?.hidden);
 
       const checks = {
         popupSpinnerShown,
@@ -203,10 +348,21 @@ E = mc^2
           nestedWasVisible &&
           nestedTitle?.textContent === "Equation 1"
         ),
+        autocompleteSuppressesNormalPopup: normalPopupHiddenForAutocomplete,
         jumpToEditor: (
           jump?.index === source.indexOf("\\begin{figure}") &&
           jump?.focus === true
-        )
+        ),
+        autocompletePreview: (
+          autocompleteOwned &&
+          autocompletePreviewStayedOpen &&
+          autocompleteTitle?.textContent === "Equation 1" &&
+          autocompleteHidden
+        ),
+        autocompleteAllowsDifferentTarget: differentTargetAllowed,
+        autocompleteAvoidsDuplicateTarget: sameTargetNotDuplicated,
+        wideEquationScrollable: scrollableEquation,
+        popupScrollPositionPreserved: scrollPositionPreserved
       };
       const passed = Object.values(checks).every(Boolean);
       const output = document.querySelector("#editor-reference-test-result");

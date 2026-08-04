@@ -51,12 +51,21 @@ temporarily invalidate the preview.
 
 ## Full-document preview
 
-The **KaTeX** toggle in the PDF preview toolbar replaces the compiled PDF pane
-with an immediately updating document-style preview. SmartTeX lays out the
-active LaTeX document as local HTML, renders its equations with KaTeX, renders
-supported tables with the table previewer, and shows the editor cursor as a
-blinking caret. Switching the toggle off restores the existing compiled PDF
-viewer without reconfiguring the project.
+The experimental **S Live** toggle in the PDF preview toolbar replaces the
+compiled PDF pane with an immediately updating document-style preview. The
+button is hidden by default and can be enabled with the **Show the S Live
+full-document preview button (Beta)** option. SmartTeX lays out the active LaTeX
+document as local HTML, renders its equations with KaTeX, renders supported
+tables with the table previewer, and shows the editor cursor as a blinking
+caret. Switching the toggle off restores the existing compiled PDF viewer
+without reconfiguring the project.
+
+Cursor synchronization uses local source ranges in both directions. Clicking
+ordinary rendered prose therefore maps directly back to its source segment,
+without rescanning and rerendering the complete paragraph or choosing a later
+duplicate phrase. Reference, citation, and figure hover previews defer their
+work and reuse cached parse/render results so pointer interaction remains
+responsive in large documents.
 
 The adjacent dropdown contains a persistent text-size slider. Prose is
 justified, and inline mathematics remains in its surrounding paragraph. After
@@ -65,12 +74,35 @@ continuous typing SmartTeX still refreshes at least every five seconds. Page
 construction yields to the browser between blocks and replaces the visible
 preview only after the new page is ready, keeping the source editor responsive.
 
+## Reference and citation popups
+
+The options page can configure reference, equation-reference, and citation
+previews to open either on pointer hover or only while the source-editor cursor
+is inside the corresponding command. In cursor-only mode, hover popups are
+suppressed in both the editor and full-document preview, while the popup remains
+available beside the editor cursor.
+
+Following the linked title in a reference popup records the previous editor
+selection. A back-arrow button then appears at the left of the SmartTeX
+formatting controls and restores that prior cursor or selection position.
+
+## Reference autocomplete
+
+Inside common reference commands such as `\ref{…}` and `\eqref{…}`,
+SmartTeX replaces the editor's native completion list with a label list built
+from the active document. Labels follow their first appearance in the document
+by default; the options page can switch this to alphabetical order. Arrow-key
+selection and mouse hover open the same equation, figure, table, or section
+preview used elsewhere in SmartTeX, and Enter or Tab inserts the selected label.
+
 ## Citation autocomplete
 
 Inside common `\cite{…}` commands, SmartTeX offers a compact citation-key
-autocomplete list. On first use it asks before opening and parsing the
-bibliography files declared by the current document. Parsed entries are cached
-per project, and the editor file is restored after parsing. The popup supports
+autocomplete list. On first use it asks before parsing the bibliography files declared by the
+current document. Bibliography files are read passively in the background from
+the collaborative project model or an in-memory project archive; SmartTeX never
+opens them in the editor or changes the active document. Parsed entries are
+cached per project. The popup supports
 key, title, author, journal, year, keyword, and DOI matching plus keyboard
 selection with the arrow keys, Enter, or Tab.
 

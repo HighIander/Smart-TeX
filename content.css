@@ -76,7 +76,7 @@
   z-index: 2147483646;
   width: max-content;
   min-width: 220px;
-  max-width: min(70vw, calc(100vw - 24px));
+  max-width: min(56vw, calc(100vw - 24px));
   max-height: min(70vh, 640px);
   overflow: hidden;
   border: 1px solid rgb(111 127 147 / 48%);
@@ -161,7 +161,8 @@
 
 .smarttex-equation-output {
   min-height: 56px;
-  max-width: min(70vw, calc(100vw - 26px));
+  pointer-events: auto;
+  max-width: min(56vw, calc(100vw - 26px));
   max-height: min(62vh, 560px);
   overflow: auto;
   padding: 17px 20px;
@@ -184,13 +185,13 @@
 #smarttex-equation-preview[data-preview-kind="figure"] {
   width: max-content;
   min-width: 220px;
-  max-width: min(40vw, calc(100vw - 24px));
+  max-width: min(56vw, calc(100vw - 24px));
   max-height: min(70vh, calc(100vh - 24px));
 }
 
 #smarttex-equation-preview[data-preview-kind="figure"] .smarttex-equation-output {
   width: max-content;
-  max-width: min(40vw, calc(100vw - 26px));
+  max-width: min(56vw, calc(100vw - 26px));
   max-height: none;
   overflow: hidden;
   padding: 12px 14px 14px;
@@ -204,36 +205,70 @@
   margin: 0;
 }
 
-.smarttex-figure-popup-media {
-  display: grid;
-  gap: 8px;
-  justify-items: center;
+.smarttex-figure-popup-viewport {
   width: max-content;
   max-width: 100%;
+  max-height: min(50vh, 520px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+  pointer-events: auto;
+  touch-action: pan-x pan-y;
+}
+
+.smarttex-figure-popup-media {
+  display: grid;
+  gap: 10px;
+  width: max-content;
+  max-width: none;
+}
+
+.smarttex-figure-layout-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.smarttex-figure-layout-panel {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+  align-content: start;
+  justify-items: center;
+  min-width: 0;
+  max-width: none;
+}
+
+.smarttex-figure-layout-panel > img,
+.smarttex-figure-layout-panel > .smarttex-figure-popup-placeholder,
+.smarttex-figure-layout-panel > .smarttex-document-figure-placeholder {
+  box-sizing: border-box;
+  max-width: none;
 }
 
 .smarttex-figure-popup-image {
   display: block;
-  width: auto;
   height: auto;
-  max-width: 100%;
-  max-height: 40vh;
+  max-width: none;
+  max-height: none;
   object-fit: contain;
 }
 
 .smarttex-figure-popup-pdf {
   display: block;
-  width: auto;
   height: auto;
-  max-width: min(40vw, 520px);
-  max-height: min(40vh, 420px);
+  max-width: none;
+  max-height: none;
   background: #fff;
 }
 
 .smarttex-figure-popup-placeholder {
   display: grid;
   place-items: center;
-  width: min(40vw, 520px);
+  width: 100%;
   min-height: 110px;
   padding: 14px;
   border: 1px dashed #9aa7b7;
@@ -266,6 +301,8 @@
 
 .smarttex-table-scroll {
   max-width: min(calc(70vw - 28px), calc(100vw - 54px));
+  pointer-events: auto;
+  touch-action: pan-x pan-y;
   overflow: auto;
 }
 
@@ -281,7 +318,7 @@
   min-width: max-content;
   margin: 0 auto;
   border-spacing: 0;
-  border-collapse: collapse;
+  border-collapse: separate;
   color: inherit;
   font: 13px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -318,12 +355,41 @@
   border-right: 1px solid currentColor;
 }
 
-.smarttex-table-preview .smarttex-table-rule-before > td {
+.smarttex-table-preview .smarttex-table-border-top {
   border-top: 1px solid currentColor;
 }
 
-.smarttex-table-preview .smarttex-table-rule-after > td {
+.smarttex-table-preview .smarttex-table-border-bottom {
   border-bottom: 1px solid currentColor;
+}
+
+.smarttex-table-preview .smarttex-table-border-left-double {
+  border-left: 4px double currentColor;
+}
+
+.smarttex-table-preview .smarttex-table-border-right-double {
+  border-right: 4px double currentColor;
+}
+
+.smarttex-table-preview .smarttex-table-border-top-double {
+  border-top: 4px double currentColor;
+}
+
+.smarttex-table-preview .smarttex-table-border-bottom-double {
+  border-bottom: 4px double currentColor;
+}
+
+
+::highlight(smarttex-popup-selection) {
+  color: inherit;
+  background: rgb(67 142 255 / 28%);
+}
+
+.smarttex-popup-selection,
+.smarttex-popup-source-selected {
+  border-radius: 2px;
+  background: rgb(67 142 255 / 28%);
+  box-shadow: 0 0 0 1px rgb(41 111 220 / 16%);
 }
 
 .smarttex-table-preview strong {
@@ -365,7 +431,8 @@
   animation: smarttex-caret-blink 1.05s steps(1, end) infinite;
 }
 
-.smarttex-rendered-caret {
+.smarttex-rendered-caret,
+.smarttex-rendered-operator-caret {
   position: relative;
   pointer-events: none;
   display: inline-block;
@@ -373,7 +440,8 @@
   min-width: 0;
 }
 
-.katex-html .smarttex-rendered-caret::after {
+.katex-html .smarttex-rendered-caret::after,
+.katex-html .smarttex-rendered-operator-caret::after {
   position: absolute;
   z-index: 2;
   top: 0;
@@ -384,6 +452,11 @@
   background: #1674d1;
   content: "";
   animation: smarttex-caret-blink 1.05s steps(1, end) infinite;
+}
+
+.smarttex-table-operator-caret::after,
+.katex-html .smarttex-rendered-operator-caret::after {
+  background: #d32f2f;
 }
 
 .smarttex-preview-status {
@@ -424,7 +497,8 @@
     transition: none;
   }
 
-  .katex-html .smarttex-rendered-caret::after {
+  .katex-html .smarttex-rendered-caret::after,
+  .katex-html .smarttex-rendered-operator-caret::after {
     animation: none;
   }
 
@@ -478,6 +552,11 @@
 
   .smarttex-table-rendered-caret::after {
     background: #58a6ff;
+  }
+
+  .smarttex-table-operator-caret::after,
+  .katex-html .smarttex-rendered-operator-caret::after {
+    background: #ff5c5c;
   }
 }
 
@@ -1178,6 +1257,10 @@
   margin: 0 4px;
 }
 
+.smarttex-document-preview-controls[hidden] {
+  display: none !important;
+}
+
 #smarttex-document-preview-toggle.smarttex-document-preview-toggle {
   display: inline-flex;
   align-items: center;
@@ -1342,12 +1425,24 @@
   min-width: 0;
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow-x: scroll;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: clamp(10px, 1.5vw, 18px);
   color: #191919;
   background: #737b85;
   overscroll-behavior: contain;
   cursor: grab;
+}
+
+
+.smarttex-document-preview.smarttex-document-horizontal-overflow {
+  overflow-x: scroll;
+  scrollbar-gutter: stable;
+}
+
+.smarttex-document-preview::-webkit-scrollbar:horizontal {
+  height: 12px;
 }
 
 .smarttex-document-preview:focus {
@@ -1363,6 +1458,7 @@
   position: relative;
   min-width: 1px;
   min-height: 1px;
+  max-width: none;
   margin: 0 auto;
 }
 
@@ -1445,6 +1541,11 @@
 
 .smarttex-document-editing-toolbar-pdf {
   flex: 0 1 auto;
+}
+
+.smarttex-document-editing-toolbar button[hidden],
+.smarttex-document-editing-toolbar select[hidden] {
+  display: none !important;
 }
 
 .smarttex-document-editing-toolbar button,
@@ -1535,6 +1636,19 @@
 ::highlight(smarttex-editor-selection) {
   color: inherit;
   background: rgb(49 132 222 / 32%);
+}
+
+.smarttex-document-cursor-position-hidden .smarttex-document-text-caret,
+.smarttex-document-cursor-position-hidden .smarttex-rendered-caret,
+.smarttex-document-cursor-position-hidden .smarttex-rendered-operator-caret,
+.smarttex-document-cursor-position-hidden .smarttex-table-rendered-caret {
+  display: none !important;
+}
+
+.smarttex-document-cursor-position-hidden .smarttex-source-selection,
+.smarttex-document-cursor-position-hidden .smarttex-document-active-source {
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .smarttex-source-selection {
@@ -1651,10 +1765,18 @@
   text-align: center;
 }
 
+.smarttex-document-figure-layout-viewport {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+}
+
 .smarttex-document-figure-images {
   display: grid;
   gap: 0.75em;
-  justify-items: center;
+  width: 100%;
+  max-width: 100%;
 }
 
 .smarttex-document-figure img {
@@ -1773,6 +1895,11 @@
   background: #169447;
 }
 
+.smarttex-document-focused .smarttex-table-operator-caret::after,
+.smarttex-document-focused .katex-html .smarttex-rendered-operator-caret::after {
+  background: #d32f2f;
+}
+
 .smarttex-document-reference {
   border-radius: 2px;
   color: #175ea8;
@@ -1811,18 +1938,50 @@
 .smarttex-document-reference-popup {
   position: fixed;
   z-index: 2147483647;
-  width: min(430px, calc(100vw - 20px));
+  width: fit-content;
+  min-width: min(430px, calc(100vw - 20px));
+  max-width: min(600px, calc(100vw - 20px));
   max-height: min(360px, calc(100vh - 20px));
   padding: 12px;
   border: 1px solid #aeb9c7;
   border-radius: 10px;
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   color: #171717;
   background: rgb(255 255 255 / 98%);
   box-shadow: 0 12px 34px rgb(15 23 42 / 28%);
   font-family: "Latin Modern Roman", "Computer Modern Serif", Georgia, serif;
   font-size: 13px;
   line-height: 1.45;
+}
+
+
+.smarttex-document-reference-popup.smarttex-reference-popup-compact {
+  min-width: 0;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.32;
+}
+
+.smarttex-document-reference-popup.smarttex-reference-popup-compact .smarttex-reference-popup-heading {
+  top: -8px;
+  padding: 4px 5px;
+  font-size: 10.5px;
+}
+
+.smarttex-document-reference-popup.smarttex-reference-popup-compact .smarttex-figure-popup-viewport {
+  max-height: 180px;
+}
+
+.smarttex-document-reference-popup.smarttex-reference-popup-compact .smarttex-figure-popup,
+.smarttex-document-reference-popup.smarttex-reference-popup-compact .smarttex-table-popup,
+.smarttex-document-reference-popup.smarttex-reference-popup-compact .smarttex-reference-popup-equation {
+  font-size: 0.82em;
+}
+
+.smarttex-document-reference-popup.smarttex-reference-popup-compact .katex {
+  font-size: 0.88em;
 }
 
 .smarttex-document-reference-popup[hidden] {
@@ -1834,7 +1993,22 @@
   margin: 0;
   padding: 4px;
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   box-shadow: none;
+}
+
+.smarttex-document-reference-popup .smarttex-reference-popup-equation {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  touch-action: pan-x;
+}
+
+.smarttex-document-reference-popup .smarttex-reference-popup-equation > .katex-display {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
 }
 
 .smarttex-document-reference-popup .smarttex-reference-popup-target + .smarttex-reference-popup-target {
@@ -1890,8 +2064,14 @@
 
 .smarttex-editor-reference-popup .smarttex-figure-popup-image,
 .smarttex-editor-reference-popup .smarttex-figure-popup-pdf {
+  max-width: none;
+  max-height: none;
+}
+
+.smarttex-editor-reference-popup .smarttex-figure-popup-viewport,
+.smarttex-document-reference-popup .smarttex-figure-popup-viewport {
   max-width: 100%;
-  max-height: 230px;
+  max-height: 270px;
 }
 
 .smarttex-editor-reference-popup .smarttex-table-scroll {
@@ -1901,6 +2081,55 @@
 .smarttex-reference-popup-missing {
   color: #59697b;
   font: 600 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-citation-popup-toolbar {
+  position: sticky;
+  z-index: 3;
+  top: -12px;
+  display: flex;
+  justify-content: flex-end;
+  margin: -12px -12px 9px;
+  padding: 7px 8px;
+  border-bottom: 1px solid #e3e8ef;
+  background: rgb(247 249 252 / 97%);
+}
+
+.smarttex-citation-popup-refresh,
+.smarttex-citation-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 25px;
+  padding: 3px 8px;
+  border: 1px solid #a8cbed;
+  border-radius: 6px;
+  color: #175ea8;
+  background: #eef7ff;
+  font: 700 11px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-citation-popup-refresh:hover:not(:disabled),
+.smarttex-citation-refresh:hover:not(:disabled) {
+  border-color: #6aa9e4;
+  background: #dceeff;
+}
+
+.smarttex-citation-popup-refresh:disabled,
+.smarttex-citation-refresh:disabled {
+  cursor: wait;
+  opacity: 0.78;
+}
+
+.smarttex-citation-refresh-spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: smarttex-document-spin 0.7s linear infinite;
 }
 
 .smarttex-reference-popup-citation {
@@ -1957,13 +2186,10 @@
 
 .smarttex-document-figure-hover-popup .smarttex-document-figure-image,
 .smarttex-document-figure-hover-popup .smarttex-document-figure-pdf {
-  max-width: 100%;
-  max-height: 230px;
+  max-width: none;
+  max-height: none;
 }
 
-html.smarttex-document-live #smarttex-equation-preview {
-  display: none !important;
-}
 
 @media (prefers-reduced-motion: reduce) {
   .smarttex-document-text-caret::after {
@@ -2029,6 +2255,24 @@ html.smarttex-document-live #smarttex-equation-preview {
   .smarttex-reference-popup-heading {
     border-color: #3a4657;
     background: rgb(24 34 48 / 96%);
+  }
+
+  .smarttex-citation-popup-toolbar {
+    border-color: #3a4657;
+    background: rgb(29 41 57 / 97%);
+  }
+
+  .smarttex-citation-popup-refresh,
+  .smarttex-citation-refresh {
+    border-color: #315f90;
+    color: #9ed0ff;
+    background: #12375c;
+  }
+
+  .smarttex-citation-popup-refresh:hover:not(:disabled),
+  .smarttex-citation-refresh:hover:not(:disabled) {
+    border-color: #4d88c8;
+    background: #18466f;
   }
 
   .smarttex-reference-popup-citation-title {
@@ -2104,6 +2348,13 @@ body.smarttex-citation-autocomplete-active .ace_autocomplete {
   background: #f7f9fc;
 }
 
+.smarttex-citation-header-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
 .smarttex-citation-query {
   min-width: 0;
   overflow: hidden;
@@ -2150,9 +2401,41 @@ body.smarttex-citation-autocomplete-active .ace_autocomplete {
 }
 
 .smarttex-citation-list {
+  position: relative;
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+}
+
+.smarttex-citation-list-parsing {
+  position: sticky;
+  z-index: 5;
+  top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  margin: 8px auto;
+  padding: 7px 11px;
+  border: 1px solid #9fc8ee;
+  border-radius: 999px;
+  color: #175ea8;
+  background: rgb(238 247 255 / 96%);
+  box-shadow: 0 4px 14px rgb(15 23 42 / 18%);
+  font: 700 11px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  pointer-events: none;
+}
+
+.smarttex-citation-list-spinner {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: smarttex-document-spin 0.7s linear infinite;
 }
 
 .smarttex-citation-item {
@@ -2173,12 +2456,20 @@ body.smarttex-citation-autocomplete-active .ace_autocomplete {
   cursor: pointer;
 }
 
-.smarttex-citation-item:hover,
-.smarttex-citation-item.smarttex-citation-selected {
-  background: #eaf4ff;
+.smarttex-citation-item.smarttex-citation-exact {
+  background: #e1f0ff;
+  box-shadow: inset 3px 0 #1674d1;
 }
 
+.smarttex-citation-item:hover,
 .smarttex-citation-item.smarttex-citation-selected {
+  background: #eceff3;
+}
+
+/* Exact matches always keep the full blue highlight, even when hovered or selected. */
+.smarttex-citation-item.smarttex-citation-exact:hover,
+.smarttex-citation-item.smarttex-citation-exact.smarttex-citation-selected {
+  background: #e1f0ff;
   box-shadow: inset 3px 0 #1674d1;
 }
 
@@ -2309,9 +2600,20 @@ body.smarttex-citation-autocomplete-active .ace_autocomplete {
     background: #182230;
   }
 
+  .smarttex-citation-item.smarttex-citation-exact {
+    background: #123a61;
+    box-shadow: inset 3px 0 #58a6ff;
+  }
+
   .smarttex-citation-item:hover,
   .smarttex-citation-item.smarttex-citation-selected {
-    background: #0d2742;
+    background: #303846;
+  }
+
+  .smarttex-citation-item.smarttex-citation-exact:hover,
+  .smarttex-citation-item.smarttex-citation-exact.smarttex-citation-selected {
+    background: #123a61;
+    box-shadow: inset 3px 0 #58a6ff;
   }
 
   .smarttex-citation-title,
@@ -2478,4 +2780,681 @@ body.smarttex-citation-autocomplete-active .ace_autocomplete {
     background: rgb(24 34 48 / 92%);
     box-shadow: 0 1px 6px rgb(0 0 0 / 45%);
   }
+}
+
+/* Reference-label autocomplete. */
+body.smarttex-custom-autocomplete-active .cm-tooltip-autocomplete,
+body.smarttex-custom-autocomplete-active .ace_autocomplete {
+  display: none !important;
+}
+
+#smarttex-reference-autocomplete-popup,
+#smarttex-reference-autocomplete-popup *,
+#smarttex-reference-autocomplete-popup *::before,
+#smarttex-reference-autocomplete-popup *::after {
+  box-sizing: border-box;
+}
+
+#smarttex-reference-autocomplete-popup[hidden] {
+  display: none !important;
+}
+
+#smarttex-reference-autocomplete-popup {
+  position: fixed;
+  z-index: 2147483646;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(500px, calc(100vw - 18px));
+  max-height: min(430px, calc(100vh - 18px));
+  overflow: hidden;
+  border: 1px solid rgb(111 127 147 / 52%);
+  border-radius: 10px;
+  color: #1d2939;
+  background: #fff;
+  box-shadow:
+    0 16px 42px rgb(15 23 42 / 24%),
+    0 3px 9px rgb(15 23 42 / 12%);
+  font: 12px/1.38 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-reference-autocomplete-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid #e3e8ef;
+  color: #475569;
+  background: #f7f9fc;
+}
+
+.smarttex-reference-autocomplete-query {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-reference-autocomplete-order {
+  padding: 3px 8px;
+  border: 1px solid #9dc9ef;
+  border-radius: 999px;
+  color: #175f99;
+  background: #eaf5ff;
+  font: 650 10.5px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.smarttex-reference-autocomplete-order:hover {
+  border-color: #5aa9e7;
+  background: #dceeff;
+}
+
+.smarttex-reference-autocomplete-order.smarttex-reference-autocomplete-order-active {
+  border-color: #0f63ad;
+  color: #fff;
+  background: #1674c7;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 10%);
+}
+
+.smarttex-reference-autocomplete-order.smarttex-reference-autocomplete-order-active:hover {
+  background: #0f63ad;
+}
+
+.smarttex-reference-autocomplete-close {
+  display: inline-grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #64748b;
+  background: transparent;
+  font: 500 19px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-reference-autocomplete-close:hover {
+  color: #172033;
+  background: #e7edf5;
+}
+
+.smarttex-reference-autocomplete-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.smarttex-reference-autocomplete-item {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.6fr);
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 11px;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid #edf0f4;
+  border-radius: 0;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.smarttex-reference-autocomplete-item.smarttex-reference-autocomplete-exact {
+  background: #e1f0ff;
+  box-shadow: inset 3px 0 #1674d1;
+}
+
+.smarttex-reference-autocomplete-item:hover,
+.smarttex-reference-autocomplete-item.smarttex-reference-autocomplete-selected {
+  background: #eceff3;
+}
+
+/* Exact matches always keep the full blue highlight, even when hovered or selected. */
+.smarttex-reference-autocomplete-item.smarttex-reference-autocomplete-exact:hover,
+.smarttex-reference-autocomplete-item.smarttex-reference-autocomplete-exact.smarttex-reference-autocomplete-selected {
+  background: #e1f0ff;
+  box-shadow: inset 3px 0 #1674d1;
+}
+
+.smarttex-reference-autocomplete-label,
+.smarttex-reference-autocomplete-description {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-reference-autocomplete-label {
+  color: #0969da;
+  background: transparent;
+  font: 650 11.5px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.smarttex-reference-autocomplete-description {
+  color: #617085;
+}
+
+.smarttex-reference-autocomplete-empty {
+  margin: 0;
+  padding: 22px 16px;
+  color: #66768a;
+  text-align: center;
+}
+
+@media (prefers-color-scheme: dark) {
+  #smarttex-reference-autocomplete-popup {
+    border-color: rgb(130 151 176 / 60%);
+    color: #e3ebf5;
+    background: #182230;
+    box-shadow:
+      0 18px 48px rgb(0 0 0 / 48%),
+      0 3px 10px rgb(0 0 0 / 28%);
+  }
+
+  .smarttex-reference-autocomplete-header {
+    border-color: #3a4657;
+    color: #9cadc1;
+    background: #222e3e;
+  }
+
+  .smarttex-reference-autocomplete-order {
+    border-color: #436d96;
+    color: #b9dcff;
+    background: #17324c;
+  }
+
+  .smarttex-reference-autocomplete-order:hover {
+    border-color: #5c96cb;
+    background: #1d4264;
+  }
+
+  .smarttex-reference-autocomplete-order.smarttex-reference-autocomplete-order-active {
+    border-color: #74b9f2;
+    color: #fff;
+    background: #1669ae;
+  }
+
+  .smarttex-reference-autocomplete-order.smarttex-reference-autocomplete-order-active:hover {
+    background: #0f5a98;
+  }
+
+  .smarttex-reference-autocomplete-item {
+    border-color: #354154;
+    color: #d9e2ee;
+    background: #182230;
+  }
+
+  .smarttex-reference-autocomplete-item.smarttex-reference-autocomplete-exact {
+    background: #123a61;
+    box-shadow: inset 3px 0 #58a6ff;
+  }
+
+  .smarttex-reference-autocomplete-item:hover,
+  .smarttex-reference-autocomplete-item.smarttex-reference-autocomplete-selected {
+    background: #303846;
+  }
+
+  .smarttex-reference-autocomplete-item.smarttex-reference-autocomplete-exact:hover,
+  .smarttex-reference-autocomplete-item.smarttex-reference-autocomplete-exact.smarttex-reference-autocomplete-selected {
+    background: #123a61;
+    box-shadow: inset 3px 0 #58a6ff;
+  }
+
+  .smarttex-reference-autocomplete-label {
+    color: #79c0ff;
+  }
+
+  .smarttex-reference-autocomplete-description,
+  .smarttex-reference-autocomplete-empty {
+    color: #9cadc1;
+  }
+
+  .smarttex-reference-autocomplete-close {
+    color: #aab8ca;
+  }
+
+  .smarttex-reference-autocomplete-close:hover {
+    color: #fff;
+    background: #35445a;
+  }
+}
+
+/* Navigation history button shown after following a popup title link. */
+.smarttex-document-editing-toolbar .smarttex-document-back-button[hidden],
+.smarttex-document-editing-toolbar .smarttex-document-back-divider[hidden] {
+  display: none !important;
+}
+
+.smarttex-document-editing-toolbar .smarttex-document-back-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Keep the navigation-history arrow at the far left while the editing controls remain right-aligned. */
+.smarttex-document-editing-toolbar.smarttex-document-has-back {
+  width: 100%;
+  max-width: none;
+  justify-content: flex-end;
+}
+
+.smarttex-document-editing-toolbar.smarttex-document-has-back
+  .smarttex-document-back-divider {
+  margin-right: auto;
+}
+
+
+body.smarttex-editor-dark .smarttex-citation-list-parsing,
+html.smarttex-editor-dark .smarttex-citation-list-parsing,
+body[data-theme="dark"] .smarttex-citation-list-parsing,
+html[data-theme="dark"] .smarttex-citation-list-parsing {
+  border-color: #416f9d;
+  color: #b9dcff;
+  background: rgb(29 52 77 / 97%);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 34%);
+}
+
+/* Source-aware table editing controls. */
+.smarttex-document-editing-toolbar button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.smarttex-document-editing-toolbar button:disabled:hover,
+.smarttex-document-editing-toolbar button:disabled:focus-visible {
+  border-color: transparent;
+  color: inherit;
+  background: transparent;
+}
+
+.smarttex-document-editing-toolbar .smarttex-toolbar-icon-badge {
+  fill: currentColor;
+  stroke: none;
+}
+
+.smarttex-document-editing-toolbar .smarttex-toolbar-icon-badge-mark {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.6;
+}
+
+.smarttex-document-editing-toolbar .smarttex-toolbar-icon-emphasis,
+.smarttex-document-toolbar-dropdown 
+.smarttex-border-remove {
+  fill: none;
+  stroke: #c92a2a;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.smarttex-border-active {
+  stroke-width: 3;
+}
+
+.smarttex-table-icon-current {
+  fill: #2d78c4;
+  stroke: #17568f;
+}
+
+.smarttex-table-icon-add {
+  fill: #36b66b;
+  stroke: #168448;
+}
+
+.smarttex-table-icon-remove {
+  fill: #e25555;
+  stroke: #a92d2d;
+}
+
+.smarttex-table-icon-mark {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.8;
+}
+
+.smarttex-table-border-toolbar-outline {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+}
+
+.smarttex-document-toolbar-dropdown-item:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.smarttex-document-toolbar-dropdown-item:disabled:hover,
+.smarttex-document-toolbar-dropdown-item:disabled:focus-visible {
+  color: inherit;
+  background: transparent;
+}
+
+.smarttex-document-toolbar-dropdown {
+  position: fixed;
+  z-index: 2147483639;
+  display: grid;
+  min-width: 188px;
+  max-width: min(300px, calc(100vw - 16px));
+  padding: 5px;
+  overflow: auto;
+  border: 1px solid #b8c8da;
+  border-radius: 7px;
+  color: #26394d;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(31 52 73 / 24%);
+  font: 500 12px/1.3 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-document-toolbar-dropdown[hidden] {
+  display: none;
+}
+
+.smarttex-document-toolbar-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.smarttex-document-toolbar-dropdown-item:hover,
+.smarttex-document-toolbar-dropdown-item:focus-visible {
+  color: #145d9f;
+  background: #e7f2ff;
+  outline: none;
+}
+
+.smarttex-document-toolbar-dropdown-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+}
+
+.smarttex-document-toolbar-dropdown-icon svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.smarttex-document-toolbar-dropdown .smarttex-border-guide {
+  opacity: 0.28;
+  stroke-dasharray: 2 2;
+}
+
+.smarttex-table-border-mode {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 1px 2px 5px;
+  padding: 6px 7px 8px;
+  border-bottom: 1px solid #d7e0ea;
+  color: #53677d;
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.smarttex-table-border-mode input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.smarttex-table-border-switch {
+  position: relative;
+  width: 32px;
+  height: 17px;
+  border-radius: 10px;
+  background: #b8c6d5;
+  box-shadow: inset 0 0 0 1px rgb(36 61 85 / 18%);
+  transition: background 120ms ease;
+}
+
+.smarttex-table-border-switch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(15 33 51 / 35%);
+  content: "";
+  transition: transform 120ms ease;
+}
+
+.smarttex-table-border-mode input:checked + .smarttex-table-border-switch {
+  background: #2877bf;
+}
+
+.smarttex-table-border-mode input:checked + .smarttex-table-border-switch::after {
+  transform: translateX(15px);
+}
+
+.smarttex-table-dialog-overlay {
+  position: fixed;
+  z-index: 2147483642;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(18 31 45 / 42%);
+  backdrop-filter: blur(1px);
+}
+
+.smarttex-table-dialog {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 13px 12px;
+  width: min(460px, calc(100vw - 32px));
+  padding: 15px;
+  border: 1px solid #b9c9db;
+  border-radius: 9px;
+  color: #26394d;
+  background: #fff;
+  box-shadow: 0 16px 42px rgb(17 35 54 / 34%);
+  font: 500 13px/1.35 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-table-dialog-heading,
+.smarttex-table-dialog-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+}
+
+.smarttex-table-dialog-heading {
+  justify-content: space-between;
+  margin: -3px 0 1px;
+  font-size: 15px;
+}
+
+.smarttex-table-dialog-heading button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  font-size: 21px;
+  cursor: pointer;
+}
+
+.smarttex-table-dialog label {
+  display: grid;
+  gap: 5px;
+  color: #53677d;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.smarttex-table-dialog label:nth-of-type(n + 3) {
+  grid-column: 1 / -1;
+}
+
+.smarttex-table-dialog input {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid #b7c7d8;
+  border-radius: 5px;
+  color: #1f3449;
+  background: #fff;
+  font: 500 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-table-dialog input:focus {
+  border-color: #4a91d8;
+  box-shadow: 0 0 0 2px rgb(74 145 216 / 18%);
+  outline: none;
+}
+
+.smarttex-table-dialog-actions {
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 2px;
+}
+
+.smarttex-table-dialog-actions button {
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 1px solid #aebfd0;
+  border-radius: 5px;
+  color: #2d4358;
+  background: #f7f9fb;
+  font: 650 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-table-dialog-actions .smarttex-table-dialog-primary {
+  border-color: #2877bf;
+  color: #fff;
+  background: #2877bf;
+}
+
+.smarttex-document-toolbar-dropdown.smarttex-editor-dark,
+.smarttex-table-dialog-overlay:has(.smarttex-table-dialog.smarttex-editor-dark) {
+  color: #dce7f3;
+}
+
+.smarttex-document-toolbar-dropdown.smarttex-editor-dark {
+  border-color: #52657a;
+  color: #dce7f3;
+  background: #1b2837;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 42%);
+}
+
+.smarttex-document-toolbar-dropdown.smarttex-editor-dark .smarttex-document-toolbar-dropdown-item:hover,
+.smarttex-document-toolbar-dropdown.smarttex-editor-dark .smarttex-document-toolbar-dropdown-item:focus-visible {
+  color: #b8ddff;
+  background: #203f5d;
+}
+
+.smarttex-document-toolbar-dropdown.smarttex-editor-dark .smarttex-table-border-mode {
+  border-color: #46596e;
+  color: #b9c9da;
+}
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-table-dialog {
+    border-color: #52657a;
+    color: #dce7f3;
+    background: #1b2837;
+  }
+
+  .smarttex-table-dialog label {
+    color: #b9c9da;
+  }
+
+  .smarttex-table-dialog input {
+    border-color: #52657a;
+    color: #e4edf7;
+    background: #14202d;
+  }
+
+  .smarttex-table-dialog-actions button {
+    border-color: #52657a;
+    color: #dce7f3;
+    background: #243446;
+  }
+}
+
+.smarttex-table-dialog.smarttex-editor-dark {
+  border-color: #52657a;
+  color: #dce7f3;
+  background: #1b2837;
+}
+
+.smarttex-table-dialog.smarttex-editor-dark label {
+  color: #b9c9da;
+}
+
+.smarttex-table-dialog.smarttex-editor-dark input {
+  border-color: #52657a;
+  color: #e4edf7;
+  background: #14202d;
+}
+
+.smarttex-table-dialog.smarttex-editor-dark .smarttex-table-dialog-actions button {
+  border-color: #52657a;
+  color: #dce7f3;
+  background: #243446;
+}
+
+.smarttex-table-dialog.smarttex-editor-dark .smarttex-table-dialog-actions .smarttex-table-dialog-primary {
+  border-color: #4b96db;
+  color: #fff;
+  background: #2877bf;
+}
+
+/* Keep captions inside reference previews constrained to the popup width.
+   The media itself may remain horizontally scrollable, but its intrinsic width
+   must not force figure or table captions onto a single over-wide line. */
+.smarttex-document-reference-popup .smarttex-figure-popup,
+.smarttex-document-reference-popup .smarttex-table-popup,
+.smarttex-editor-reference-popup .smarttex-figure-popup,
+.smarttex-editor-reference-popup .smarttex-table-popup {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.smarttex-document-reference-popup .smarttex-float-popup-caption,
+.smarttex-editor-reference-popup .smarttex-float-popup-caption {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#smarttex-toolbar-slot .smarttex-nextcloud-update-all {
+  margin-left: 4px;
+  align-self: center;
 }

@@ -11,11 +11,13 @@
     #citation-hover-test-result { position: fixed; right: 10px; bottom: 10px; }
   </style>
 </head>
-<body>
+<body class="smarttex-document-live">
   <div class="cm-content">See \cite{Lovelace} for details.</div>
   <output id="citation-hover-test-result">Citation hover test running</output>
   <script>
-    const source = String.raw`\begin{document}
+    const source = String.raw`\documentclass{article}
+\bibliography{refs}
+\begin{document}
 See \cite{Lovelace} for details.
 \end{document}`;
     const citeStart = source.indexOf("\\cite{Lovelace}");
@@ -45,10 +47,42 @@ See \cite{Lovelace} for details.
         onChanged: { addListener() {} }
       }
     };
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get() { return "text/plain; charset=utf-8"; } },
+      async text() {
+        return String.raw`@article{Lovelace,
+  title = {Refreshed Notes on the Analytical Engine},
+  author = {Lovelace, Ada and Babbage, Charles},
+  journal = {Scientific Memoirs},
+  volume = {3},
+  number = {2},
+  pages = {666--731},
+  year = {1843},
+  doi = {10.1000/analytical-engine}
+}`;
+      }
+    });
     window.addEventListener("smarttex:citation-editor-request", (event) => {
       const request = JSON.parse(event.detail);
       const response = { requestId: request.requestId, ok: true };
       if (request.type === "getIndexAtCoordinates") response.index = citeStart + 7;
+      else if (request.type === "getState") response.state = {
+        value: source,
+        cursorIndex: source.indexOf("See "),
+        selectionFrom: source.indexOf("See "),
+        selectionTo: source.indexOf("See "),
+        screen: { pageX: 200, pageY: 110, lineHeight: 20 },
+        fileName: "main.tex",
+        focused: true,
+        editorKind: "codemirror"
+      };
+      else if (request.type === "resolveProjectFile") response.file = {
+        url: "https://project.test/files/refs.bib",
+        path: "refs.bib"
+      };
+      else if (request.type === "setCitationAutocompleteActive") response.active = request.active;
       window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
         detail: JSON.stringify(response)
       }));
@@ -72,7 +106,9 @@ See \cite{Lovelace} for details.
   <script src="../latex-context.js"></script>
   <script src="../table-renderer.js"></script>
   <script src="../figure-renderer.js"></script>
+  <script src="../bibtex-parser.js"></script>
   <script src="../content.js"></script>
+  <script src="../citation-autocomplete.js"></script>
   <script>
     const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     async function runCitationHoverTest() {
@@ -91,6 +127,10 @@ See \cite{Lovelace} for details.
         if (popup) break;
         await delay(25);
       }
+      const refreshButtonAtTop = Boolean(
+        popup?.firstElementChild?.classList.contains("smarttex-citation-popup-toolbar") &&
+        popup.querySelector(".smarttex-citation-popup-refresh")
+      );
       const fullCitation = Boolean(
         popup?.querySelector(".smarttex-reference-popup-citation-title")?.textContent.includes("Analytical Engine") &&
         popup?.querySelector(".smarttex-reference-popup-citation-key")?.textContent === "Lovelace" &&
@@ -98,6 +138,21 @@ See \cite{Lovelace} for details.
         popup?.querySelector(".smarttex-reference-popup-citation-publication")?.textContent.includes("3(2)") &&
         popup?.querySelector(".smarttex-reference-popup-citation-doi")?.textContent.includes("10.1000")
       );
+
+      popup.querySelector(".smarttex-citation-popup-refresh").click();
+      let refreshedWhileLive = false;
+      for (let i = 0; i < 120; i += 1) {
+        const title = popup.querySelector(
+          ".smarttex-reference-popup-citation-title"
+        )?.textContent || "";
+        if (title.includes("Refreshed Notes")) {
+          refreshedWhileLive = document.body.classList.contains(
+            "smarttex-document-live"
+          );
+          break;
+        }
+        await delay(25);
+      }
 
       popup.style.maxHeight = "72px";
       while (popup.children.length < 7) {
@@ -125,7 +180,9 @@ See \cite{Lovelace} for details.
       );
 
       const checks = {
+        refreshButtonAtTop,
         fullCitation,
+        refreshedWhileLive,
         popupRemainsWhileScrolling,
         suppressedInsideCommand
       };

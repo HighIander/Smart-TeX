@@ -67,7 +67,11 @@ Earlier
 \begin{tabular}{|l|c|r|}
 \hline
 \textbf{Sample} & \textbf{Signal} & \textbf{Uncertainty} \\
+\cline{1-2}
+\cline{1-2}
 Copper§ foil & $1.25\,\unit{V}$ & $0.04$ \\
+\cline{2-2}
+Silver foil & $1.20\,\unit{V}$ & $0.05$ \\
 \multicolumn{2}{c|}{Mean} & $1.25 \pm 0.04$ \\
 \hline
 \end{tabular}
@@ -105,7 +109,7 @@ Copper§ foil & $1.25\,\unit{V}$ & $0.04$ \\
         ".smarttex-table-preview .smarttex-table-inline-math .katex"
       ).length || 0;
       const caret = popup?.querySelector(".smarttex-table-rendered-caret");
-      if (!popup || popup.hidden || rows < 3 || math < 3 || !caret) {
+      if (!popup || popup.hidden || rows < 4 || math < 5 || !caret) {
         window.setTimeout(checkTablePreview, 30);
         return;
       }
@@ -129,11 +133,33 @@ Copper§ foil & $1.25\,\unit{V}$ & $0.04$ \\
         captionBold: popup.querySelector(
           ".smarttex-float-popup-caption .smarttex-inline-latex strong"
         )?.textContent === "high precision",
-        rows: rows === 3,
-        math: math === 3,
+        rows: rows === 4,
+        math: math === 5,
         edit: popup.textContent.includes("Copper sheet"),
         staleEdit: !popup.textContent.includes("Copper foil"),
-        colspan: Boolean(popup.querySelector("td[colspan='2']"))
+        colspan: Boolean(popup.querySelector("td[colspan='2']")),
+        doublePartialRule: (
+          popup.querySelectorAll("tr")[1]?.children[0]?.classList.contains(
+            "smarttex-table-border-top-double"
+          ) &&
+          popup.querySelectorAll("tr")[1]?.children[1]?.classList.contains(
+            "smarttex-table-border-top-double"
+          ) &&
+          !popup.querySelectorAll("tr")[1]?.children[2]?.classList.contains(
+            "smarttex-table-border-top"
+          )
+        ),
+        selectedPartialRule: (
+          !popup.querySelectorAll("tr")[2]?.children[0]?.classList.contains(
+            "smarttex-table-border-top"
+          ) &&
+          popup.querySelectorAll("tr")[2]?.children[1]?.classList.contains(
+            "smarttex-table-border-top"
+          ) &&
+          !popup.querySelectorAll("tr")[2]?.children[2]?.classList.contains(
+            "smarttex-table-border-top"
+          )
+        )
       };
       const passed = Object.values(checks).every(Boolean);
       const output = document.querySelector("#table-test-result");

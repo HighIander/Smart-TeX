@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX popup interaction regression harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; min-height: 100vh; background: #f4f6f9; }
+    #popup-interaction-result { position: fixed; right: 10px; bottom: 10px; z-index: 2147483647; }
+  </style>
+</head>
+<body>
+  <output id="popup-interaction-result">Popup interaction test running</output>
+  <script>
+    globalThis.browser = {
+      storage: {
+        local: { async get() { return {}; } },
+        onChanged: { addListener() {} }
+      },
+      runtime: { async sendMessage() { return { ok: true }; } }
+    };
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({
+          requestId: request.requestId,
+          ok: true,
+          screen: { pageX: 350, pageY: 300, lineHeight: 20 }
+        })
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    const source = String.raw`\begin{document}
+\begin{equation}
+E=mc^2
+\label{eq:a}
+\end{equation}
+
+\begin{table}[htbp]
+\centering
+\caption{Alpha beta gamma}
+\label{tab:table}
+\begin{tabular}{ccc}
+   \cline{3-3}
+   1 & 2 & \multicolumn{1}{|c|}{3} \\
+   \cline{3-3}
+    &  &  \\
+    &  &  \\
+\end{tabular}
+\end{table}
+
+\begin{figure}
+\centering
+\caption{See Eq.~\eqref{eq:a}.}
+\label{fig:a}
+\end{figure}
+\end{document}`;
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    function sendState(cursorIndex, selectionFrom = cursorIndex, selectionTo = cursorIndex, focused = true) {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value: source,
+          cursorIndex,
+          selectionFrom,
+          selectionTo,
+          selectionAnchor: selectionFrom,
+          selectionHead: selectionTo,
+          screen: { pageX: 350, pageY: 300, lineHeight: 20 },
+          fileName: "main.tex",
+          focused,
+          editorKind: "harness"
+        })
+      }));
+    }
+    async function waitFor(selector, timeout = 5000) {
+      const end = performance.now() + timeout;
+      while (performance.now() < end) {
+        const element = document.querySelector(selector);
+        if (element) return element;
+        await delay(25);
+      }
+      return null;
+    }
+    async function run() {
+      const checks = {};
+      const operatorCursor = source.indexOf("multicolumn") + 5;
+      sendState(operatorCursor);
+      const preview = await waitFor("#smarttex-equation-preview:not([hidden])");
+      await delay(150);
+      const firstRow = preview?.querySelector(".smarttex-table-preview tr");
+      const cells = [...(firstRow?.children || [])];
+      checks.multicolumnAtOperator = (
+        cells.map((cell) => cell.textContent.trim()).join("|") === "1|2|3" &&
+        cells[2]?.classList.contains("smarttex-table-border-top") &&
+        cells[2]?.classList.contains("smarttex-table-border-bottom") &&
+        cells[2]?.classList.contains("smarttex-table-border-right") &&
+        !cells[0]?.classList.contains("smarttex-table-border-top") &&
+        Boolean(preview?.querySelector(
+          ".smarttex-table-rendered-caret.smarttex-table-operator-caret"
+        ))
+      );
+
+      const equationOperatorCursor = source.indexOf("\\label{eq:a}") + 4;
+      sendState(equationOperatorCursor);
+      await delay(150);
+      checks.equationOperatorCaret = Boolean(
+        preview?.querySelector(".smarttex-rendered-operator-caret")
+      );
+
+      const selectionFrom = source.indexOf("Alpha beta");
+      const selectionTo = selectionFrom + "Alpha".length;
+      sendState(selectionTo, selectionFrom, selectionTo);
+      await delay(180);
+      checks.captionSelection = Boolean(
+        preview &&
+        !preview.hidden &&
+        preview.querySelector(".smarttex-float-popup-caption")?.textContent.includes("Alpha beta") &&
+        ((CSS.highlights?.get("smarttex-popup-selection")?.size || 0) > 0 ||
+          preview.querySelector(".smarttex-popup-source-selected"))
+      );
+
+      const figureCursor = source.indexOf("\\centering", source.indexOf("\\begin{figure}")) + 4;
+      sendState(figureCursor);
+      await delay(180);
+      const link = preview?.querySelector(".smarttex-caption-reference");
+      link?.dispatchEvent(new PointerEvent("pointerenter", {
+        bubbles: false,
+        clientX: 480,
+        clientY: 360
+      }));
+      await delay(180);
+      const nested = document.querySelector(".smarttex-document-reference-popup:not([hidden])");
+      sendState(figureCursor, figureCursor, figureCursor, false);
+      await delay(280);
+      checks.nestedReferenceKeepsParent = Boolean(
+        preview && !preview.hidden && nested && !nested.hidden &&
+        nested.querySelector(".smarttex-reference-popup-title")?.textContent === "Equation 1"
+      );
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#popup-interaction-result");
+      output.textContent = passed
+        ? "Popup interaction test passed"
+        : `Popup interaction test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.popupInteractionTest = passed ? "passed" : "failed";
+    }
+    run().catch((error) => {
+      document.querySelector("#popup-interaction-result").textContent = error.message;
+      document.documentElement.dataset.popupInteractionTest = "failed";
+    });
+  </script>
+</body>
+</html>

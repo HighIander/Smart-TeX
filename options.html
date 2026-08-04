@@ -50,10 +50,77 @@
       </section>
 
       <section>
-        <h2>Live previews</h2>
+        <h2>Reference and citation popups</h2>
+        <label for="smarttex-reference-popup-trigger">Popup trigger</label>
         <p class="hint">
-          Move the text cursor into an inline or display equation to show a live KaTeX preview
-          beside it. SmartTeX applies <code>\newcommand</code>, <code>\renewcommand</code>, and
+          Choose whether previews for <code>\ref</code>, <code>\eqref</code>, and citation
+          commands open on hover in the editor and Live preview, or only beside the source
+          editor cursor while it is inside the command.
+        </p>
+        <select id="smarttex-reference-popup-trigger">
+          <option value="hover">Open on hover</option>
+          <option value="cursor">Open only when the cursor is inside the command</option>
+        </select>
+
+        <label for="smarttex-environment-popup-trigger" class="suboption-label">Equation, table, and figure popup trigger</label>
+        <p class="hint">
+          Choose whether source previews open while the text cursor is inside an equation,
+          table, or figure, or when the corresponding source is hovered.
+        </p>
+        <select id="smarttex-environment-popup-trigger">
+          <option value="cursor">Open when the cursor is inside the source</option>
+          <option value="hover">Open on hover</option>
+        </select>
+      </section>
+
+      <section>
+        <h2>Autocomplete</h2>
+        <label for="smarttex-reference-order">Reference-list order</label>
+        <p class="hint">
+          Choose how labels are ordered in SmartTeX autocomplete lists for commands such as
+          <code>\ref</code> and <code>\eqref</code>.
+        </p>
+        <select id="smarttex-reference-order">
+          <option value="document">Order of appearance in the document</option>
+          <option value="alphabetical">Alphabetical by label</option>
+        </select>
+      </section>
+
+
+      <section>
+        <h2>Source highlighting</h2>
+        <p class="hint">Each source annotation can be disabled and assigned its own color. Highlights are rendered behind editor text and editor controls.</p>
+        <div class="highlight-options-grid">
+          <label><input id="smarttex-highlight-environment-enabled" type="checkbox" checked> Environments and section lines</label>
+          <input id="smarttex-highlight-environment-color" type="color" value="#8ec5ff" aria-label="Environment highlight color">
+          <label><input id="smarttex-highlight-caption-enabled" type="checkbox" checked> <code>\caption{...}</code></label>
+          <input id="smarttex-highlight-caption-color" type="color" value="#70afea" aria-label="Caption highlight color">
+          <label><input id="smarttex-highlight-label-enabled" type="checkbox" checked> <code>\label{...}</code></label>
+          <input id="smarttex-highlight-label-color" type="color" value="#8fd19e" aria-label="Label highlight color">
+          <label><input id="smarttex-highlight-reference-enabled" type="checkbox" checked> References</label>
+          <input id="smarttex-highlight-reference-color" type="color" value="#8fd19e" aria-label="Reference highlight color">
+          <label><input id="smarttex-highlight-nonumber-enabled" type="checkbox" checked> <code>\nonumber</code> / <code>\notag</code></label>
+          <input id="smarttex-highlight-nonumber-color" type="color" value="#ffe69a" aria-label="Nonumber highlight color">
+          <label><input id="smarttex-highlight-inline-math-enabled" type="checkbox" checked> Inline equations</label>
+          <input id="smarttex-highlight-inline-math-color" type="color" value="#8ec5ff" aria-label="Inline equation highlight color">
+        </div>
+        <button id="smarttex-highlight-reset" type="button" class="secondary-button">Reset highlight settings</button>
+      </section>
+
+      <section>
+        <h2>Live previews</h2>
+        <label class="feature-option">
+          <input id="smarttex-feature-live-document-preview" type="checkbox">
+          <span>Show the <strong>S Live</strong> full-document preview button <span class="beta-badge">Beta</span></span>
+        </label>
+        <p class="hint">
+          This experimental button switches the compiled-PDF pane to a fully rendered SmartTeX
+          document preview. It is hidden by default. Popup previews for equations, tables, and
+          figures remain available independently.
+        </p>
+        <p class="hint">
+          Depending on the popup-trigger setting, move the text cursor into or hover over an
+          inline or display equation to show a live KaTeX preview beside it. SmartTeX applies <code>\newcommand</code>, <code>\renewcommand</code>, and
           <code>\providecommand</code> definitions found earlier in the active LaTeX file.
           Moving into a <code>tabular</code>, <code>tabularx</code>, <code>longtable</code>,
           or <code>array</code> block shows a live table preview with its rules, alignment,
@@ -62,9 +129,9 @@
         </p>
       </section>
 
-      <div class="actions">
-        <button type="submit">Save options</button>
-        <span id="smarttex-options-status" role="status" aria-live="polite"></span>
+      <div class="actions" aria-live="polite">
+        <span class="autosave-note">Changes are saved automatically.</span>
+        <span id="smarttex-options-status" role="status"></span>
       </div>
     </form>
 

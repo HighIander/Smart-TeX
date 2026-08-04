@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SmartTeX",
-  "version": "1.4.0",
+  "version": "1.4.9",
   "description": "Live LaTeX previews and per-document Nextcloud project-file integration for CollabTeX-compatible editors.",
   "permissions": [
     "storage",

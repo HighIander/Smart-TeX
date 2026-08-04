@@ -136,6 +136,12 @@
         }
       }
     };
+    storedPreviewSettings["smarttex:features:v1"] = {
+      equations: true,
+      tables: true,
+      figures: true,
+      liveDocumentPreview: true
+    };
     storedPreviewSettings[
       `smarttex:citation-cache:v1:${window.location.origin}:${window.location.pathname}`
     ] = {
@@ -173,6 +179,7 @@
   <script src="../vendor/katex/katex.min.js"></script>
   <script src="../latex-context.js"></script>
   <script src="../table-renderer.js"></script>
+  <script src="../table-editor.js"></script>
   <script src="../figure-renderer.js"></script>
   <script src="../document-preview.js"></script>
   <script>
@@ -312,6 +319,12 @@ Far destination paragraph for immediate cursor scrolling.
           document.querySelector("[aria-label='Recompile']")
         ).display === "none",
         previewVisible: !preview.hidden,
+        horizontalScrollbarAlways: (
+          getComputedStyle(preview).overflowX === "scroll" &&
+          ["stable", "stable both-edges"].includes(
+            getComputedStyle(preview).scrollbarGutter
+          )
+        ),
         title: page.textContent.includes("Live document preview"),
         section: page.textContent.includes("Introduction"),
         equation: Boolean(page.querySelector(".smarttex-document-equation .katex")),
@@ -369,6 +382,11 @@ Far destination paragraph for immediate cursor scrolling.
           document.querySelector(".smarttex-document-page").offsetWidth &&
         storedPreviewSettings["smarttex:document-preview-settings:v1"]?.zoom === 1.1
       );
+      checks.horizontalScrollbarWhenZoomed = (
+        preview.classList.contains("smarttex-document-horizontal-overflow") &&
+        getComputedStyle(preview).overflowX === "scroll" &&
+        preview.scrollWidth > preview.clientWidth
+      );
 
       const initialReferences = [...page.querySelectorAll(
         ".smarttex-document-reference"
@@ -384,9 +402,8 @@ Far destination paragraph for immediate cursor scrolling.
         )
       );
       equationReference.dispatchEvent(new PointerEvent("pointerenter"));
-      await delay(20);
-      const referencePopup = document.querySelector(
-        ".smarttex-document-reference-popup"
+      const referencePopup = await waitFor(
+        ".smarttex-document-reference-popup:not([hidden])"
       );
       checks.referenceHoverPreview = (
         referencePopup &&
@@ -397,10 +414,19 @@ Far destination paragraph for immediate cursor scrolling.
       const citationReference = initialReferences.find((link) => (
         JSON.parse(link.dataset.labels || "[]").includes("Lovelace")
       ));
+      checks.citationRenderedAsNumber = citationReference?.textContent === "[1]";
       citationReference.dispatchEvent(new PointerEvent("pointerenter"));
-      await delay(30);
+      await waitFor(
+        ".smarttex-document-reference-popup:not([hidden]) .smarttex-citation-popup-toolbar"
+      );
       const citationCard = referencePopup.querySelector(
         ".smarttex-reference-popup-citation"
+      );
+      checks.citationRefreshButtonAtTop = Boolean(
+        referencePopup.firstElementChild?.classList.contains(
+          "smarttex-citation-popup-toolbar"
+        ) &&
+        referencePopup.querySelector(".smarttex-citation-popup-refresh")
       );
       checks.citationPopupIsBounded = (
         !referencePopup.hidden &&
@@ -547,6 +573,9 @@ Far destination paragraph for immediate cursor scrolling.
       );
 
       const requestsBeforePageDown = previewNavigationRequests.length;
+      if (preview.scrollTop >= preview.scrollHeight - preview.clientHeight - 2) {
+        preview.scrollTop = 0;
+      }
       const scrollBeforePageDown = preview.scrollTop;
       preview.dispatchEvent(new KeyboardEvent("keydown", {
         bubbles: true,
@@ -690,6 +719,75 @@ Far destination paragraph for immediate cursor scrolling.
           document.querySelector(".smarttex-document-page")
         ).fontSize) < 11
       );
+
+      const cursorPositionInput = [...settingsMenu.querySelectorAll(
+        "input[type='checkbox']"
+      )].find((input) => input.parentElement.textContent.includes(
+        "Show cursor position"
+      ));
+      const scrollSynchronizationInput = [...settingsMenu.querySelectorAll(
+        "input[type='checkbox']"
+      )].find((input) => input.parentElement.textContent.includes(
+        "Keep live view synchronized to editor"
+      ));
+      checks.cursorAndScrollOptionsExist = Boolean(
+        cursorPositionInput && scrollSynchronizationInput
+      );
+
+      const hiddenCursorSource = mergedParagraphSource.replace(
+        "Far bright destination",
+        "Far hidden destination"
+      );
+      const hiddenCursorPage = document.querySelector(".smarttex-document-page");
+      const hiddenCursorRenderedAt = preview.dataset.lastRenderedAt;
+      cursorPositionInput.checked = false;
+      cursorPositionInput.dispatchEvent(new Event("change", { bubbles: true }));
+      dispatch(
+        hiddenCursorSource,
+        hiddenCursorSource.indexOf("Far hidden destination") + 10
+      );
+      await delay(70);
+      checks.hiddenCursorStillUpdatesTextImmediately = (
+        preview.classList.contains("smarttex-document-cursor-position-hidden") &&
+        !preview.querySelector(
+          ".smarttex-document-text-caret, .smarttex-rendered-caret, " +
+          ".smarttex-table-rendered-caret"
+        ) &&
+        preview.textContent.includes("Far hidden destination") &&
+        document.querySelector(".smarttex-document-page") === hiddenCursorPage &&
+        preview.dataset.lastRenderedAt === hiddenCursorRenderedAt &&
+        storedPreviewSettings["smarttex:document-preview-settings:v1"]
+          ?.showCursorPosition === false
+      );
+
+      preview.scrollTop = 0;
+      scrollSynchronizationInput.checked = true;
+      scrollSynchronizationInput.dispatchEvent(new Event("change", {
+        bubbles: true
+      }));
+      dispatch(
+        hiddenCursorSource,
+        hiddenCursorSource.indexOf("Far hidden destination") + 10
+      );
+      await delay(90);
+      checks.liveViewScrollSynchronization = (
+        preview.scrollTop > 0 &&
+        storedPreviewSettings["smarttex:document-preview-settings:v1"]
+          ?.keepLiveViewSynchronized === true
+      );
+
+      cursorPositionInput.checked = true;
+      cursorPositionInput.dispatchEvent(new Event("change", { bubbles: true }));
+      scrollSynchronizationInput.checked = false;
+      scrollSynchronizationInput.dispatchEvent(new Event("change", {
+        bubbles: true
+      }));
+      await delay(40);
+      checks.cursorCanBeRestored = Boolean(preview.querySelector(
+        ".smarttex-document-text-caret, .smarttex-rendered-caret, " +
+        ".smarttex-table-rendered-caret"
+      ));
+
       const renderFiguresInput = [...settingsMenu.querySelectorAll(
         "input[type='checkbox']"
       )].find((input) => input.parentElement.textContent.includes("Render figures"));
@@ -892,7 +990,7 @@ Far destination paragraph for immediate cursor scrolling.
         "#smarttex-reference-target-"
       );
       figureReference.dispatchEvent(new PointerEvent("pointerenter"));
-      await delay(30);
+      await delay(220);
       checks.figureReferencePopupCaption = (
         !referencePopup.hidden &&
         referencePopup.querySelector(
@@ -1041,7 +1139,10 @@ Far destination paragraph for immediate cursor scrolling.
         mathSelectionEnd,
         mathSelectionStart
       );
-      await delay(140);
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (document.querySelector(".smarttex-source-selection")) break;
+        await delay(20);
+      }
       checks.editorMathSelectionHighlightsPreview = Boolean(
         document.querySelector(".smarttex-source-selection")
       );

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX popup trigger and navigation harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; }
+    body { background: #eef1f5; font: 14px/1.5 system-ui, sans-serif; }
+    #ide-redesign-panel-editor { position: fixed; inset: 0 50% 0 0; background: #fff; }
+    .toolbar-editor, .pdf-toolbar { display: flex; align-items: center; min-height: 42px; padding: 4px 8px; background: #f4f6f8; }
+    .cm-content { margin: 24px; padding: 18px; white-space: pre-wrap; font: 15px/1.5 Consolas, monospace; }
+    #ide-redesign-panel-pdf { position: fixed; inset: 0 0 0 50%; display: grid; grid-template-rows: auto 1fr; background: #fff; }
+    .pdf-native { min-height: 0; background: #ddd; }
+    .pdf-native iframe { width: 100%; height: 100%; border: 0; }
+    #popup-trigger-navigation-result { position: fixed; right: 10px; bottom: 10px; z-index: 2147483647; color: #fff; background: #9a6700; padding: 7px 10px; }
+    #popup-trigger-navigation-result[data-result="passed"] { background: #16803b; }
+    #popup-trigger-navigation-result[data-result="failed"] { background: #cf222e; }
+  </style>
+</head>
+<body>
+  <section id="ide-redesign-panel-editor">
+    <div class="toolbar toolbar-editor" role="toolbar"><button type="button">Menu</button></div>
+    <div class="cm-content">See Equation \eqref{eq:test}.</div>
+  </section>
+  <section id="ide-redesign-panel-pdf">
+    <div class="pdf-toolbar" role="toolbar">
+      <button type="button" aria-label="Recompile">Recompile</button>
+      <button type="button" aria-label="Download PDF">Download PDF</button>
+    </div>
+    <div class="pdf-native"><iframe title="PDF preview"></iframe></div>
+  </section>
+  <output id="popup-trigger-navigation-result">Popup trigger/navigation test running</output>
+  <script>
+    const popupKey = "smarttex:reference-popups:v1";
+    const featureKey = "smarttex:features:v1";
+    const previewKey = "smarttex:document-preview-settings:v1";
+    const storageValues = {
+      [popupKey]: { trigger: "cursor" },
+      [featureKey]: { equations: true, tables: true, figures: true },
+      [previewKey]: { textScale: 100, zoom: 1, renderFigures: false }
+    };
+    const storageListeners = [];
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(keys) {
+            const list = Array.isArray(keys) ? keys : [keys];
+            return Object.fromEntries(list.map((key) => [key, storageValues[key]]));
+          },
+          async set(values) { Object.assign(storageValues, values); }
+        },
+        onChanged: { addListener(listener) { storageListeners.push(listener); } }
+      },
+      runtime: { async sendMessage() { return { ok: true }; } }
+    };
+    storageValues[
+      `smarttex:citation-cache:v1:${window.location.origin}:${window.location.pathname}`
+    ] = {
+      records: [{
+        key: "Demo",
+        title: "Demonstration citation",
+        authors: ["A. Author"],
+        journal: "Journal of Tests",
+        year: "2026"
+      }]
+    };
+    const source = String.raw`\begin{document}
+See Equation \eqref{eq:test}. Also \cite{Demo}.
+\begin{equation}
+E=mc^2+\frac{p_{1}^4+q_{1}^3+r_{1}^2}{1+x_{1}^2+y_{1}^4}+\frac{p_{2}^4+q_{2}^3+r_{2}^2}{1+x_{2}^2+y_{2}^4}+\frac{p_{3}^4+q_{3}^3+r_{3}^2}{1+x_{3}^2+y_{3}^4}+\frac{p_{4}^4+q_{4}^3+r_{4}^2}{1+x_{4}^2+y_{4}^4}+\frac{p_{5}^4+q_{5}^3+r_{5}^2}{1+x_{5}^2+y_{5}^4}+\frac{p_{6}^4+q_{6}^3+r_{6}^2}{1+x_{6}^2+y_{6}^4}+\frac{p_{7}^4+q_{7}^3+r_{7}^2}{1+x_{7}^2+y_{7}^4}+\frac{p_{8}^4+q_{8}^3+r_{8}^2}{1+x_{8}^2+y_{8}^4}+\frac{p_{9}^4+q_{9}^3+r_{9}^2}{1+x_{9}^2+y_{9}^4}+\frac{p_{10}^4+q_{10}^3+r_{10}^2}{1+x_{10}^2+y_{10}^4}+\frac{p_{11}^4+q_{11}^3+r_{11}^2}{1+x_{11}^2+y_{11}^4}+\frac{p_{12}^4+q_{12}^3+r_{12}^2}{1+x_{12}^2+y_{12}^4}+\frac{p_{13}^4+q_{13}^3+r_{13}^2}{1+x_{13}^2+y_{13}^4}+\frac{p_{14}^4+q_{14}^3+r_{14}^2}{1+x_{14}^2+y_{14}^4}+\frac{p_{15}^4+q_{15}^3+r_{15}^2}{1+x_{15}^2+y_{15}^4}+\frac{p_{16}^4+q_{16}^3+r_{16}^2}{1+x_{16}^2+y_{16}^4}+\frac{p_{17}^4+q_{17}^3+r_{17}^2}{1+x_{17}^2+y_{17}^4}+\frac{p_{18}^4+q_{18}^3+r_{18}^2}{1+x_{18}^2+y_{18}^4}+\frac{p_{19}^4+q_{19}^3+r_{19}^2}{1+x_{19}^2+y_{19}^4}+\frac{p_{20}^4+q_{20}^3+r_{20}^2}{1+x_{20}^2+y_{20}^4}+\frac{p_{21}^4+q_{21}^3+r_{21}^2}{1+x_{21}^2+y_{21}^4}+\frac{p_{22}^4+q_{22}^3+r_{22}^2}{1+x_{22}^2+y_{22}^4}+\frac{p_{23}^4+q_{23}^3+r_{23}^2}{1+x_{23}^2+y_{23}^4}+\frac{p_{24}^4+q_{24}^3+r_{24}^2}{1+x_{24}^2+y_{24}^4}+\frac{p_{25}^4+q_{25}^3+r_{25}^2}{1+x_{25}^2+y_{25}^4}+\frac{p_{26}^4+q_{26}^3+r_{26}^2}{1+x_{26}^2+y_{26}^4}+\frac{p_{27}^4+q_{27}^3+r_{27}^2}{1+x_{27}^2+y_{27}^4}
+\label{eq:test}
+\end{equation}
+\end{document}`;
+    const commandStart = source.indexOf("\\eqref{eq:test}");
+    const originIndex = commandStart + 8;
+    const bridgeRequests = [];
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      bridgeRequests.push(request);
+      const response = { requestId: request.requestId, ok: true };
+      if (request.type === "getIndexAtCoordinates") response.index = originIndex;
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify(response)
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../table-editor.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script src="../document-preview.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+    async function waitFor(selector, timeout = 5000) {
+      const end = performance.now() + timeout;
+      while (performance.now() < end) {
+        const element = document.querySelector(selector);
+        if (element) return element;
+        await delay(25);
+      }
+      return null;
+    }
+    async function run() {
+      const state = {
+        value: source,
+        cursorIndex: originIndex,
+        selectionFrom: originIndex,
+        selectionTo: originIndex,
+        selectionAnchor: originIndex,
+        selectionHead: originIndex,
+        screen: { pageX: 230, pageY: 115, lineHeight: 20 },
+        fileName: "main.tex",
+        focused: true,
+        editorKind: "codemirror"
+      };
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify(state)
+      }));
+      const popup = await waitFor(".smarttex-editor-reference-popup:not([hidden])");
+      const title = popup?.querySelector("a.smarttex-reference-popup-title");
+      const cursorTriggered = Boolean(popup && title?.textContent === "Equation 1");
+      const equation = popup?.querySelector(".smarttex-reference-popup-equation");
+      const equationScrollable = Boolean(
+        equation && equation.scrollWidth > equation.clientWidth
+      );
+      equation?.dispatchEvent(new WheelEvent("wheel", {
+        deltaX: 120, bubbles: true, cancelable: true
+      }));
+      popup?.dispatchEvent(new PointerEvent("pointerleave", { bubbles: false }));
+      await delay(360);
+      const staysOpenWhileScrolling = Boolean(popup && !popup.hidden);
+      title?.click();
+      await delay(80);
+      const jumpRequest = bridgeRequests.find((request) => request.type === "setCursor");
+      const backButton = await waitFor(".smarttex-document-back-button:not([hidden])");
+      const backVisible = Boolean(backButton && !backButton.disabled);
+      backButton?.click();
+      await delay(80);
+      const backRequest = bridgeRequests.find((request) => request.type === "setSelection");
+      const backRestoresOrigin = Boolean(
+        backRequest && backRequest.anchor === originIndex && backRequest.head === originIndex
+      );
+      const citationIndex = source.indexOf("\\cite{Demo}") + 7;
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          ...state,
+          cursorIndex: citationIndex,
+          selectionFrom: citationIndex,
+          selectionTo: citationIndex,
+          selectionAnchor: citationIndex,
+          selectionHead: citationIndex,
+          screen: { pageX: 315, pageY: 115, lineHeight: 20 }
+        })
+      }));
+      let citationPopup = null;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        citationPopup = document.querySelector(
+          ".smarttex-editor-reference-popup:not([hidden]) .smarttex-reference-popup-citation"
+        );
+        if (citationPopup) break;
+        await delay(25);
+      }
+      const cursorCitation = Boolean(
+        citationPopup?.querySelector(".smarttex-reference-popup-citation-title")
+          ?.textContent.includes("Demonstration citation")
+      );
+      const checks = {
+        cursorTriggered,
+        equationScrollable,
+        staysOpenWhileScrolling,
+        cursorCitation,
+        jumpRecorded: jumpRequest?.index === source.indexOf("\\begin{equation}"),
+        backVisible,
+        backRestoresOrigin,
+        backHiddenAfterUse: Boolean(backButton?.hidden)
+      };
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#popup-trigger-navigation-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed ? "Popup trigger/navigation test passed" : JSON.stringify(checks);
+      document.documentElement.dataset.popupTriggerNavigationTest = passed ? "passed" : "failed";
+    }
+    run().catch((error) => {
+      document.querySelector("#popup-trigger-navigation-result").textContent = error.message;
+      document.documentElement.dataset.popupTriggerNavigationTest = "failed";
+    });
+  </script>
+</body>
+</html>

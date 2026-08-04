@@ -1005,7 +1005,10 @@
   }
 
   function findFileToolbar() {
-    return document.querySelector(
+    // Prefer the SmartTeX top-toolbar slot so the Nextcloud action is placed
+    // immediately to the right of the [S] menu button. Fall back to the file
+    // toolbar while the top toolbar is still being initialized.
+    return document.querySelector("#smarttex-toolbar-slot") || document.querySelector(
       ".toolbar-filetree, .file-tree-toolbar-action-buttons, .file-tree-toolbar"
     );
   }
@@ -1013,7 +1016,7 @@
   function injectUpdateAllButton() {
     const toolbar = findFileToolbar();
     if (!toolbar) return;
-    let button = toolbar.querySelector(".smarttex-nextcloud-update-all");
+    let button = document.querySelector(".smarttex-nextcloud-update-all");
     if (!button) {
       button = document.createElement("button");
       button.type = "button";
@@ -1028,6 +1031,21 @@
           showToast(error?.message || String(error), true);
         });
       });
+    }
+
+    // Keep the Nextcloud action immediately after the combined SmartTeX
+    // [S] + hamburger button. Both modules observe toolbar changes, so using
+    // appendChild alone could make their order alternate during reattachment.
+    const smartTeXMenuButton = toolbar.querySelector("#smarttex-options-button");
+    const desiredNextSibling = smartTeXMenuButton?.nextSibling || null;
+    if (smartTeXMenuButton) {
+      if (
+        button.parentElement !== toolbar ||
+        smartTeXMenuButton.nextElementSibling !== button
+      ) {
+        toolbar.insertBefore(button, desiredNextSibling);
+      }
+    } else if (button.parentElement !== toolbar) {
       toolbar.appendChild(button);
     }
     button.hidden = projectState.links.length === 0;

@@ -26,6 +26,10 @@ const harnesses = [
     attribute: "citationHoverTest"
   },
   {
+    file: "reference-autocomplete-harness.html",
+    attribute: "referenceAutocompleteTest"
+  },
+  {
     file: "document-preview-harness.html",
     attribute: "documentPreviewTest"
   },
@@ -38,6 +42,10 @@ const harnesses = [
     attribute: "editorReferenceTest"
   },
   {
+    file: "popup-trigger-navigation-harness.html",
+    attribute: "popupTriggerNavigationTest"
+  },
+  {
     file: "controls-harness.html",
     attribute: "controlsTest"
   },
@@ -48,6 +56,14 @@ const harnesses = [
   {
     file: "table-preview-harness.html",
     attribute: "tableTest"
+  },
+  {
+    file: "table-editing-harness.html",
+    attribute: "tableEditingTest"
+  },
+  {
+    file: "popup-interaction-harness.html",
+    attribute: "popupInteractionTest"
   },
   {
     file: "nextcloud-client-harness.html",

@@ -202,7 +202,7 @@
 
   function findEntryStarts(text) {
     const starts = [];
-    const pattern = /^[\t ]*@([A-Za-z]+)\s*([({])/gm;
+    const pattern = /^[\t \u00a0\ufeff]*@([A-Za-z][A-Za-z0-9_-]*)\s*([({])/gm;
     let match;
     while ((match = pattern.exec(text)) !== null) {
       starts.push({

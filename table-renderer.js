@@ -4,7 +4,7 @@
   "use strict";
 
   const CARET_MARKER = "\uE001";
-  const RULE_COMMAND = /^\\(?:hline|toprule|midrule|bottomrule)\b\s*/;
+  const OPERATOR_CARET_MARKER = "\uE002";
 
   function isEscaped(source, index) {
     let slashes = 0;
@@ -116,43 +116,158 @@
     return rows;
   }
 
-  function stripLeadingRules(value) {
-    let source = String(value || "").trimStart();
-    let rule = false;
-    let changed = true;
-    while (changed) {
-      changed = false;
-      const simple = source.match(RULE_COMMAND);
-      if (simple) {
-        source = source.slice(simple[0].length).trimStart();
-        rule = true;
-        changed = true;
+
+  function splitTableSourceDetailed(sourceValue) {
+    const source = String(sourceValue || "");
+    const rows = [];
+    let cells = [];
+    let cellStart = 0;
+    let rowStart = 0;
+    let braces = 0;
+    let mathDelimiter = "";
+
+    const finishCell = (end) => {
+      cells.push({
+        raw: source.slice(cellStart, end),
+        start: cellStart,
+        end
+      });
+    };
+    const finishRow = (end, terminatorEnd) => {
+      finishCell(end);
+      rows.push({
+        cells,
+        start: rowStart,
+        end,
+        terminatorEnd
+      });
+      cells = [];
+      rowStart = terminatorEnd;
+      cellStart = terminatorEnd;
+    };
+
+    for (let index = 0; index < source.length; index += 1) {
+      const character = source[index];
+      if (!isEscaped(source, index)) {
+        if (!mathDelimiter && character === "$") {
+          mathDelimiter = source.startsWith("$$", index) ? "$$" : "$";
+          index += mathDelimiter.length - 1;
+          continue;
+        }
+        if (mathDelimiter && source.startsWith(mathDelimiter, index)) {
+          index += mathDelimiter.length - 1;
+          mathDelimiter = "";
+          continue;
+        }
+        if (!mathDelimiter && source.startsWith("\\(", index)) {
+          mathDelimiter = "\\)";
+          index += 1;
+          continue;
+        }
+        if (mathDelimiter === "\\)" && source.startsWith("\\)", index)) {
+          index += 1;
+          mathDelimiter = "";
+          continue;
+        }
+        if (!mathDelimiter && character === "{") braces += 1;
+        if (!mathDelimiter && character === "}") braces = Math.max(0, braces - 1);
+      }
+
+      if (!mathDelimiter && braces === 0 && character === "&" && !isEscaped(source, index)) {
+        finishCell(index);
+        cellStart = index + 1;
         continue;
       }
-      const partial = source.match(/^\\c?midrule(?:\([^)]*\))?\s*\{[^{}]*\}\s*/);
-      const cline = source.match(/^\\cline\s*\{[^{}]*\}\s*/);
-      const match = partial || cline;
-      if (match) {
-        source = source.slice(match[0].length).trimStart();
-        rule = true;
-        changed = true;
+
+      let terminatorEnd = -1;
+      if (!mathDelimiter && braces === 0 && source.startsWith("\\tabularnewline", index)) {
+        terminatorEnd = index + "\\tabularnewline".length;
+      } else if (!mathDelimiter && braces === 0 && source.startsWith("\\\\", index)) {
+        terminatorEnd = index + 2;
+        let next = skipWhitespace(source, terminatorEnd);
+        if (source[next] === "*") next = skipWhitespace(source, next + 1);
+        if (source[next] === "[") {
+          const spacing = readBalanced(source, next, "[", "]");
+          if (spacing) next = spacing.end;
+        }
+        terminatorEnd = next;
       }
+      if (terminatorEnd < 0) continue;
+      finishRow(index, terminatorEnd);
+      index = terminatorEnd - 1;
     }
-    return { source, rule };
+    if (rowStart < source.length || !rows.length) {
+      finishRow(source.length, source.length);
+    }
+    return rows;
+  }
+
+  function emptyHorizontalBoundary() {
+    return { full: 0, partial: new Map() };
+  }
+
+  function mergeHorizontalBoundary(left, right) {
+    const merged = emptyHorizontalBoundary();
+    merged.full = Math.max(Number(left?.full) || 0, Number(right?.full) || 0);
+    for (const [column, count] of left?.partial || []) {
+      merged.partial.set(column, Math.max(merged.partial.get(column) || 0, count));
+    }
+    for (const [column, count] of right?.partial || []) {
+      merged.partial.set(column, Math.max(merged.partial.get(column) || 0, count));
+    }
+    return merged;
+  }
+
+  function stripLeadingRules(value) {
+    let source = String(value || "");
+    let position = 0;
+    const boundary = emptyHorizontalBoundary();
+    while (position < source.length) {
+      const whitespace = source.slice(position).match(/^\s*/)?.[0] || "";
+      position += whitespace.length;
+      const slice = source.slice(position);
+      const full = slice.match(/^\\(hline|toprule|midrule|bottomrule)\b\s*/);
+      if (full) {
+        boundary.full = Math.min(2, boundary.full + 1);
+        position += full[0].length;
+        continue;
+      }
+      const partial = slice.match(/^\\(?:cline|cmidrule(?:\([^)]*\))?)\s*\{\s*(\d+)\s*-\s*(\d+)\s*\}\s*/);
+      if (partial) {
+        const first = Math.max(1, Number(partial[1]) || 1);
+        const last = Math.max(first, Number(partial[2]) || first);
+        for (let column = first - 1; column <= last - 1; column += 1) {
+          boundary.partial.set(
+            column,
+            Math.min(2, (boundary.partial.get(column) || 0) + 1)
+          );
+        }
+        position += partial[0].length;
+        continue;
+      }
+      position -= whitespace.length;
+      break;
+    }
+    return { source: source.slice(position), boundary };
   }
 
   function parseColumnSpec(specValue) {
     const spec = String(specValue || "");
     const columns = [];
-    let pendingLeftBorder = false;
+    let pendingLeftBorder = 0;
 
     const appendSpec = (value) => {
       for (let index = 0; index < value.length; index += 1) {
         const character = value[index];
         if (/\s/.test(character)) continue;
         if (character === "|") {
-          if (columns.length) columns[columns.length - 1].rightBorder = true;
-          pendingLeftBorder = true;
+          if (columns.length) {
+            columns[columns.length - 1].rightBorder = Math.min(
+              2,
+              (columns[columns.length - 1].rightBorder || 0) + 1
+            );
+          }
+          pendingLeftBorder = Math.min(2, pendingLeftBorder + 1);
           continue;
         }
         if (character === "*" && value[index + 1] === "{") {
@@ -182,29 +297,61 @@
           columns.push({
             align: "left",
             leftBorder: pendingLeftBorder,
-            rightBorder: false
+            rightBorder: 0
           });
-          pendingLeftBorder = false;
+          pendingLeftBorder = 0;
           if (width) index = width.end - 1;
           continue;
         }
-        if (/^[lcrXS]$/.test(character)) {
+        if (character === "D") {
+          let end = index + 1;
+          for (let groupIndex = 0; groupIndex < 3; groupIndex += 1) {
+            const groupStart = skipWhitespace(value, end);
+            const group = readBalanced(value, groupStart);
+            if (!group) break;
+            end = group.end;
+          }
           columns.push({
-            align: character === "r" || character === "S"
+            align: "right",
+            leftBorder: pendingLeftBorder,
+            rightBorder: 0
+          });
+          pendingLeftBorder = 0;
+          index = end - 1;
+          continue;
+        }
+        if (character === "S") {
+          const optionalStart = skipWhitespace(value, index + 1);
+          const optional = readBalanced(value, optionalStart, "[", "]");
+          columns.push({
+            align: "right",
+            leftBorder: pendingLeftBorder,
+            rightBorder: 0
+          });
+          pendingLeftBorder = 0;
+          if (optional) index = optional.end - 1;
+          continue;
+        }
+        if (/^[lcrX]$/.test(character) || /[A-Za-z]/.test(character)) {
+          columns.push({
+            align: character === "r"
               ? "right"
               : character === "c"
                 ? "center"
                 : "left",
             leftBorder: pendingLeftBorder,
-            rightBorder: false
+            rightBorder: 0
           });
-          pendingLeftBorder = false;
+          pendingLeftBorder = 0;
         }
       }
     };
     appendSpec(spec);
     if (pendingLeftBorder && columns.length) {
-      columns[columns.length - 1].rightBorder = true;
+      columns[columns.length - 1].rightBorder = Math.max(
+        columns[columns.length - 1].rightBorder || 0,
+        pendingLeftBorder
+      );
     }
     return columns;
   }
@@ -228,40 +375,62 @@
         Math.min(50, Number.parseInt(source.slice(count.start + 1, count.end - 1), 10) || 1)
       ),
       columnSpec: source.slice(spec.start + 1, spec.end - 1),
-      content: source.slice(content.start + 1, content.end - 1)
+      content: source.slice(content.start + 1, content.end - 1),
+      contentStart: content.start + 1,
+      contentEnd: content.end - 1,
+      commandStart: skipWhitespace(source, 0),
+      commandEnd: content.end
     };
   }
 
   function parseTable(sourceValue, columnSpecValue = "") {
-    const rawRows = splitTableSource(sourceValue);
+    const source = String(sourceValue || "");
+    const rawRows = splitTableSourceDetailed(source);
     const rows = [];
-    let pendingRule = false;
+    let pendingBoundary = emptyHorizontalBoundary();
 
-    for (const rawCells of rawRows) {
-      const first = stripLeadingRules(rawCells[0] || "");
-      rawCells[0] = first.source;
-      const hasContent = rawCells.some((cell) => cell.trim());
-      if (!hasContent) {
-        if (first.rule && rows.length) rows[rows.length - 1].ruleAfter = true;
-        else pendingRule ||= first.rule;
-        continue;
+    for (const rawRow of rawRows) {
+      const rawCells = rawRow.cells.map((cell) => ({ ...cell }));
+      const first = stripLeadingRules(rawCells[0]?.raw || "");
+      if (rawCells[0]) {
+        rawCells[0].raw = first.source;
+        rawCells[0].start += (rawCells[0].end - rawCells[0].start) - first.source.length;
       }
-      const cells = rawCells.map((raw) => {
-        const multicolumn = parseMulticolumn(raw);
-        return multicolumn || {
+      pendingBoundary = mergeHorizontalBoundary(pendingBoundary, first.boundary);
+      const hasContent = rawCells.some((cell) => cell.raw.trim());
+      if (!hasContent) continue;
+      const cells = rawCells.map((cell) => {
+        const multicolumn = parseMulticolumn(cell.raw);
+        if (multicolumn) {
+          return {
+            ...multicolumn,
+            sourceStart: cell.start,
+            sourceEnd: cell.end,
+            contentStart: cell.start + multicolumn.contentStart,
+            contentEnd: cell.start + multicolumn.contentEnd
+          };
+        }
+        const leading = cell.raw.match(/^\s*/)?.[0].length || 0;
+        const trailing = cell.raw.match(/\s*$/)?.[0].length || 0;
+        const contentEnd = Math.max(leading, cell.raw.length - trailing);
+        return {
           colspan: 1,
           columnSpec: "",
-          content: raw.trim()
+          content: cell.raw.slice(leading, contentEnd),
+          sourceStart: cell.start,
+          sourceEnd: cell.end,
+          contentStart: cell.start + leading,
+          contentEnd: cell.start + contentEnd
         };
       });
       rows.push({
         cells,
-        ruleBefore: pendingRule || first.rule,
-        ruleAfter: false
+        ruleBefore: pendingBoundary,
+        ruleAfter: emptyHorizontalBoundary()
       });
-      pendingRule = false;
+      pendingBoundary = emptyHorizontalBoundary();
     }
-    if (pendingRule && rows.length) rows[rows.length - 1].ruleAfter = true;
+    if (rows.length) rows[rows.length - 1].ruleAfter = pendingBoundary;
     return {
       columns: parseColumnSpec(columnSpecValue),
       rows
@@ -350,10 +519,16 @@
       textBoundaries = [];
     };
     for (let index = 0; index < source.length;) {
-      if (source[index] === CARET_MARKER) {
+      if (
+        source[index] === CARET_MARKER ||
+        source[index] === OPERATOR_CARET_MARKER
+      ) {
         flushText();
         const caret = document.createElement("span");
         caret.className = "smarttex-table-rendered-caret";
+        if (source[index] === OPERATOR_CARET_MARKER) {
+          caret.classList.add("smarttex-table-operator-caret");
+        }
         caret.setAttribute("aria-hidden", "true");
         parent.appendChild(caret);
         index += 1;
@@ -592,7 +767,9 @@
 
   function appendMathContent(parent, sourceValue, options) {
     const source = String(sourceValue || "");
-    const mathSource = source.replaceAll(CARET_MARKER, "\\SmartTeXCaret{}");
+    const mathSource = source
+      .replaceAll(OPERATOR_CARET_MARKER, "\\SmartTeXOperatorCaret{}")
+      .replaceAll(CARET_MARKER, "\\SmartTeXCaret{}");
     const math = parent.ownerDocument.createElement("span");
     math.className = "smarttex-table-inline-math";
     if (
@@ -684,23 +861,34 @@
     return container;
   }
 
+  function horizontalBoundaryCount(boundary, firstColumn, lastColumn) {
+    const full = Math.max(0, Math.min(2, Number(boundary?.full) || 0));
+    if (full) return full;
+    let count = 0;
+    for (let column = firstColumn; column < lastColumn; column += 1) {
+      count = Math.max(count, Math.max(0, Math.min(
+        2,
+        Number(boundary?.partial?.get?.(column)) || 0
+      )));
+    }
+    return count;
+  }
+
+  function addBorderClass(cell, side, count) {
+    if (!count) return;
+    cell.classList.add(`smarttex-table-border-${side}`);
+    if (count >= 2) cell.classList.add(`smarttex-table-border-${side}-double`);
+  }
+
   function renderTable(context, options) {
     const source = String(context.source || "");
     const caretOffset = options.includeCaret === false
       ? null
-      : options.contextTools.commandAwareCaretOffset(
-        source,
-        context.cursorOffset,
-        options.commandSide
-      );
-    const sourceWithCaret = caretOffset === null
-      ? source
-      : (
-        source.slice(0, caretOffset) +
-        CARET_MARKER +
-        source.slice(caretOffset)
-      );
-    const model = parseTable(sourceWithCaret, context.columnSpec);
+      : Math.max(0, Math.min(
+        Number(context.cursorOffset) || 0,
+        source.length
+      ));
+    const model = parseTable(source, context.columnSpec);
     if (!model.rows.length) throw new Error("The table does not contain a row yet.");
 
     const document = options.document;
@@ -714,32 +902,116 @@
 
     for (const rowModel of model.rows) {
       const row = document.createElement("tr");
-      if (rowModel.ruleBefore) row.classList.add("smarttex-table-rule-before");
-      if (rowModel.ruleAfter) row.classList.add("smarttex-table-rule-after");
-      let columnIndex = 0;
-      for (const cellModel of rowModel.cells) {
-        const cell = document.createElement("td");
+      let descriptorColumn = 0;
+      const descriptors = rowModel.cells.map((cellModel) => {
         const overrideColumns = parseColumnSpec(cellModel.columnSpec);
-        const column = overrideColumns[0] || model.columns[columnIndex] || {
+        const firstColumn = descriptorColumn;
+        const lastColumn = descriptorColumn + cellModel.colspan - 1;
+        const column = overrideColumns[0] || model.columns[firstColumn] || {
           align: "left",
-          leftBorder: false,
-          rightBorder: false
+          leftBorder: 0,
+          rightBorder: 0
         };
+        descriptorColumn += cellModel.colspan;
+        return {
+          cellModel,
+          overrideColumns,
+          hasOverride: Boolean(String(cellModel.columnSpec || "").trim()),
+          column,
+          firstColumn,
+          lastColumn
+        };
+      });
+
+      for (let descriptorIndex = 0; descriptorIndex < descriptors.length; descriptorIndex += 1) {
+        const descriptor = descriptors[descriptorIndex];
+        const { cellModel, column, firstColumn, lastColumn } = descriptor;
+        const cell = document.createElement("td");
         cell.classList.add(`smarttex-table-align-${column.align}`);
-        if (column.leftBorder) cell.classList.add("smarttex-table-border-left");
-        const lastCoveredColumn = columnIndex + cellModel.colspan - 1;
-        const lastColumn = model.columns[lastCoveredColumn];
-        if (column.rightBorder || lastColumn?.rightBorder) {
-          cell.classList.add("smarttex-table-border-right");
+
+        if (descriptorIndex === 0) {
+          addBorderClass(
+            cell,
+            "left",
+            descriptor.hasOverride
+              ? Number(column.leftBorder) || 0
+              : Number(model.columns[firstColumn]?.leftBorder) || 0
+          );
         }
+
+        const nextDescriptor = descriptors[descriptorIndex + 1];
+        const baseLastColumn = model.columns[lastColumn];
+        const currentRight = descriptor.hasOverride
+          ? Number(column.rightBorder) || 0
+          : Number(baseLastColumn?.rightBorder) || 0;
+        const nextLeft = nextDescriptor
+          ? (nextDescriptor.hasOverride
+            ? Number(nextDescriptor.column?.leftBorder) || 0
+            : Number(model.columns[nextDescriptor.firstColumn]?.leftBorder) || 0)
+          : 0;
+        addBorderClass(cell, "right", Math.max(currentRight, nextLeft));
+        addBorderClass(
+          cell,
+          "top",
+          horizontalBoundaryCount(rowModel.ruleBefore, firstColumn, lastColumn + 1)
+        );
+        addBorderClass(
+          cell,
+          "bottom",
+          horizontalBoundaryCount(rowModel.ruleAfter, firstColumn, lastColumn + 1)
+        );
         if (cellModel.colspan > 1) cell.colSpan = cellModel.colspan;
+        let visibleContent = cellModel.content;
+        if (caretOffset !== null && (
+          caretOffset >= cellModel.sourceStart &&
+          caretOffset <= cellModel.sourceEnd
+        )) {
+          let localCaret;
+          let operatorCaret = false;
+          if (caretOffset <= cellModel.contentStart) localCaret = 0;
+          else if (caretOffset >= cellModel.contentEnd) localCaret = visibleContent.length;
+          else localCaret = caretOffset - cellModel.contentStart;
+          if (cellModel.colspan > 1 || String(cellModel.columnSpec || "").trim()) {
+            operatorCaret = (
+              caretOffset < cellModel.contentStart ||
+              caretOffset >= cellModel.contentEnd
+            );
+          }
+          if (!operatorCaret && caretOffset >= cellModel.contentStart && caretOffset <= cellModel.contentEnd) {
+            operatorCaret = Boolean(
+              options.contextTools.cursorInsideControlSequence?.(
+                visibleContent,
+                localCaret
+              ) ||
+              options.contextTools.cursorAtProtectedAtomBoundary?.(
+                visibleContent,
+                localCaret
+              )
+            );
+          }
+          localCaret = options.contextTools.commandAwareCaretOffset(
+            visibleContent,
+            localCaret,
+            options.commandSide
+          );
+          visibleContent = (
+            visibleContent.slice(0, localCaret) +
+            (operatorCaret ? OPERATOR_CARET_MARKER : CARET_MARKER) +
+            visibleContent.slice(localCaret)
+          );
+        }
+        const contentOptions = {
+          ...options,
+          sourceOffset: Number.isFinite(Number(options.sourceOffset))
+            ? Number(options.sourceOffset) + cellModel.contentStart
+            : undefined
+        };
         if (context.environment === "array") {
-          appendMathContent(cell, cellModel.content, options);
+          appendMathContent(cell, visibleContent, contentOptions);
         } else {
-          appendMixedContent(cell, cellModel.content, options);
+          appendMixedContent(cell, visibleContent, contentOptions);
         }
         row.appendChild(cell);
-        columnIndex += cellModel.colspan;
       }
       body.appendChild(row);
     }
@@ -748,7 +1020,9 @@
 
   global.SmartTeXTableRenderer = Object.freeze({
     CARET_MARKER,
+    OPERATOR_CARET_MARKER,
     splitTableSource,
+    splitTableSourceDetailed,
     parseColumnSpec,
     parseTable,
     renderInlineLatex,

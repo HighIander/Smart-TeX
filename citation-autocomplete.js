@@ -9,14 +9,17 @@
   const STATE_EVENT = "smarttex:editor-state";
   const REQUEST_EVENT = "smarttex:citation-editor-request";
   const RESPONSE_EVENT = "smarttex:citation-editor-response";
+  const REFRESH_REQUEST_EVENT = "smarttex:citation-refresh-request";
+  const REFRESH_RESULT_EVENT = "smarttex:citation-refresh-result";
+  const CACHE_UPDATED_EVENT = "smarttex:citation-cache-updated";
   const CACHE_PREFIX = "smarttex:citation-cache:v1:";
   const OPEN_DELAY_MS = 220;
   const MAX_RESULTS = 8;
-  const FILE_OPEN_TIMEOUT_MS = 12000;
   const CITE_COMMAND = /\\(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/i;
   const SMART_CITATIONS_SELECTOR = "#ctca-popup, #ctca-bib-manager";
   const extensionApi = globalThis.browser ?? globalThis.chrome;
   const parser = globalThis.SmartTeXBibTeX;
+  const popupInteractionReady = () => globalThis.SmartTeXPopupGate?.isReady?.() !== false;
 
   if (!parser?.parseBibTeX) {
     console.error("SmartTeX citation autocomplete could not load its BibTeX parser.");
@@ -28,6 +31,7 @@
   let records = [];
   let renderedRecords = [];
   let selectedIndex = 0;
+  let lastPopupPosition = null;
   let parseState = "unparsed";
   let parseMessage = "";
   let cachedFiles = [];
@@ -38,6 +42,10 @@
   let dismissedContextId = "";
   let requestCounter = 0;
   let smartCitationsPresent = false;
+  let initialParseAttemptedKey = "";
+  let backgroundLoadParseAttemptedKey = "";
+  let lastOpenedFileName = "";
+  let backgroundParseTimer = null;
   const pendingRequests = new Map();
 
   const popup = document.createElement("aside");
@@ -48,7 +56,12 @@
   popup.innerHTML = `
     <header class="smarttex-citation-header">
       <span class="smarttex-citation-query">Citation</span>
-      <button type="button" class="smarttex-citation-close" title="Close (Esc)" aria-label="Close citation suggestions">&times;</button>
+      <span class="smarttex-citation-header-actions">
+        <button type="button" class="smarttex-citation-refresh" title="Re-parse bibliography files" aria-label="Refresh bibliography">
+          <span aria-hidden="true">↻</span> Refresh
+        </button>
+        <button type="button" class="smarttex-citation-close" title="Close (Esc)" aria-label="Close citation suggestions">&times;</button>
+      </span>
     </header>
     <div class="smarttex-citation-status" hidden role="status" aria-live="polite"></div>
     <div class="smarttex-citation-list" role="listbox" aria-label="Citation suggestions"></div>
@@ -62,6 +75,7 @@
   const status = popup.querySelector(".smarttex-citation-status");
   const list = popup.querySelector(".smarttex-citation-list");
   const closeButton = popup.querySelector(".smarttex-citation-close");
+  const refreshButton = popup.querySelector(".smarttex-citation-refresh");
 
   function smartCitationsIsPresent() {
     return Boolean(document.querySelector(SMART_CITATIONS_SELECTOR));
@@ -129,12 +143,13 @@
     clearPopupTimer();
     if (dismiss && currentContext) dismissedContextId = contextId();
     popup.hidden = true;
+    lastPopupPosition = null;
     popup.classList.remove("smarttex-citation-visible");
     setBridgeActive(false);
   }
 
   function showPopup() {
-    if (smartCitationsPresent || !currentContext) return;
+    if (!popupInteractionReady() || smartCitationsPresent || !currentContext) return;
     popup.hidden = false;
     popup.classList.add("smarttex-citation-visible");
     setBridgeActive(true);
@@ -174,6 +189,8 @@
     const nextKey = projectCacheKey();
     if (nextKey === cacheKey) return;
     cacheKey = nextKey;
+    initialParseAttemptedKey = "";
+    backgroundLoadParseAttemptedKey = "";
     records = [];
     cachedFiles = [];
     parseState = "loading";
@@ -203,13 +220,22 @@
 
   async function saveProjectCache() {
     if (!cacheKey || !extensionApi?.storage?.local?.set) return;
+    const parsedAt = new Date().toISOString();
     await extensionApi.storage.local.set({
       [cacheKey]: {
         records,
         files: cachedFiles,
-        parsedAt: new Date().toISOString()
+        parsedAt
       }
     });
+    window.dispatchEvent(new CustomEvent(CACHE_UPDATED_EVENT, {
+      detail: JSON.stringify({
+        cacheKey,
+        parsedAt,
+        recordCount: records.length,
+        files: cachedFiles
+      })
+    }));
   }
 
   function normalizeSearch(value) {
@@ -306,7 +332,7 @@
     const description = document.createElement("p");
     description.textContent = parseState === "empty"
       ? "Parse the project bibliography again after checking that it contains valid BibTeX entries."
-      : "SmartTeX needs to open and read the bibliography files used by this document.";
+      : "SmartTeX reads the bibliography files directly from the project without opening them in the editor.";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "smarttex-citation-parse";
@@ -322,17 +348,32 @@
     list.appendChild(card);
   }
 
+  function prependParsingIndicator() {
+    const indicator = document.createElement("div");
+    indicator.className = "smarttex-citation-list-parsing";
+    indicator.setAttribute("role", "status");
+    indicator.setAttribute("aria-live", "polite");
+    indicator.innerHTML = `
+      <span class="smarttex-citation-list-spinner" aria-hidden="true"></span>
+      <span>Parsing bibliography…</span>`;
+    list.prepend(indicator);
+  }
+
   function renderPopup() {
+    refreshButton.disabled = parsing || parseState === "loading";
+    refreshButton.classList.toggle("smarttex-citation-refreshing", parsing);
+    refreshButton.innerHTML = '<span aria-hidden="true">↻</span> Refresh';
     const query = currentContext?.fragment || "";
     queryLabel.textContent = query
       ? `Citations matching “${query}”`
       : "Select a citation";
     list.replaceChildren();
-    setStatus(parsing ? parseMessage : "", false);
+    setStatus(parsing ? "" : parseMessage, false);
     renderedRecords = [];
 
     if (parseState !== "ready") {
-      createParsePrompt();
+      if (!parsing) createParsePrompt();
+      if (parsing) prependParsingIndicator();
       return;
     }
 
@@ -343,13 +384,16 @@
       empty.className = "smarttex-citation-empty";
       empty.textContent = "No citation matches the current text.";
       list.appendChild(empty);
+      if (parsing) prependParsingIndicator();
       return;
     }
 
+    const exactKey = query.trim();
     renderedRecords.forEach((record, index) => {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "smarttex-citation-item";
+      item.classList.toggle("smarttex-citation-exact", Boolean(exactKey) && record.key === exactKey);
       item.classList.toggle("smarttex-citation-selected", index === selectedIndex);
       item.setAttribute("role", "option");
       item.setAttribute("aria-selected", index === selectedIndex ? "true" : "false");
@@ -376,6 +420,7 @@
       item.addEventListener("click", () => insertRecord(record));
       list.appendChild(item);
     });
+    if (parsing) prependParsingIndicator();
   }
 
   function updateSelectedItem() {
@@ -412,27 +457,66 @@
     const width = Math.min(540, window.innerWidth - margin * 2);
     popup.style.width = `${Math.max(280, width)}px`;
     popup.style.maxHeight = `${Math.max(180, window.innerHeight - margin * 2)}px`;
+
     const rect = popup.getBoundingClientRect();
-    const cursorLeft = screen.pageX - window.scrollX;
-    const cursorTop = screen.pageY - window.scrollY;
+    const cursorLeft = Number(screen.pageX) - window.scrollX;
+    const cursorTop = Number(screen.pageY) - window.scrollY;
     const lineHeight = Math.max(14, Number(screen.lineHeight) || 18);
-    const fitsBelow = cursorTop + lineHeight + gap + rect.height <= window.innerHeight - margin;
-    const top = fitsBelow
-      ? cursorTop + lineHeight + gap
-      : cursorTop - gap - rect.height;
-    popup.style.left = `${Math.round(Math.max(
-      margin,
-      Math.min(cursorLeft, window.innerWidth - rect.width - margin)
-    ))}px`;
-    popup.style.top = `${Math.round(Math.max(
-      margin,
-      Math.min(top, window.innerHeight - rect.height - margin)
-    ))}px`;
+    const cursorRect = {
+      left: cursorLeft - 3,
+      right: cursorLeft + 3,
+      top: cursorTop - 2,
+      bottom: cursorTop + lineHeight + 2
+    };
+    const currentRect = lastPopupPosition
+      ? {
+          left: lastPopupPosition.left,
+          right: lastPopupPosition.left + rect.width,
+          top: lastPopupPosition.top,
+          bottom: lastPopupPosition.top + rect.height
+        }
+      : null;
+    const blocksCursor = currentRect && !(
+      currentRect.right < cursorRect.left ||
+      currentRect.left > cursorRect.right ||
+      currentRect.bottom < cursorRect.top ||
+      currentRect.top > cursorRect.bottom
+    );
+    const outsideViewport = currentRect && (
+      currentRect.left < margin ||
+      currentRect.top < margin ||
+      currentRect.right > window.innerWidth - margin ||
+      currentRect.bottom > window.innerHeight - margin
+    );
+
+    // Keep an open citation list fixed while the caret moves within the citation.
+    // Reposition it only if the caret would be covered or the viewport changed so
+    // that the existing popup position is no longer usable.
+    if (!lastPopupPosition || blocksCursor || outsideViewport) {
+      const fitsBelow =
+        cursorTop + lineHeight + gap + rect.height <= window.innerHeight - margin;
+      const proposedTop = fitsBelow
+        ? cursorTop + lineHeight + gap
+        : cursorTop - gap - rect.height;
+      const left = Math.max(
+        margin,
+        Math.min(cursorLeft, window.innerWidth - rect.width - margin)
+      );
+      const top = Math.max(
+        margin,
+        Math.min(proposedTop, window.innerHeight - rect.height - margin)
+      );
+      lastPopupPosition = { left, top };
+    }
+
+    popup.style.left = `${Math.round(lastPopupPosition.left)}px`;
+    popup.style.top = `${Math.round(lastPopupPosition.top)}px`;
   }
 
   function openForCurrentContext() {
     popupTimer = null;
     if (
+      !popupInteractionReady() ||
       smartCitationsPresent ||
       parsing ||
       !currentContext ||
@@ -443,6 +527,7 @@
     selectedIndex = 0;
     renderPopup();
     showPopup();
+    maybeStartInitialParse();
     bridgeRequest("getCoordinates", {
       index: currentContext.anchorIndex
     }, 1200).then((response) => {
@@ -454,6 +539,11 @@
   }
 
   function updateFromState() {
+    if (!popupInteractionReady()) {
+      currentContext = null;
+      hidePopup();
+      return;
+    }
     if (parsing) return;
     if (smartCitationsPresent) {
       currentContext = null;
@@ -482,6 +572,7 @@
       selectedIndex = 0;
       renderPopup();
       positionPopup();
+      maybeStartInitialParse();
       return;
     }
     popupTimer = window.setTimeout(openForCurrentContext, OPEN_DELAY_MS);
@@ -532,179 +623,167 @@
     return [...names];
   }
 
-  function fileMatches(left, right) {
-    const normalize = (value) => String(value || "")
-      .replace(/\\/g, "/")
-      .replace(/^\/+/, "")
-      .toLowerCase();
-    const leftValue = normalize(left);
-    const rightValue = normalize(right);
-    return (
-      leftValue === rightValue ||
-      leftValue.split("/").at(-1) === rightValue.split("/").at(-1)
-    );
-  }
-
-  function findFileControl(fileName) {
-    let baseMatch = null;
-    for (const item of document.querySelectorAll('.file-tree-list [role="treeitem"]')) {
-      const name = treeItemName(item);
-      const control = (
-        item.querySelector(".item-name-button") ||
-        item.querySelector(".file-tree-entity-details") ||
-        item.querySelector(".entity-name") ||
-        item
-      );
-      if (fileMatches(name, fileName)) {
-        if (name.replace(/\\/g, "/").toLowerCase() === String(fileName)
-          .replace(/\\/g, "/").toLowerCase()) return control;
-        baseMatch ||= control;
+  async function fetchBibliographyFile(fileName) {
+    try {
+      const read = await bridgeRequest("readProjectTextFile", {
+        path: fileName
+      }, 30000);
+      if (typeof read?.file?.value !== "string") {
+        throw new Error("The background reader returned no text.");
       }
-    }
-    return baseMatch;
-  }
-
-  async function findFileControlExpanded(fileName) {
-    let control = findFileControl(fileName);
-    if (control) return control;
-    for (let pass = 0; pass < 3; pass += 1) {
-      const collapsed = [...document.querySelectorAll(
-        '.file-tree-list [role="treeitem"][aria-expanded="false"] button[aria-label*="Expand" i]'
-      )];
-      if (!collapsed.length) break;
-      collapsed.forEach((button) => button.click());
-      await new Promise((resolve) => window.setTimeout(resolve, 150));
-      control = findFileControl(fileName);
-      if (control) return control;
-    }
-    return null;
-  }
-
-  async function waitForFile(fileName, previousState = null) {
-    const deadline = Date.now() + FILE_OPEN_TIMEOUT_MS;
-    let previousFingerprint = "";
-    let stableObservations = 0;
-    const startedOnTarget = fileMatches(previousState?.fileName, fileName);
-    const previousValue = String(previousState?.value ?? "");
-    const identicalBibContentIsValid = (
-      /\.bib$/i.test(String(previousState?.fileName || "")) &&
-      /\.bib$/i.test(fileName) &&
-      parser.parseBibTeX(previousValue, fileName).length > 0
-    );
-    while (Date.now() < deadline) {
-      try {
-        const state = (await bridgeRequest("getState", {}, 1500)).state;
-        if (state?.value !== undefined && fileMatches(state.fileName, fileName)) {
-          const text = String(state.value);
-          const fingerprint = `${text.length}:${text.slice(0, 180)}:${text.slice(-180)}`;
-          if (fingerprint === previousFingerprint) stableObservations += 1;
-          else {
-            previousFingerprint = fingerprint;
-            stableObservations = 0;
-          }
-          const contentBelongsToTarget = (
-            startedOnTarget ||
-            text !== previousValue ||
-            identicalBibContentIsValid
-          );
-          if (contentBelongsToTarget && stableObservations >= 1) return state;
-        }
-      } catch (_error) {
-        // The editor may be replacing its document.
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 120));
-    }
-    throw new Error(`Timed out while opening ${fileName}.`);
-  }
-
-  async function openFile(fileName) {
-    const control = await findFileControlExpanded(fileName);
-    if (!control) throw new Error(`Could not find ${fileName} in the project file tree.`);
-    let previousState = null;
-    try {
-      previousState = (await bridgeRequest("getState", {}, 1500)).state || null;
-    } catch (_error) {
-      // Continue; the filename and stable content checks still guard the switch.
-    }
-    control.click();
-    return waitForFile(fileName, previousState);
-  }
-
-  async function restoreFile(fileName) {
-    if (!fileName) return;
-    const control = await findFileControlExpanded(fileName);
-    if (!control) return;
-    let previousState = null;
-    try {
-      previousState = (await bridgeRequest("getState", {}, 1500)).state || null;
-    } catch (_error) {
-      // Restoration is best effort.
-    }
-    control.click();
-    try {
-      await waitForFile(fileName, previousState);
-    } catch (_error) {
-      // Restoration is best effort; the editor can finish the switch afterward.
+      return {
+        value: read.file.value,
+        fileName: read.file.fileName || fileName
+      };
+    } catch (error) {
+      throw new Error(`Background read failed: ${error.message || String(error)}`);
     }
   }
 
-  async function parseBibliography() {
-    if (parsing || smartCitationsPresent) return;
+  function bibliographyDisplayName(value) {
+    const normalized = String(value || "").replace(/\\/g, "/").trim();
+    return normalized || "unnamed bibliography file";
+  }
+
+  function noEntriesMessage(fileResults) {
+    const details = fileResults.map((result) => {
+      const name = bibliographyDisplayName(result.fileName);
+      return result.hasEntryMarker
+        ? `${name} (BibTeX markers detected, but no entries parsed)`
+        : name;
+    });
+    return `The detected bibliography file${details.length === 1 ? "" : "s"} contain${details.length === 1 ? "s" : ""} no parseable entries: ${details.join(", ")}.`;
+  }
+
+  async function parseBibliography({ showAutocomplete = true } = {}) {
+    if (parsing) {
+      return { ok: false, message: "Bibliography parsing is already in progress." };
+    }
+    if (smartCitationsPresent) {
+      return { ok: false, message: "Smart Citations currently owns citation completion." };
+    }
+
+    const previousParseState = parseState;
+    const previousRecords = records;
+    const previousFiles = cachedFiles;
     parsing = true;
-    parseState = "unparsed";
-    parseMessage = "Detecting bibliography files…";
-    renderPopup();
-    positionPopup();
+    parseMessage = "";
+    if (!records.length) parseState = "loading";
+
+    const keepAutocompleteVisible = Boolean(showAutocomplete && currentContext);
+    if (keepAutocompleteVisible) {
+      renderPopup();
+      positionPopup();
+    }
+
     const originalState = currentState;
-    const originalFile = originalState?.fileName || "";
+    let succeeded = false;
     try {
       const liveState = (await bridgeRequest("getState", {}, 2500)).state;
       let files = bibliographyFiles(liveState.value, liveState.cursorIndex);
+      const activeBibFile = /\.bib$/i.test(String(liveState.fileName || ""))
+        ? String(liveState.fileName)
+        : "";
+      if (activeBibFile) files.unshift(activeBibFile);
       if (!files.length) files = visibleBibFiles();
+      files = [...new Map(files.map((fileName) => [
+        String(fileName).replace(/\\/g, "/").toLocaleLowerCase(),
+        fileName
+      ])).values()];
       if (!files.length) {
         throw new Error(
           "No \\bibliography{…}, \\addbibresource{…}, or visible .bib file was found."
         );
       }
+
       const parsed = [];
       const failures = [];
-      for (let index = 0; index < files.length; index += 1) {
-        const fileName = files[index];
-        parseMessage = `Opening and parsing ${fileName} (${index + 1}/${files.length})…`;
-        renderPopup();
-        positionPopup();
+      const fileResults = [];
+      for (const fileName of files) {
         try {
-          const bibState = await openFile(fileName);
-          parsed.push(...parser.parseBibTeX(bibState.value, fileName));
+          const normalizedRequested = String(fileName).replace(/\\/g, "/").toLocaleLowerCase();
+          const normalizedActive = String(activeBibFile).replace(/\\/g, "/").toLocaleLowerCase();
+          const useLiveEditorValue = activeBibFile && (
+            normalizedRequested === normalizedActive ||
+            normalizedRequested.split("/").at(-1) === normalizedActive.split("/").at(-1)
+          );
+          let bibState = useLiveEditorValue
+            ? { value: liveState.value, fileName: liveState.fileName }
+            : await fetchBibliographyFile(fileName);
+          let fileRecords = parser.parseBibTeX(
+            bibState.value,
+            bibState.fileName || fileName
+          );
+
+          // CollabTeX can briefly expose the old editor session after changing
+          // files. Retry a zero-result project read once before reporting a
+          // valid bibliography as empty.
+          if (!fileRecords.length && !useLiveEditorValue) {
+            await new Promise((resolve) => window.setTimeout(resolve, 140));
+            const retryState = await fetchBibliographyFile(fileName);
+            const retryRecords = parser.parseBibTeX(
+              retryState.value,
+              retryState.fileName || fileName
+            );
+            if (
+              retryRecords.length ||
+              String(retryState.value || "") !== String(bibState.value || "")
+            ) {
+              bibState = retryState;
+              fileRecords = retryRecords;
+            }
+          }
+
+          parsed.push(...fileRecords);
+          fileResults.push({
+            fileName: bibState.fileName || fileName,
+            count: fileRecords.length,
+            hasEntryMarker: /^[\t \u00a0\ufeff]*@[A-Za-z][A-Za-z0-9_-]*\s*[({]/m.test(
+              String(bibState.value || "")
+            )
+          });
         } catch (error) {
-          failures.push(`${fileName}: ${error.message || String(error)}`);
+          failures.push(`${bibliographyDisplayName(fileName)}: ${error.message || String(error)}`);
         }
+        // Yield between files so large projects never monopolize the editor UI.
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
       }
+
       const unique = new Map();
       parsed.forEach((record) => {
         if (!unique.has(record.key.toLocaleLowerCase())) {
           unique.set(record.key.toLocaleLowerCase(), record);
         }
       });
-      records = [...unique.values()];
-      cachedFiles = files;
-      parseState = records.length ? "ready" : "empty";
-      parseMessage = failures.length
-        ? `${failures.length} bibliography file(s) could not be read.`
-        : "";
-      await saveProjectCache();
-      if (!records.length) {
+
+      const nextRecords = [...unique.values()];
+      if (!nextRecords.length) {
+        const readableFiles = fileResults.filter((result) => result.count === 0);
         throw new Error(
           failures.length
             ? `No BibTeX entries were parsed. ${failures.join("; ")}`
-            : "The detected bibliography files contain no parseable entries."
+            : noEntriesMessage(readableFiles.length ? readableFiles : files.map((fileName) => ({
+              fileName,
+              count: 0,
+              hasEntryMarker: false
+            })))
         );
       }
+
+      records = nextRecords;
+      cachedFiles = files;
+      parseState = "ready";
+      parseMessage = failures.length
+        ? `Some bibliography files could not be read: ${failures.join("; ")}`
+        : "";
+      await saveProjectCache();
+      succeeded = true;
     } catch (error) {
-      parseState = records.length ? "ready" : "unparsed";
+      records = previousRecords;
+      cachedFiles = previousFiles;
+      parseState = records.length ? "ready" : (previousParseState === "empty" ? "empty" : "unparsed");
       parseMessage = error.message || String(error);
     } finally {
-      await restoreFile(originalFile);
       parsing = false;
       try {
         currentState = (await bridgeRequest("getState", {}, 2200)).state || originalState;
@@ -714,12 +793,64 @@
       currentContext = findCitationContext(currentState);
       if (smartCitationsIsPresent()) {
         updateSmartCitationsPresence();
+      } else if (keepAutocompleteVisible && currentContext) {
+        renderPopup();
+        showPopup();
+        if (parseMessage) setStatus(parseMessage, !succeeded);
+      }
+    }
+
+    return {
+      ok: succeeded,
+      message: parseMessage || (
+        succeeded
+          ? `Parsed ${records.length} citation entr${records.length === 1 ? "y" : "ies"}.`
+          : "Bibliography parsing failed."
+      ),
+      recordCount: records.length,
+      files: cachedFiles
+    };
+  }
+
+
+  function scheduleBackgroundParse(reason = "load") {
+    if (smartCitationsPresent) return;
+    const currentKey = projectCacheKey();
+    if (reason === "load") {
+      if (backgroundLoadParseAttemptedKey === currentKey) return;
+      backgroundLoadParseAttemptedKey = currentKey;
+    }
+    window.clearTimeout(backgroundParseTimer);
+    backgroundParseTimer = window.setTimeout(() => {
+      backgroundParseTimer = null;
+      if (smartCitationsPresent || parsing) {
+        if (!smartCitationsPresent) scheduleBackgroundParse(reason);
         return;
       }
-      renderPopup();
-      showPopup();
-      if (parseMessage) setStatus(parseMessage, parseState !== "ready");
+      parseBibliography({ showAutocomplete: false }).catch((error) => {
+        parseMessage = error.message || String(error);
+      });
+    }, reason === "bib-opened" ? 450 : 900);
+  }
+
+  function maybeStartInitialParse() {
+    if (
+      parsing ||
+      smartCitationsPresent ||
+      !currentContext ||
+      !["unparsed", "empty"].includes(parseState) ||
+      initialParseAttemptedKey === cacheKey
+    ) {
+      return;
     }
+    initialParseAttemptedKey = cacheKey;
+    parseBibliography({ showAutocomplete: true }).catch((error) => {
+      parseMessage = error.message || String(error);
+      if (!popup.hidden) {
+        renderPopup();
+        setStatus(parseMessage, true);
+      }
+    });
   }
 
   function updateSmartCitationsPresence() {
@@ -742,11 +873,56 @@
       return;
     }
     updateSmartCitationsPresence();
+    const openedFileName = String(currentState?.fileName || "");
+    const bibWasJustOpened = /\.bib$/i.test(openedFileName) && openedFileName !== lastOpenedFileName;
+    lastOpenedFileName = openedFileName;
     if (cacheKey !== projectCacheKey()) {
-      loadProjectCache().then(updateFromState).catch(updateFromState);
+      loadProjectCache().then(() => {
+        updateFromState();
+        scheduleBackgroundParse("load");
+        if (bibWasJustOpened) scheduleBackgroundParse("bib-opened");
+      }).catch(() => {
+        updateFromState();
+        scheduleBackgroundParse("load");
+        if (bibWasJustOpened) scheduleBackgroundParse("bib-opened");
+      });
     } else {
       updateFromState();
+      scheduleBackgroundParse("load");
+      if (bibWasJustOpened) scheduleBackgroundParse("bib-opened");
     }
+  });
+
+  refreshButton.addEventListener("mousedown", (event) => event.preventDefault());
+  refreshButton.addEventListener("click", () => {
+    parseBibliography({ showAutocomplete: true }).catch((error) => {
+      parseMessage = error.message || String(error);
+      renderPopup();
+      setStatus(parseMessage, true);
+    });
+  });
+
+  window.addEventListener(REFRESH_REQUEST_EVENT, (event) => {
+    let detail = {};
+    try {
+      detail = JSON.parse(String(event.detail || "{}"));
+    } catch (_error) {
+      detail = {};
+    }
+    const requestId = String(detail.requestId || "");
+    parseBibliography({ showAutocomplete: false }).then((result) => {
+      window.dispatchEvent(new CustomEvent(REFRESH_RESULT_EVENT, {
+        detail: JSON.stringify({ requestId, ...result })
+      }));
+    }).catch((error) => {
+      window.dispatchEvent(new CustomEvent(REFRESH_RESULT_EVENT, {
+        detail: JSON.stringify({
+          requestId,
+          ok: false,
+          message: error.message || String(error)
+        })
+      }));
+    });
   });
 
   closeButton.addEventListener("mousedown", (event) => event.preventDefault());
@@ -765,6 +941,13 @@
     if (event.key === "ArrowDown") {
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (renderedRecords.length === 1) {
+        // With a single visible citation there is no alternative selection.
+        // Preserve normal editor navigation instead of repeatedly selecting
+        // the same autocomplete item.
+        bridgeRequest("moveCursorVertical", { direction: 1 }).catch(() => {});
+        return;
+      }
       selectedIndex = (selectedIndex + 1) % renderedRecords.length;
       updateSelectedItem();
       return;
@@ -772,6 +955,10 @@
     if (event.key === "ArrowUp") {
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (renderedRecords.length === 1) {
+        bridgeRequest("moveCursorVertical", { direction: -1 }).catch(() => {});
+        return;
+      }
       selectedIndex = (
         selectedIndex - 1 + renderedRecords.length
       ) % renderedRecords.length;
@@ -807,6 +994,7 @@
 
   window.addEventListener("pagehide", () => {
     clearPopupTimer();
+    window.clearTimeout(backgroundParseTimer);
     ownershipObserver.disconnect();
     setBridgeActive(false);
     pendingRequests.forEach((pending) => {

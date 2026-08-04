@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX reference autocomplete harness</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; padding: 80px; font: 14px system-ui, sans-serif; }
+    #reference-autocomplete-test-result {
+      position: fixed; right: 12px; bottom: 12px; z-index: 2147483647;
+      padding: 7px 11px; border-radius: 999px; color: white;
+      background: #9a6700; font: 700 12px/1.2 system-ui, sans-serif;
+    }
+    #reference-autocomplete-test-result[data-result="passed"] { background: #16803b; }
+    #reference-autocomplete-test-result[data-result="failed"] { background: #cf222e; }
+  </style>
+</head>
+<body>
+  <output id="reference-autocomplete-test-result">Reference autocomplete test running</output>
+  <script>
+    const storageListeners = [];
+    let referenceOrder = "document";
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(key) {
+            return { [key]: { referenceOrder } };
+          }
+        },
+        onChanged: {
+          addListener(listener) { storageListeners.push(listener); }
+        }
+      }
+    };
+
+    const requests = [];
+    const previewLabels = [];
+    const activeStates = [];
+    window.addEventListener("smarttex:reference-autocomplete-preview", (event) => {
+      previewLabels.push(JSON.parse(event.detail).label);
+    });
+    window.addEventListener("smarttex:reference-autocomplete-active", (event) => {
+      activeStates.push(Boolean(JSON.parse(event.detail).active));
+    });
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      requests.push(request);
+      const response = { requestId: request.requestId, ok: true };
+      if (request.type === "getCoordinates") {
+        response.screen = { pageX: 280, pageY: 180, lineHeight: 20 };
+      }
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify(response)
+      }));
+    });
+  </script>
+  <script src="../latex-context.js"></script>
+  <script src="../reference-autocomplete.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+    function sourceWith(command) {
+      return String.raw`\section{Zeta section}
+\label{z:section}
+\begin{equation}
+E=mc^2
+\label{eq:first}
+\end{equation}
+\begin{figure}
+\caption{Alpha figure}
+\label{fig:alpha}
+\end{figure}
+Use ${command}`;
+    }
+
+    function sendState(command) {
+      const value = sourceWith(command);
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex: value.length,
+          selectionFrom: value.length,
+          selectionTo: value.length,
+          screen: { pageX: 280, pageY: 180, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "codemirror"
+        })
+      }));
+    }
+
+    function sendExistingReference(label) {
+      const command = `\\ref{${label}}`;
+      const value = sourceWith(command);
+      const cursorIndex = value.length - 1;
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          screen: { pageX: 280, pageY: 180, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "codemirror"
+        })
+      }));
+    }
+
+    function labels() {
+      return [...document.querySelectorAll(".smarttex-reference-autocomplete-label")]
+        .map((element) => element.textContent);
+    }
+
+    async function waitForPopup() {
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const popup = document.querySelector("#smarttex-reference-autocomplete-popup:not([hidden])");
+        if (popup) return popup;
+        await delay(20);
+      }
+      return null;
+    }
+
+    async function runReferenceAutocompleteTest() {
+      const checks = {};
+      await delay(30);
+      sendState(String.raw`\ref{`);
+      const popup = await waitForPopup();
+      await delay(70);
+      checks.popup = Boolean(popup);
+      checks.documentOrder = JSON.stringify(labels()) === JSON.stringify([
+        "z:section", "eq:first", "fig:alpha"
+      ]);
+      const sortButton = document.querySelector(
+        ".smarttex-reference-autocomplete-order"
+      );
+      checks.sortButtonLabel = sortButton?.textContent === "Sort alphabetically";
+      checks.sortButtonInitiallyInactive = sortButton?.getAttribute("aria-pressed") === "false";
+      sortButton?.click();
+      await delay(30);
+      checks.oneTimeAlphabetical = JSON.stringify(labels()) === JSON.stringify([
+        "eq:first", "fig:alpha", "z:section"
+      ]);
+      checks.sortButtonActive = sortButton?.getAttribute("aria-pressed") === "true";
+      sortButton?.click();
+      await delay(20);
+      checks.nativeDisabled = requests.some((request) => (
+        request.type === "setReferenceAutocompleteActive" && request.active === true
+      ));
+      checks.initialPreview = previewLabels.at(-1) === "z:section";
+
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown", bubbles: true, cancelable: true
+      }));
+      await delay(30);
+      checks.keyboardPreview = previewLabels.at(-1) === "eq:first";
+
+      const third = document.querySelectorAll(".smarttex-reference-autocomplete-item")[2];
+      third?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false }));
+      await delay(30);
+      checks.hoverPreview = previewLabels.at(-1) === "fig:alpha";
+
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter", bubbles: true, cancelable: true
+      }));
+      await delay(20);
+      checks.insert = requests.some((request) => (
+        request.type === "replaceReferenceToken" && request.text === "fig:alpha"
+      ));
+
+      sendState("plain text");
+      await delay(40);
+      sendState(String.raw`Again \ref{`);
+      await waitForPopup();
+      await delay(50);
+      checks.oneTimeReset = JSON.stringify(labels()) === JSON.stringify([
+        "z:section", "eq:first", "fig:alpha"
+      ]);
+
+      sendState("plain text");
+      await delay(40);
+      referenceOrder = "alphabetical";
+      storageListeners.forEach((listener) => listener({
+        "smarttex:autocomplete:v1": {
+          newValue: { referenceOrder: "alphabetical" }
+        }
+      }, "local"));
+      sendState(String.raw`Option \ref{`);
+      await waitForPopup();
+      await delay(50);
+      checks.alphabetical = JSON.stringify(labels()) === JSON.stringify([
+        "eq:first", "fig:alpha", "z:section"
+      ]);
+      checks.optionInitialButtonState = document.querySelector(
+        ".smarttex-reference-autocomplete-order"
+      )?.getAttribute("aria-pressed") === "true";
+
+      sendState(String.raw`\eqref{`);
+      await waitForPopup();
+      await delay(50);
+      checks.eqrefOnlyEquations = JSON.stringify(labels()) === JSON.stringify(["eq:first"]);
+      const requestCountBeforeSingleArrow = requests.length;
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown", bubbles: true, cancelable: true
+      }));
+      await delay(30);
+      checks.singleEntryArrowMovesEditor = requests.slice(requestCountBeforeSingleArrow).some(
+        (request) => request.type === "moveCursorVertical" && request.direction === 1
+      );
+
+      sendState("plain text");
+      await delay(40);
+      sendExistingReference("fig:alpha");
+      await waitForPopup();
+      await delay(70);
+      const selectedExisting = document.querySelector(
+        ".smarttex-reference-autocomplete-item.smarttex-reference-autocomplete-selected " +
+        ".smarttex-reference-autocomplete-label"
+      );
+      checks.existingReferenceSelected = selectedExisting?.textContent === "fig:alpha";
+      checks.existingReferencePreview = previewLabels.at(-1) === "fig:alpha";
+      checks.activeEvent = activeStates.includes(true);
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#reference-autocomplete-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Reference autocomplete test passed"
+        : `Reference autocomplete test failed: ${JSON.stringify(checks)}; labels=${JSON.stringify(labels())}; previews=${JSON.stringify(previewLabels)}`;
+      document.documentElement.dataset.referenceAutocompleteTest = passed ? "passed" : "failed";
+    }
+
+    runReferenceAutocompleteTest().catch((error) => {
+      const output = document.querySelector("#reference-autocomplete-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Reference autocomplete test failed: ${error.message}`;
+      document.documentElement.dataset.referenceAutocompleteTest = "failed";
+    });
+  </script>
+</body>
+</html>

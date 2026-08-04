@@ -27,6 +27,7 @@
 <body>
   <div class="file-tree-list">
     <div role="treeitem" aria-label="main.tex" aria-selected="true"></div>
+    <div role="treeitem" aria-label="additional_references.bib" id="bib-item"></div>
     <div
       role="treeitem"
       aria-label="figures"
@@ -66,18 +67,29 @@
     });
 
     function documentState() {
+      const lineValues = editorText.split("\n");
       return {
         length: editorText.length,
+        lines: lineValues.length,
         toString() {
           return editorText;
         },
         lineAt(index) {
           const before = editorText.slice(0, index);
           const lineStart = before.lastIndexOf("\n") + 1;
+          const number = before.split("\n").length;
           return {
-            number: before.split("\n").length,
-            from: lineStart
+            number,
+            from: lineStart,
+            to: lineStart + lineValues[number - 1].length
           };
+        },
+        line(number) {
+          let from = 0;
+          for (let index = 1; index < number; index += 1) {
+            from += lineValues[index - 1].length + 1;
+          }
+          return { from, to: from + lineValues[number - 1].length };
         }
       };
     }
@@ -131,6 +143,13 @@
       }
     };
     root.cmView = { view };
+    document.querySelector("#bib-item").__reactPropsTest = {
+      file: {
+        name: "additional_references.bib",
+        _id: "1234567890abcdef12345678",
+        lines: ["@article{Test2026,", "  title={Test}", "}"]
+      }
+    };
   </script>
   <script src="../page-bridge.js"></script>
   <script>
@@ -198,6 +217,24 @@
         editorCursor === editorText.indexOf("Kluge2024") + "Kluge2024".length
       );
 
+      await request("setReferenceAutocompleteActive", { active: true });
+      await request("setCitationAutocompleteActive", { active: false });
+      checks.referenceActivation = document.body.classList.contains(
+        "smarttex-custom-autocomplete-active"
+      );
+      editorText = String.raw`Text \eqref{eq:ol}`;
+      editorCursor = editorText.indexOf("eq:ol") + "eq:ol".length;
+      editorSelectionAnchor = editorCursor;
+      editorSelectionHead = editorCursor;
+      view.dispatch({ selection: { anchor: editorCursor } });
+      const referenceReplacement = await request("replaceReferenceToken", {
+        text: "eq:new"
+      });
+      checks.referenceReplacement = (
+        referenceReplacement.token.fragment === "eq:ol" &&
+        editorText === String.raw`Text \eqref{eq:new}`
+      );
+
       view.hasFocus = false;
       await request("setCursor", { index: 2, focus: false });
       checks.setCursorWithoutFocus = editorCursor === 2 && view.hasFocus === false;
@@ -237,9 +274,27 @@
         view.hasFocus === false
       );
 
+      editorText = "first line\nsecond line";
+      editorCursor = 2;
+      editorSelectionAnchor = editorCursor;
+      editorSelectionHead = editorCursor;
+      view.dispatch({ selection: { anchor: editorCursor } });
+      await request("moveCursorVertical", { direction: 1 });
+      checks.moveCursorVertical = editorCursor === "first line\n".length + 2;
+
+      const bibText = await request("readProjectTextFile", {
+        path: "additional_references.bib"
+      });
+      checks.readProjectTextFile = (
+        bibText.file.value.includes("@article{Test2026") &&
+        bibText.file.fileName === "additional_references.bib"
+      );
+
       await request("setCitationAutocompleteActive", { active: false });
-      checks.release = !document.body.classList.contains(
-        "smarttex-citation-autocomplete-active"
+      await request("setReferenceAutocompleteActive", { active: false });
+      checks.release = (
+        !document.body.classList.contains("smarttex-citation-autocomplete-active") &&
+        !document.body.classList.contains("smarttex-custom-autocomplete-active")
       );
 
       const passed = Object.values(checks).every(Boolean);
