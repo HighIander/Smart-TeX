@@ -1,5 +1,16 @@
 # SmartTeX
 
+## Contents
+
+* [Installation for development](#installation-for-development)
+* [Sync uploaded files and figures with Nextcloud](#sync-uploaded-files-and-figures-with-nextcloud)
+* [Equation preview](#equation-preview)
+* [Reference and citation popups](#reference-and-citation-popups)
+* [Reference autocomplete](#reference-autocomplete)
+* [Citation autocomplete](#citation-autocomplete)
+* [Table preview](#table-preview)
+* [License](#license)
+
 SmartTeX is a standalone browser extension for CollabTeX-compatible LaTeX
 editors. It provides live equation and table previews anchored near the text
 cursor, plus an optional full-document live preview inside the PDF pane.
@@ -15,7 +26,7 @@ cursor, plus an optional full-document live preview inside the PDF pane.
 The extension is independent of Smart Citations and can be enabled or disabled
 separately.
 
-## Nextcloud project files
+## Sync uploaded files and figures with Nextcloud
 
 The cloud button next to **Smart** connects the current CollabTeX document to a
 Nextcloud account. Connections are saved by SmartTeX and can be reused by other
@@ -49,42 +60,17 @@ The rendered caret treats delimiter commands such as `\left(` and
 `\right\rangle` as indivisible units, so moving through their source does not
 temporarily invalidate the preview.
 
-## Full-document preview
-
-The experimental **S Live** toggle in the PDF preview toolbar replaces the
-compiled PDF pane with an immediately updating document-style preview. The
-button is hidden by default and can be enabled with the **Show the S Live
-full-document preview button (Beta)** option. SmartTeX lays out the active LaTeX
-document as local HTML, renders its equations with KaTeX, renders supported
-tables with the table previewer, and shows the editor cursor as a blinking
-caret. Switching the toggle off restores the existing compiled PDF viewer
-without reconfiguring the project.
-
-Cursor synchronization uses local source ranges in both directions. Clicking
-ordinary rendered prose therefore maps directly back to its source segment,
-without rescanning and rerendering the complete paragraph or choosing a later
-duplicate phrase. Reference, citation, and figure hover previews defer their
-work and reuse cached parse/render results so pointer interaction remains
-responsive in large documents.
-
-The adjacent dropdown contains a persistent text-size slider. Prose is
-justified, and inline mathematics remains in its surrounding paragraph. After
-an edit, rendering starts once typing has been idle for one second; during
-continuous typing SmartTeX still refreshes at least every five seconds. Page
-construction yields to the browser between blocks and replaces the visible
-preview only after the new page is ready, keeping the source editor responsive.
+Preview popups can be easily closed with the <kbd>Esc</kbd> key.
 
 ## Reference and citation popups
 
-The options page can configure reference, equation-reference, and citation
-previews to open either on pointer hover or only while the source-editor cursor
-is inside the corresponding command. In cursor-only mode, hover popups are
-suppressed in both the editor and full-document preview, while the popup remains
-available beside the editor cursor.
+Reference, equation-reference, and citation previews can be displayed either on
+pointer hover or only while the source-editor cursor is inside the corresponding
+command.
 
-Following the linked title in a reference popup records the previous editor
-selection. A back-arrow button then appears at the left of the SmartTeX
-formatting controls and restores that prior cursor or selection position.
+By following the linked title in a reference popup, you can inspect the source
+around the target. A back-arrow button then appears to the left of the SmartTeX
+formatting controls and quickly returns you to the previous cursor position.
 
 ## Reference autocomplete
 
@@ -98,26 +84,31 @@ preview used elsewhere in SmartTeX, and Enter or Tab inserts the selected label.
 ## Citation autocomplete
 
 Inside common `\cite{…}` commands, SmartTeX offers a compact citation-key
-autocomplete list. On first use it asks before parsing the bibliography files declared by the
-current document. Bibliography files are read passively in the background from
-the collaborative project model or an in-memory project archive; SmartTeX never
-opens them in the editor or changes the active document. Parsed entries are
-cached per project. The popup supports
-key, title, author, journal, year, keyword, and DOI matching plus keyboard
-selection with the arrow keys, Enter, or Tab.
+autocomplete list. On first use, it asks for confirmation before parsing the
+bibliography files declared by the current document. Bibliography files are
+read passively in the background from the collaborative project model or an
+in-memory project archive; SmartTeX never opens them in the editor or changes
+the active document. Parsed entries are cached per project.
 
-The popup includes a small link to Smart Citations for users who want the full
-reference manager. If Smart Citations is active on the page, SmartTeX detects
-its injected UI, disables its own citation handling, and leaves autocomplete
-entirely to Smart Citations.
+The popup supports matching by key, title, author, journal, year, keyword, and
+DOI, as well as keyboard selection using the arrow keys, Enter, or Tab.
+
+The popup includes a small link to
+[Smart Citations](https://github.com/HighIander/Smart-Citations) for users who
+want the full reference manager, featuring automatic completion of details
+using DOI lookup, PDF download with commenting and notes, and categories shared
+with other users—all backed up and synchronized via Nextcloud. If Smart
+Citations is active on the page, SmartTeX disables its own citation handling
+and leaves autocomplete entirely to Smart Citations.
 
 ## Table preview
 
 Moving the cursor into a `tabular`, `tabular*`, `tabularx`, `longtable`, or
 `array` environment opens a live table preview. It supports column alignment
 and vertical rules, `\hline` and booktabs-style rules, `\multicolumn`, common
-text formatting commands, imported simple macros, and KaTeX-rendered inline
+text-formatting commands, imported simple macros, and KaTeX-rendered inline
 mathematics. Table source is processed locally.
+
 For a `tabular` nested in a captioned `table` environment, the preview header
 shows the table number inferred from earlier captioned tables in the active
 LaTeX file.
@@ -127,3 +118,5 @@ LaTeX file.
 First-party SmartTeX source files are licensed under CC BY-NC-SA 4.0.
 Bundled KaTeX files are licensed under the MIT license included with the
 vendor files.
+
+The name "Smart TeX", "Smart-TeX" and "SmartTeX" are owned by the author and not part of this license.
