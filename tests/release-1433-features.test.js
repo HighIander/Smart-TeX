@@ -14,7 +14,7 @@ const css = read("content.css");
 const bridge = read("page-bridge.js");
 const guard = read("label-reference-guard.js");
 
-assert.equal(manifest.version, "2.0");
+assert.equal(manifest.version, "2.0.1");
 
 assert.match(renderer, /smarttexBaseHeightPx/);
 assert.match(renderer, /smarttex-figure-popup-viewport-frozen/);

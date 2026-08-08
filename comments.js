@@ -2774,6 +2774,17 @@
       paneOpen = false;
       return;
     }
+
+    // When the authoritative review runtime is already available and tracking
+    // is off, always start with the Track Changes section minimized. Do not
+    // rely on the persisted section state here: opening an inactive review
+    // pane should consistently prioritize the Comments section.
+    const runtimeReviewState = globalThis.__smartTeXReviewState;
+    if (runtimeReviewState && typeof runtimeReviewState === "object" && !runtimeReviewState.tracking) {
+      trackSectionCollapsed = true;
+      applyReviewSectionLayout();
+    }
+
     setPaneSettingsExpanded(false);
     element.hidden = false;
     applyPaneTheme();
@@ -3062,6 +3073,16 @@
       trackView.value = reviewUiState.markupMode;
     }
     renderTrackChangesList();
+
+    // Review state can arrive after the Comments pane was constructed because
+    // comments.js is injected before review.js. Once tracking is known to be
+    // off, minimize the Track Changes section immediately as well, covering
+    // both normal pane opening and late review-state initialization.
+    if (paneOpen && !reviewUiState.tracking && !trackSectionCollapsed) {
+      trackSectionCollapsed = true;
+      applyReviewSectionLayout();
+    }
+
     maybeAutoOpenForCurrentDocument();
     if (paneOpen) schedulePaneGeometry();
   });

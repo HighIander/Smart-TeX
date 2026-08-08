@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SmartTeX",
-  "version": "2.0",
+  "version": "2.0.1",
   "description": "LaTeX popup previews, autocomplete, source tools, and per-document Nextcloud integration for CollabTeX-compatible editors.",
   "permissions": [
     "storage",

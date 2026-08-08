@@ -25,7 +25,7 @@
   const REVIEW_PROJECT_FILE = ".smarttex-review.json";
   const LOCAL_INPUT_WINDOW_MS = 1400;
   const TYPE_GROUP_WINDOW_MS = 2200;
-  const MOVE_PAIR_WINDOW_MS = 10000;
+  const MOVE_PAIR_WINDOW_MS = 30000;
   const PROJECT_SYNC_DELAY_MS = 1800;
   const PROJECT_POLL_MS = 20000;
   const PROJECT_FULL_SYNC_FALLBACK_MS = 120000;
@@ -43,6 +43,9 @@
   let applyingTrackedHistory = false;
   let trackedHistoryQueue = Promise.resolve();
   let pendingRetainedRestore = null;
+  let queuedStateDuringRetainedRestore = null;
+  let immediateStateCaptureTimer = 0;
+  let trailingStateCaptureTimer = 0;
   let lastQueuedHistoryKeydownAt = 0;
   let lastQueuedHistoryDirection = "";
   let pane = null;
@@ -465,8 +468,9 @@
       } catch (_error) {
         // A missing metadata file is expected until review is used for the first time.
       }
-      const mergeChangedVisibleState = JSON.stringify(normalizeReviewState(merged)) !== JSON.stringify(beforeMerge);
+      let mergeChangedVisibleState = JSON.stringify(normalizeReviewState(merged)) !== JSON.stringify(beforeMerge);
       reviewState = merged;
+      if (currentFile && promoteExistingDeleteInsertPairToMove(currentFile)) mergeChangedVisibleState = true;
       await bridgeRequest("writeProjectMetadataFile", {
         path: REVIEW_PROJECT_FILE,
         text: JSON.stringify(serializableReviewState(), null, 2) + "\n"
@@ -502,8 +506,9 @@
       const remote = await readRemoteReviewState();
       lastFullRemoteReadAt = Date.now();
       const merged = mergeReviewStates(reviewState, remote);
-      const changed = JSON.stringify(merged) !== JSON.stringify(normalizeReviewState(reviewState));
+      let changed = JSON.stringify(merged) !== JSON.stringify(normalizeReviewState(reviewState));
       reviewState = merged;
+      if (currentFile && promoteExistingDeleteInsertPairToMove(currentFile)) changed = true;
       projectFileKnown = true;
       hideMetadataTreeItem();
       if (changed) {
@@ -547,15 +552,43 @@
   async function synchronizeEditorStateBeforeHistory() {
     const first = await bridgeRequest("getState", {}, 1800).catch(() => null);
     if (first?.state && String(first.state.fileName || "") === currentFile) {
-      handleEditorState(first.state);
+      routeEditorState(first.state);
     }
     if (pendingRetainedRestore) {
       await pendingRetainedRestore.catch(() => {});
       const settled = await bridgeRequest("getState", {}, 1800).catch(() => null);
       if (settled?.state && String(settled.state.fileName || "") === currentFile) {
-        handleEditorState(settled.state);
+        routeEditorState(settled.state);
       }
     }
+  }
+
+  async function captureTrackedEditorState() {
+    if (!trackingEnabled()) return;
+    const response = await bridgeRequest("getState", {}, 1800).catch(() => null);
+    if (response?.state) routeEditorState(response.state);
+  }
+
+  function scheduleTrackedStateCapture() {
+    if (!trackingEnabled()) return;
+
+    // Editor-state callbacks supplied by the host are usually immediate, but
+    // some CodeMirror/CollabTeX edit paths coalesce or omit one callback when
+    // edits happen in rapid succession.  An immediate read plus one short
+    // trailing read makes tracking lossless without polling while the user is
+    // idle. Duplicate snapshots are harmless because handleEditorState() is
+    // value-idempotent.
+    if (!immediateStateCaptureTimer) {
+      immediateStateCaptureTimer = window.setTimeout(() => {
+        immediateStateCaptureTimer = 0;
+        void captureTrackedEditorState();
+      }, 0);
+    }
+    window.clearTimeout(trailingStateCaptureTimer);
+    trailingStateCaptureTimer = window.setTimeout(() => {
+      trailingStateCaptureTimer = 0;
+      void captureTrackedEditorState();
+    }, 90);
   }
 
   function queueTrackedHistory(direction) {
@@ -598,16 +631,26 @@
     }
 
     lastLocalInputAt = Date.now();
+    let editingEvent = false;
     if (event.type === "beforeinput") {
       lastLocalInputType = String(event.inputType || "");
+      editingEvent = !String(event.inputType || "").startsWith("history");
     } else if (event.type === "keydown") {
       const key = String(event.key || "");
-      if (key === "Backspace") lastLocalInputType = "deleteContentBackward";
-      else if (key === "Delete") lastLocalInputType = "deleteContentForward";
+      if (key === "Backspace") {
+        lastLocalInputType = "deleteContentBackward";
+        editingEvent = true;
+      } else if (key === "Delete") {
+        lastLocalInputType = "deleteContentForward";
+        editingEvent = true;
+      }
+    } else if (["input", "paste", "cut", "drop"].includes(event.type)) {
+      editingEvent = true;
     }
+    if (editingEvent) scheduleTrackedStateCapture();
   }
 
-  for (const eventName of ["beforeinput", "keydown", "paste", "cut", "drop", "pointerdown"]) {
+  for (const eventName of ["beforeinput", "input", "keydown", "paste", "cut", "drop", "pointerdown"]) {
     document.addEventListener(eventName, markLocalInput, true);
   }
 
@@ -783,18 +826,93 @@
     }
   }
 
+  function comparableMoveText(value) {
+    return String(value || "").replace(/\r\n?/g, "\n");
+  }
+
   function matchingMoveDeletion(fileName, splice, localAuthor) {
     if (!splice.added || splice.removed || !String(splice.added).trim()) return null;
-    const author = localAuthor ? identity.name : "anonymous";
+    const added = comparableMoveText(splice.added);
+    const preferredAuthor = localAuthor ? identity.name : "";
+    const now = Date.now();
+
     return [...reviewState.changes]
-      .filter((change) => (
-        change.fileName === fileName &&
-        change.type === "delete" &&
-        change.author === author &&
-        change.originalText === splice.added &&
-        (splice.start <= change.start || splice.start >= change.end)
-      ))
-      .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+      .filter((change) => {
+        if (change.fileName !== fileName || change.type !== "delete") return false;
+        if (comparableMoveText(change.originalText) !== added) return false;
+        if (!(splice.start <= change.start || splice.start >= change.end)) return false;
+
+        // A delayed editor-state notification must not turn a genuine local
+        // cut/paste into two unrelated delete+insert records merely because the
+        // local-input timestamp expired. Prefer the current author, but permit
+        // a recent exact-text deletion when authorship is temporarily reported
+        // as anonymous. Never steal another named user's deletion for a known
+        // local paste.
+        if (preferredAuthor && change.author !== preferredAuthor && change.author !== "anonymous") {
+          return false;
+        }
+        const changedAt = new Date(change.updatedAt || change.createdAt || 0).getTime();
+        return !Number.isFinite(changedAt) || Math.abs(now - changedAt) <= MOVE_PAIR_WINDOW_MS;
+      })
+      .sort((left, right) => {
+        const leftAuthorScore = preferredAuthor && left.author === preferredAuthor ? 1 : 0;
+        const rightAuthorScore = preferredAuthor && right.author === preferredAuthor ? 1 : 0;
+        return rightAuthorScore - leftAuthorScore
+          || String(right.updatedAt).localeCompare(String(left.updatedAt));
+      })[0] || null;
+  }
+
+  function promoteExistingDeleteInsertPairToMove(fileName) {
+    const candidates = reviewState.changes.filter((change) => change.fileName === fileName);
+    const deletions = candidates
+      .filter((change) => change.type === "delete" && change.retained && String(change.originalText || "").trim())
+      .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+    const insertions = candidates.filter((change) => change.type === "insert");
+
+    for (const deletion of deletions) {
+      const deletedText = comparableMoveText(deletion.originalText);
+      const deletionTime = new Date(deletion.updatedAt || deletion.createdAt || 0).getTime();
+      const insertion = insertions
+        .filter((change) => {
+          if (comparableMoveText(change.text) !== deletedText) return false;
+          if (!(change.end <= deletion.start || change.start >= deletion.end)) return false;
+          const authorCompatible = change.author === deletion.author
+            || change.author === "anonymous"
+            || deletion.author === "anonymous";
+          if (!authorCompatible) return false;
+          const insertionTime = new Date(change.updatedAt || change.createdAt || 0).getTime();
+          if (!Number.isFinite(deletionTime) || !Number.isFinite(insertionTime)) return true;
+          return Math.abs(insertionTime - deletionTime) <= MOVE_PAIR_WINDOW_MS;
+        })
+        .sort((left, right) => {
+          const leftDistance = Math.abs((new Date(left.updatedAt || left.createdAt || 0).getTime() || 0) - (deletionTime || 0));
+          const rightDistance = Math.abs((new Date(right.updatedAt || right.createdAt || 0).getTime() || 0) - (deletionTime || 0));
+          return leftDistance - rightDistance;
+        })[0];
+      if (!insertion) continue;
+
+      const timestamp = nowIso();
+      const namedAuthor = deletion.author !== "anonymous"
+        ? deletion.author
+        : (insertion.author !== "anonymous" ? insertion.author : deletion.author);
+      const namedColor = namedAuthor === insertion.author ? insertion.color : deletion.color;
+      deletion.type = "move";
+      deletion.author = namedAuthor || "anonymous";
+      deletion.color = namedColor || deletion.color;
+      deletion.text = insertion.text;
+      deletion.fromStart = deletion.start;
+      deletion.fromEnd = deletion.end;
+      deletion.toStart = insertion.start;
+      deletion.toEnd = insertion.end;
+      deletion.start = insertion.start;
+      deletion.end = insertion.end;
+      deletion.updatedAt = timestamp;
+
+      tombstoneItem(insertion.id);
+      reviewState.changes = reviewState.changes.filter((change) => change.id !== insertion.id);
+      return true;
+    }
+    return false;
   }
 
   function keepAdjacentInsertionsOutsideMove(fileName, splice, beforeChanges, moveCandidateId) {
@@ -1036,8 +1154,12 @@
           ? candidate.end
           : candidate.start;
         candidate.type = "move";
-        candidate.author = author;
-        candidate.color = color;
+        // Preserve the named author from the deletion if the paste state was
+        // delivered late and therefore classified as anonymous.
+        candidate.author = localAuthor
+          ? identity.name
+          : (candidate.author && candidate.author !== "anonymous" ? candidate.author : author);
+        candidate.color = candidate.author === identity.name ? identity.color : candidate.color || color;
         candidate.text = splice.added;
         candidate.fromStart = sourceStart;
         candidate.fromEnd = sourceEnd;
@@ -1178,8 +1300,7 @@
   }
 
   async function restoreRetainedDeletion(previousValue, nextValue, splice) {
-    suppressedTargetValue = previousValue;
-    suppressedMode = "retained-delete-restore";
+    const fileName = currentFile;
     const cursor = retainedDeletionCursor(splice);
     const response = await bridgeRequest("replaceRange", {
       start: splice.start,
@@ -1189,21 +1310,34 @@
       selectionEnd: cursor,
       focus: true
     }, 7000).catch(() => null);
-    if (!response?.ok) {
-      suppressedTargetValue = null;
-      suppressedMode = "";
-      // If restoration fails, fall back to the actual editor value and keep the
-      // metadata internally consistent with the physical deletion.
-      const change = reviewState.changes.find((item) => (
-        item.fileName === currentFile && item.retained && item.start === splice.start && item.originalText === splice.removed
-      ));
-      if (change) {
-        change.retained = false;
-        change.end = change.start;
-      }
-      lastValueByFile.set(currentFile, nextValue);
-      saveState();
+    if (response?.ok) return true;
+
+    // If restoration fails, fall back to the actual editor value and keep the
+    // metadata internally consistent with the physical deletion.
+    const change = reviewState.changes.find((item) => (
+      item.fileName === fileName && item.retained && item.start === splice.start && item.originalText === splice.removed
+    ));
+    if (change) {
+      change.retained = false;
+      change.end = change.start;
     }
+    lastValueByFile.set(fileName, nextValue);
+    saveState();
+    return false;
+  }
+
+  function routeEditorState(next) {
+    if (!next || typeof next !== "object") return;
+    if (pendingRetainedRestore && !applyingTrackedHistory) {
+      // While a tracked deletion is being restored into the physical editor,
+      // CollabTeX may emit transient states with the source text absent. Those
+      // states are not real review edits. Keep only the newest one and reconcile
+      // once the restoration has completed. This is essential for fast cut/paste
+      // moves and prevents both missed inserts and spurious replacement records.
+      queuedStateDuringRetainedRestore = next;
+      return;
+    }
+    handleEditorState(next);
   }
 
   function handleEditorState(next) {
@@ -1220,6 +1354,7 @@
     if (!lastValueByFile.has(fileName)) {
       lastValueByFile.set(fileName, nextValue);
       if (trackingEnabled()) ensureTrackedHistory(fileName, nextValue);
+      if (promoteExistingDeleteInsertPairToMove(fileName)) saveState();
       renderPane();
       scheduleOverlayRender();
       updateSelectionPopup();
@@ -1281,10 +1416,42 @@
             // Temporarily remember the host's deleted value so the restoration
             // state event is recognized as synthetic rather than as an insertion.
             lastValueByFile.set(fileName, nextValue);
+            const restoreFile = fileName;
+            const restorePrevious = previous;
             const restorePromise = restoreRetainedDeletion(previous, nextValue, splice);
             pendingRetainedRestore = restorePromise;
-            void restorePromise.finally(() => {
+            void restorePromise.then(async (restored) => {
+              if (pendingRetainedRestore !== restorePromise) return;
+              pendingRetainedRestore = null;
+              const queued = queuedStateDuringRetainedRestore;
+              queuedStateDuringRetainedRestore = null;
+
+              if (!restored) {
+                if (queued) routeEditorState(queued);
+                return;
+              }
+
+              // Treat the synthetic reinsertion as already consumed. If the user
+              // pasted/typed while restoration was in flight, diff the newest
+              // live document against the restored pre-delete document, not
+              // against the transient document with the deletion physically
+              // missing.
+              lastValueByFile.set(restoreFile, restorePrevious);
+              const live = await bridgeRequest("getState", {}, 2200).catch(() => null);
+              const settled = live?.state || queued;
+              if (!settled || String(settled.fileName || "") !== restoreFile) return;
+              if (String(settled.value || "") === restorePrevious) {
+                currentState = settled;
+                currentFile = restoreFile;
+                scheduleOverlayRender();
+                updateCursorChange();
+                dispatchReviewState();
+                return;
+              }
+              routeEditorState(settled);
+            }).catch(() => {
               if (pendingRetainedRestore === restorePromise) pendingRetainedRestore = null;
+              queuedStateDuringRetainedRestore = null;
             });
           } else {
             const groupingHint = shouldTrack
@@ -1309,6 +1476,7 @@
               recordTrackedSplice(fileName, splice, localAuthor, groupingHint, {
                 moveCandidateId: moveCandidate?.id || null
               });
+              promoteExistingDeleteInsertPairToMove(fileName);
               pushTrackedHistory(fileName, nextValue);
             } else if (trackingEnabled() || pendingChangesForFile(fileName).length > 0) {
               updateAcceptedBaseline(fileName, nextValue);
@@ -1328,7 +1496,7 @@
 
   window.addEventListener(STATE_EVENT, (event) => {
     try {
-      handleEditorState(JSON.parse(String(event.detail || "{}")));
+      routeEditorState(JSON.parse(String(event.detail || "{}")));
     } catch (_error) {
       // Ignore transient editor-state payloads while the host switches files.
     }
@@ -2341,13 +2509,13 @@
 
     if (mode === "markup") {
       if (["insert", "replace"].includes(change.type)) {
-        for (const rect of rects) {
+        for (const rect of lineRectsForStrike(rects, response.lineHeight)) {
           addRect(markupLayer, rect, "smarttex-review-addition-line");
           installChangeHitTarget(rect, change);
         }
       }
       if (change.type === "delete" && change.retained) {
-        for (const rect of rects) {
+        for (const rect of lineRectsForStrike(rects, response.lineHeight)) {
           addRect(markupLayer, rect, "smarttex-review-deletion-line");
           installChangeHitTarget(rect, change);
         }
@@ -2385,10 +2553,23 @@
             installChangeHitTarget({ ...from, right: from.left + 12 }, change);
           }
         }
-        const to = rects[0];
-        if (to) {
-          addRect(markupLayer, { ...to, left: to.left - 6, right: to.left - 2 }, "smarttex-review-move-target");
-          for (const rect of rects) installChangeHitTarget(rect, change);
+        const targetLineRects = lineRectsForStrike(rects, response.lineHeight);
+        if (targetLineRects.length) {
+          // Draw one continuous green bar whose vertical extent exactly follows
+          // the visible moved text. Per-line bars can leave gaps between visual
+          // editor rows and make the marker look shorter than the moved block.
+          const moveTargetBounds = targetLineRects.reduce((bounds, to) => ({
+            left: Math.min(bounds.left, to.left),
+            top: Math.min(bounds.top, to.top),
+            bottom: Math.max(bounds.bottom, to.bottom)
+          }), { left: Infinity, top: Infinity, bottom: -Infinity });
+          addRect(markupLayer, {
+            left: moveTargetBounds.left - 6,
+            right: moveTargetBounds.left - 2,
+            top: moveTargetBounds.top,
+            bottom: moveTargetBounds.bottom
+          }, "smarttex-review-move-target");
+          for (const to of targetLineRects) installChangeHitTarget(to, change);
         }
       }
     } else if (mode === "simple") {
@@ -2577,13 +2758,14 @@
     dispatchReviewState();
     try {
       const response = await bridgeRequest("getState", {}, 5000);
-      if (response?.state) handleEditorState(response.state);
+      if (response?.state) routeEditorState(response.state);
     } catch (_error) {
       // The normal editor-state event will initialize review when the editor becomes available.
     }
     try {
       const remote = await readRemoteReviewState();
       reviewState = mergeReviewStates(reviewState, remote);
+      if (currentFile) promoteExistingDeleteInsertPairToMove(currentFile);
       projectFileKnown = true;
       lastFullRemoteReadAt = Date.now();
       scheduleLocalSave(0);
