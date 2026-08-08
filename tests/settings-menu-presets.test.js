@@ -18,7 +18,7 @@ const bridge = read("page-bridge.js");
 const referenceAutocomplete = read("reference-autocomplete.js");
 const labelGuard = read("label-reference-guard.js");
 
-assert.equal(manifest.version, "2.0.1");
+assert.equal(manifest.version, "2.0.2");
 assert.match(background, /"content\.js",\s*"settings-menu\.js",\s*"figure-autocomplete\.js"/);
 assert.match(optionsHtml, /<title>SmartTeX presets<\/title>/);
 assert.match(optionsHtml, /<h1>SmartTeX presets<\/h1>/);

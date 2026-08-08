@@ -8,7 +8,7 @@ const css = fs.readFileSync(path.join(root, "content.css"), "utf8");
 const guard = fs.readFileSync(path.join(root, "label-reference-guard.js"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
-assert.equal(manifest.version, "2.0.1");
+assert.equal(manifest.version, "2.0.2");
 assert.match(content, /function popupSpinnerButtonPosition\(\)/);
 assert.match(content, /optionsButton\?\.getBoundingClientRect/);
 assert.doesNotMatch(content, /function popupPointerPosition\(/);
@@ -17,4 +17,4 @@ assert.match(guard, /maximumEnvironmentLength:\s*0/);
 assert.match(guard, /beforeCount = 3/);
 assert.match(guard, /afterCount = 3/);
 assert.match(guard, /leftLength > rightLength \* 1\.55/);
-console.log("SmartTeX 2.0.1 feature checks passed.");
+console.log("SmartTeX 2.0.2 feature checks passed.");
