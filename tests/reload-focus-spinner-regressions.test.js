@@ -4,6 +4,7 @@ const fs = require('fs');
 const comments = fs.readFileSync('comments.js', 'utf8');
 const content = fs.readFileSync('content.js', 'utf8');
 const bridge = fs.readFileSync('page-bridge.js', 'utf8');
+const review = fs.readFileSync('review.js', 'utf8');
 
 // Comment/mark mutations are cached immediately so a reload inside the normal
 // delayed project-write window cannot lose local work.
@@ -33,9 +34,16 @@ assert.match(comments, /smarttex:comments-initialization-state/);
 assert.match(comments, /__smartTeXCommentsInitializationActive/);
 assert.match(content, /COMMENTS_INITIALIZATION_STATE_EVENT/);
 assert.match(content, /__smartTeXCommentsInitializationActive !== false/);
-assert.match(content, /structureAnalysisActive \|\| commentsInitializationActive/);
+assert.match(content, /REVIEW_HYDRATION_STATE_EVENT/);
+assert.match(content, /__smartTeXReviewHydrationActive !== false/);
+assert.match(content, /structureAnalysisActive \|\| commentsInitializationActive \|\| reviewHydrationActive/);
 assert.match(content, /function updateToolbarLoadingSpinner\(/);
+assert.match(review, /dispatchReviewHydrationState\(true\)/);
+assert.match(review, /\.finally\(\(\) => \{[\s\S]*dispatchReviewHydrationState\(false\)/);
+assert.match(bridge, /Always make one authoritative structure pass after review hydration/);
+assert.match(bridge, /cachedStructureSource = null;[\s\S]*refreshStructureCache\(state, true\)/);
 assert.match(bridge, /Keep the global S-button spinner active through the paint/);
-assert.match(bridge, /requestAnimationFrame\(\(\) => setStructureAnalysisState\(false\)\)/);
+assert.match(bridge, /if \(painted\)[\s\S]*requestAnimationFrame\(\(\) => setStructureAnalysisState\(false\)\)/);
+assert.match(bridge, /not declare structure hydration complete until an actual overlay/);
 
 console.log('Reload persistence, comment focus, and global loading-spinner checks passed.');

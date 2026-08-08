@@ -99,6 +99,7 @@
   const RUNTIME_SETTINGS_EVENT = "smarttex:runtime-settings";
   const STRUCTURE_ANALYSIS_STATE_EVENT = "smarttex:structure-analysis-state";
   const COMMENTS_INITIALIZATION_STATE_EVENT = "smarttex:comments-initialization-state";
+  const REVIEW_HYDRATION_STATE_EVENT = "smarttex:review-hydration-state";
   const SOURCE_RENDER_DELAY_MS = 24;
   const POPUP_SELECTION_HIGHLIGHT = "smarttex-popup-selection";
   const LATEX_FILE = /\.(?:tex|ltx|sty|cls)$/i;
@@ -271,15 +272,24 @@
   // are still absent after a page reload.
   let commentsInitializationActive =
     globalThis.__smartTeXCommentsInitializationActive !== false;
-  let structureSpinnerShownAt = (structureAnalysisActive || commentsInitializationActive) ? performance.now() : 0;
+  // review.js is injected after content.js. Treat its initial hydration as
+  // pending until it explicitly reports completion so a pre-review structure
+  // paint cannot hide the S-button spinner too early.
+  let reviewHydrationActive =
+    globalThis.__smartTeXReviewHydrationActive !== false;
+  let structureSpinnerShownAt = (structureAnalysisActive || commentsInitializationActive || reviewHydrationActive) ? performance.now() : 0;
   let structureSpinnerHideTimer = 0;
   let commentsInitializationFailSafe = window.setTimeout(() => {
     commentsInitializationActive = false;
     updateToolbarLoadingSpinner();
   }, 15000);
+  let reviewHydrationFailSafe = window.setTimeout(() => {
+    reviewHydrationActive = false;
+    updateToolbarLoadingSpinner();
+  }, 15000);
 
   function updateToolbarLoadingSpinner() {
-    const next = Boolean(structureAnalysisActive || commentsInitializationActive);
+    const next = Boolean(structureAnalysisActive || commentsInitializationActive || reviewHydrationActive);
     window.clearTimeout(structureSpinnerHideTimer);
     structureSpinnerHideTimer = 0;
     if (next) {
@@ -355,7 +365,7 @@
     optionsButton.className = "d-inline-grid btn btn-sm smarttex-toolbar-button";
     optionsButton.classList.toggle(
       "smarttex-initializing",
-      structureAnalysisActive || commentsInitializationActive
+      structureAnalysisActive || commentsInitializationActive || reviewHydrationActive
     );
     if (optionsButton.parentElement !== optionsButtonSlot) {
       optionsButtonSlot.insertBefore(optionsButton, optionsButtonSlot.firstChild);
@@ -4060,6 +4070,23 @@
     if (!commentsInitializationActive) {
       window.clearTimeout(commentsInitializationFailSafe);
       commentsInitializationFailSafe = 0;
+    }
+    updateToolbarLoadingSpinner();
+  });
+
+  window.addEventListener(REVIEW_HYDRATION_STATE_EVENT, (event) => {
+    let detail = {};
+    try {
+      detail = typeof event?.detail === "string"
+        ? JSON.parse(event.detail)
+        : (event?.detail || {});
+    } catch (_error) {
+      detail = {};
+    }
+    reviewHydrationActive = detail.active === true;
+    if (!reviewHydrationActive) {
+      window.clearTimeout(reviewHydrationFailSafe);
+      reviewHydrationFailSafe = 0;
     }
     updateToolbarLoadingSpinner();
   });

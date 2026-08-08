@@ -51,6 +51,7 @@
   const CITATION_REQUEST_EVENT = "smarttex:citation-editor-request";
   const CITATION_RESPONSE_EVENT = "smarttex:citation-editor-response";
   const STRUCTURE_ANALYSIS_STATE_EVENT = "smarttex:structure-analysis-state";
+  const REVIEW_HYDRATION_STATE_EVENT = "smarttex:review-hydration-state";
   const COMMENT_OVERLAY_STATE_EVENT = "smarttex:comment-overlay-state";
   const COMMENT_ANCHOR_ACTIVATE_EVENT = "smarttex:comment-anchor-activate";
   const CITE_COMMAND = /\\(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/i;
@@ -437,6 +438,29 @@
     return editorViewportBounds()?.right || null;
   }
 
+  function editorGutterBoundaryX() {
+    const root = editorRootElement();
+    if (!root) return null;
+
+    // Place review move markers in the stable gutter/content boundary instead
+    // of deriving x from range rectangles. Multiline ranges contain coalesced
+    // rectangles whose left edge can be the full editor viewport, which made
+    // the marker jump into the far-left gutter or appear as broken segments.
+    if (editorKind === "codemirror") {
+      const gutters = root.querySelector?.(".cm-gutters");
+      const gutterRect = gutters?.getBoundingClientRect?.();
+      if (gutterRect && gutterRect.width > 0) return gutterRect.right;
+      const contentRect = codeMirrorContent(editor)?.getBoundingClientRect?.();
+      return contentRect ? contentRect.left : null;
+    }
+
+    const gutter = root.querySelector?.(".ace_gutter");
+    const gutterRect = gutter?.getBoundingClientRect?.();
+    if (gutterRect && gutterRect.width > 0) return gutterRect.right;
+    const scrollerRect = editor?.renderer?.scroller?.getBoundingClientRect?.();
+    return scrollerRect ? scrollerRect.left : null;
+  }
+
   function editorRangeRects(startValue, endValue) {
     const state = getEditorState();
     const source = String(state?.value || "");
@@ -664,11 +688,11 @@
   function renderSourceNumberBadges(state = lastEditorState) {
     const layer = ensureNumberBadgeLayer();
     const highlightLayer = ensureStructureHighlightLayer();
-    if (!state || !editor || !highlightLayer) return;
+    if (!state || !editor || !highlightLayer) return false;
     const badgeFragment = document.createDocumentFragment();
     const highlightFragment = document.createDocumentFragment();
     const bounds = editorViewportBounds();
-    if (!bounds || !Number.isFinite(bounds.right)) return;
+    if (!bounds || !Number.isFinite(bounds.right)) return false;
     updateOverlayBounds(layer, bounds);
     updateOverlayBounds(highlightLayer, bounds);
     const nativeOverlayRects = nativeEditorOverlayRects(bounds);
@@ -857,6 +881,7 @@
     highlightLayer.replaceChildren(highlightFragment);
     layer.replaceChildren(badgeFragment);
     renderCommentOverlays();
+    return true;
   }
 
   function commentIconMarkup() {
@@ -1139,15 +1164,22 @@
       overlayFramePending = false;
       overlayFrameId = 0;
       try {
-        if (interactionTasks?.runSync) {
-          interactionTasks.runSync("source-overlay-render", () => renderSourceNumberBadges());
-        } else {
-          renderSourceNumberBadges();
-        }
+        const painted = interactionTasks?.runSync
+          ? interactionTasks.runSync("source-overlay-render", () => renderSourceNumberBadges())
+          : renderSourceNumberBadges();
         if (structureAnalysisActive) {
-          // Keep the global S-button spinner active through the paint in which
-          // the freshly computed badges/highlights first become visible.
-          window.requestAnimationFrame(() => setStructureAnalysisState(false));
+          if (painted) {
+            // Keep the global S-button spinner active through the paint in which
+            // the freshly computed badges/highlights first become visible.
+            window.requestAnimationFrame(() => setStructureAnalysisState(false));
+          } else {
+            // The editor shell can exist before its viewport is measurable. Do
+            // not declare structure hydration complete until an actual overlay
+            // paint has succeeded.
+            window.setTimeout(() => {
+              if (structureAnalysisActive) scheduleOverlayRender();
+            }, 120);
+          }
         }
       } catch (error) {
         if (interactionTasks?.isAbortError?.(error)) {
@@ -1254,6 +1286,37 @@
       // the cache is already current. Repaint it instead of leaving the global
       // loading indicator waiting for a source change that may never occur.
       scheduleOverlayRender();
+    }
+  });
+
+  window.addEventListener(REVIEW_HYDRATION_STATE_EVENT, (event) => {
+    let detail = {};
+    try {
+      detail = typeof event?.detail === "string"
+        ? JSON.parse(event.detail)
+        : (event?.detail || {});
+    } catch (_error) {
+      detail = {};
+    }
+    if (detail.active === true) {
+      // Review hydration can rewrite/re-anchor tracked text after the first
+      // editor snapshot. Keep the structure lifecycle pending until that work
+      // has settled.
+      setStructureAnalysisState(true);
+      return;
+    }
+
+    // Always make one authoritative structure pass after review hydration.
+    // This decouples section/environment badges from the earlier bootstrap
+    // editor buffer and fixes reloads with Track Changes already enabled.
+    const state = getEditorState();
+    if (state) {
+      lastEditorState = state;
+      cachedStructureSource = null;
+      refreshStructureCache(state, true);
+    } else {
+      setStructureAnalysisState(true);
+      scheduleState();
     }
   });
 
@@ -3058,7 +3121,8 @@
         const rects = editorRangeRects(request.start, request.end);
         const anchor = editorScreenPosition(Math.max(0, Number(request.start) || 0));
         const lineHeight = Math.max(2, Number(anchor?.lineHeight) || 16);
-        citationResponse(requestId, Boolean(editor), { rects, lineHeight });
+        const gutterX = editorGutterBoundaryX();
+        citationResponse(requestId, Boolean(editor), { rects, lineHeight, gutterX });
         return;
       }
       if (request.type === "getEditorBounds") {

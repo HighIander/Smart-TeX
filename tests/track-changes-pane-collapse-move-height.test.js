@@ -10,14 +10,20 @@ const review = fs.readFileSync(path.join(root, 'review.js'), 'utf8');
 // override a previously expanded persisted Track Changes section.
 assert.match(
   comments,
-  /const runtimeReviewState = globalThis\.__smartTeXReviewState;[\s\S]*!runtimeReviewState\.tracking[\s\S]*trackSectionCollapsed = true;[\s\S]*applyReviewSectionLayout\(\);/
+  /const runtimeReviewState = globalThis\.__smartTeXReviewState;[\s\S]*paneAwaitingInitialReviewState = !\([\s\S]*!runtimeReviewState\.tracking[\s\S]*trackSectionCollapsed = true;[\s\S]*applyReviewSectionLayout\(\);/
 );
 
-// Because review.js initializes after comments.js, a late "tracking off" state
-// must also collapse an already-open Track Changes section.
+// If the pane opens before review.js has published its initial state, only that
+// first late state may make the open-time collapse decision. A later transition
+// to tracking-off must preserve the user's current section layout.
+assert.match(comments, /let paneAwaitingInitialReviewState = false;/);
 assert.match(
   comments,
-  /if \(paneOpen && !reviewUiState\.tracking && !trackSectionCollapsed\) \{[\s\S]*trackSectionCollapsed = true;[\s\S]*applyReviewSectionLayout\(\);/
+  /if \(paneOpen && paneAwaitingInitialReviewState\) \{[\s\S]*paneAwaitingInitialReviewState = false;[\s\S]*!reviewUiState\.tracking[\s\S]*trackSectionCollapsed = true;/
+);
+assert.doesNotMatch(
+  comments,
+  /if \(paneOpen && !reviewUiState\.tracking && !trackSectionCollapsed\)/
 );
 
 // The move target is one continuous marker spanning from the first visible
@@ -25,7 +31,8 @@ assert.match(
 assert.match(review, /const moveTargetBounds = targetLineRects\.reduce/);
 assert.match(review, /top: Math\.min\(bounds\.top, to\.top\)/);
 assert.match(review, /bottom: Math\.max\(bounds\.bottom, to\.bottom\)/);
-assert.match(review, /moveTargetBounds\.left - 6[\s\S]*moveTargetBounds\.top[\s\S]*moveTargetBounds\.bottom[\s\S]*smarttex-review-move-target/);
+assert.match(review, /const gutterX = Number\(response\.gutterX\)/);
+assert.match(review, /left: markerLeft[\s\S]*right: markerLeft \+ 4[\s\S]*moveTargetBounds\.top[\s\S]*moveTargetBounds\.bottom[\s\S]*smarttex-review-move-target/);
 assert.doesNotMatch(review, /for \(const to of targetLineRects\) \{\s*addRect\(markupLayer, \{ \.\.\.to, left: to\.left - 6/);
 
 console.log('track changes pane collapse and move target height checks passed');

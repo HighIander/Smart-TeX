@@ -23,12 +23,21 @@
   const REVIEW_UI_KEY = "smarttex:review-ui:v1";
   const REVIEW_LOCAL_PREFIX = "smarttex:review-local:v1:";
   const REVIEW_PROJECT_FILE = ".smarttex-review.json";
+  const REVIEW_HYDRATION_STATE_EVENT = "smarttex:review-hydration-state";
   const LOCAL_INPUT_WINDOW_MS = 1400;
   const TYPE_GROUP_WINDOW_MS = 2200;
   const MOVE_PAIR_WINDOW_MS = 30000;
   const PROJECT_SYNC_DELAY_MS = 1800;
   const PROJECT_POLL_MS = 20000;
   const PROJECT_FULL_SYNC_FALLBACK_MS = 120000;
+
+  function dispatchReviewHydrationState(active) {
+    const next = Boolean(active);
+    globalThis.__smartTeXReviewHydrationActive = next;
+    window.dispatchEvent(new CustomEvent(REVIEW_HYDRATION_STATE_EVENT, {
+      detail: JSON.stringify({ active: next })
+    }));
+  }
 
   let requestCounter = 0;
   const pendingRequests = new Map();
@@ -46,6 +55,7 @@
   let queuedStateDuringRetainedRestore = null;
   let immediateStateCaptureTimer = 0;
   let trailingStateCaptureTimer = 0;
+  let settledStateCaptureTimer = 0;
   let lastQueuedHistoryKeydownAt = 0;
   let lastQueuedHistoryDirection = "";
   let pane = null;
@@ -67,6 +77,7 @@
   let projectSaveTimer = 0;
   let projectPollTimer = 0;
   let projectSyncInProgress = false;
+  let projectSyncPending = false;
   let projectFileKnown = false;
   let lastRemoteProbeToken = null;
   let lastFullRemoteReadAt = 0;
@@ -81,6 +92,13 @@
   let reviewState = emptyReviewState();
   let activeChangeId = "";
   let activeChangePopupRequest = 0;
+  // During page reload CollabTeX can expose the editor before the selected
+  // document has been hydrated. In that short window getState() may report an
+  // empty buffer. Never diff such a bootstrap snapshot against the real
+  // document, otherwise the full document is recorded as a new insertion and
+  // every persisted review range is shifted to the end of the file.
+  let initialEditorHydrationPending = true;
+  let latestInitialEditorState = null;
 
   function projectIdentity() {
     const match = String(location.pathname || "").match(/\/project\/([^/?#]+)/i);
@@ -421,6 +439,13 @@
 
   function scheduleProjectSave(delay = PROJECT_SYNC_DELAY_MS) {
     if (!reviewActivated) return;
+    if (projectSyncInProgress) {
+      // Never let an edit made while an earlier metadata write is in flight be
+      // swallowed by that write. The finished sync immediately schedules one
+      // more pass using the then-current local review state.
+      projectSyncPending = true;
+      return;
+    }
     window.clearTimeout(projectSaveTimer);
     projectSaveTimer = window.setTimeout(() => {
       projectSaveTimer = 0;
@@ -455,25 +480,40 @@
   }
 
   async function syncProjectState() {
-    if (projectSyncInProgress || !reviewActivated) return;
+    if (!reviewActivated) return;
+    if (projectSyncInProgress) {
+      projectSyncPending = true;
+      return;
+    }
     projectSyncInProgress = true;
     try {
       const beforeMerge = normalizeReviewState(reviewState);
-      let merged = serializableReviewState();
+      let remote = emptyReviewState();
       try {
-        const remote = await readRemoteReviewState();
-        merged = mergeReviewStates(merged, remote);
+        remote = await readRemoteReviewState();
         projectFileKnown = true;
         lastFullRemoteReadAt = Date.now();
       } catch (_error) {
         // A missing metadata file is expected until review is used for the first time.
       }
+
+      // The remote read is asynchronous. The user can continue editing while it
+      // is in flight, so merge it into the CURRENT local state, never into a
+      // snapshot captured before the await. Otherwise a newly created insert or
+      // move can appear briefly and then disappear when the stale snapshot is
+      // assigned back after PROJECT_SYNC_DELAY_MS.
+      const merged = mergeReviewStates(reviewState, remote);
       let mergeChangedVisibleState = JSON.stringify(normalizeReviewState(merged)) !== JSON.stringify(beforeMerge);
       reviewState = merged;
       if (currentFile && promoteExistingDeleteInsertPairToMove(currentFile)) mergeChangedVisibleState = true;
+
+      // Construct the payload immediately before dispatching the write. If an
+      // edit happens while the write itself is pending, scheduleProjectSave()
+      // sets projectSyncPending and the finally block performs another sync.
+      const payload = serializableReviewState();
       await bridgeRequest("writeProjectMetadataFile", {
         path: REVIEW_PROJECT_FILE,
-        text: JSON.stringify(serializableReviewState(), null, 2) + "\n"
+        text: JSON.stringify(payload, null, 2) + "\n"
       }, 14000);
       projectFileKnown = true;
       scheduleLocalSave(0);
@@ -486,6 +526,10 @@
       }
     } finally {
       projectSyncInProgress = false;
+      if (projectSyncPending) {
+        projectSyncPending = false;
+        scheduleProjectSave(0);
+      }
     }
   }
 
@@ -589,6 +633,15 @@
       trailingStateCaptureTimer = 0;
       void captureTrackedEditorState();
     }, 90);
+
+    // CollabTeX can occasionally commit an edit after its DOM/input callbacks
+    // have already fired. A second, debounced settle read after the short
+    // capture catches those delayed commits without doing continuous polling.
+    window.clearTimeout(settledStateCaptureTimer);
+    settledStateCaptureTimer = window.setTimeout(() => {
+      settledStateCaptureTimer = 0;
+      void captureTrackedEditorState();
+    }, 450);
   }
 
   function queueTrackedHistory(direction) {
@@ -1294,6 +1347,164 @@
     return true;
   }
 
+  function shiftHydratedPositionBack(position, shift) {
+    const value = Math.max(0, Number(position) || 0);
+    if (!shift || value === 0) return value;
+    return Math.max(0, value - shift);
+  }
+
+  function repairInitialWholeDocumentInsertArtifact(fileName, currentValue) {
+    const value = String(currentValue || "");
+    if (!fileName || !value) return false;
+    const baseline = Object.prototype.hasOwnProperty.call(reviewState.baselineByFile, fileName)
+      ? String(reviewState.baselineByFile[fileName] || "")
+      : "";
+    if (!baseline) return false;
+
+    // A real edit cannot be a pure insertion of the complete current document
+    // at offset zero while a non-empty accepted baseline already exists. This
+    // exact record is produced when a transient empty editor state is consumed
+    // during reload and the subsequently hydrated document is diffed against it.
+    const artifacts = reviewState.changes.filter((change) => (
+      change.fileName === fileName &&
+      change.type === "insert" &&
+      change.start === 0 &&
+      change.end >= value.length &&
+      comparableMoveText(change.text) === comparableMoveText(value)
+    ));
+    if (!artifacts.length) return false;
+
+    const artifactIds = new Set(artifacts.map((change) => change.id));
+    const shift = value.length * artifacts.length;
+    for (const artifact of artifacts) tombstoneItem(artifact.id);
+    reviewState.changes = reviewState.changes.filter((change) => !artifactIds.has(change.id));
+
+    const unshiftRange = (item) => {
+      item.start = shiftHydratedPositionBack(item.start, shift);
+      item.end = Math.max(item.start, shiftHydratedPositionBack(item.end, shift));
+      if (item.type === "move") {
+        item.fromStart = shiftHydratedPositionBack(item.fromStart, shift);
+        item.fromEnd = Math.max(item.fromStart, shiftHydratedPositionBack(item.fromEnd, shift));
+        item.toStart = shiftHydratedPositionBack(item.toStart, shift);
+        item.toEnd = Math.max(item.toStart, shiftHydratedPositionBack(item.toEnd, shift));
+        item.start = item.toStart;
+        item.end = item.toEnd;
+      }
+    };
+    for (const change of reviewState.changes) {
+      if (change.fileName === fileName) unshiftRange(change);
+    }
+    for (const comment of reviewState.comments) {
+      if (comment.fileName === fileName) unshiftRange(comment);
+    }
+    return true;
+  }
+
+  function closestTextOccurrence(source, needle, preferredStart, excludedStart = -1) {
+    const text = String(needle || "");
+    if (!text) return -1;
+    const preferred = Math.max(0, Number(preferredStart) || 0);
+    let best = -1;
+    let bestDistance = Infinity;
+    let from = 0;
+    while (from <= source.length - text.length) {
+      const index = source.indexOf(text, from);
+      if (index < 0) break;
+      if (index !== excludedStart) {
+        const distance = Math.abs(index - preferred);
+        if (distance < bestDistance) {
+          best = index;
+          bestDistance = distance;
+        }
+      }
+      from = index + Math.max(1, text.length);
+    }
+    return best;
+  }
+
+  function repairHydratedChangeRanges(fileName, currentValue) {
+    const source = String(currentValue || "");
+    if (!fileName || !source) return false;
+    let changed = false;
+    for (const change of reviewState.changes) {
+      if (change.fileName !== fileName || !isEffectiveChange(change)) continue;
+
+      if (change.type === "move") {
+        const movedText = String(change.text || change.originalText || "");
+        const originalText = String(change.originalText || change.text || "");
+        const sourceMatches = change.fromEnd <= source.length &&
+          source.slice(change.fromStart, change.fromEnd) === originalText;
+        const targetMatches = change.toEnd <= source.length &&
+          source.slice(change.toStart, change.toEnd) === movedText;
+        let fromStart = change.fromStart;
+        let toStart = change.toStart;
+        if (!sourceMatches && originalText) {
+          const found = closestTextOccurrence(source, originalText, change.fromStart, targetMatches ? change.toStart : -1);
+          if (found >= 0) fromStart = found;
+        }
+        if (!targetMatches && movedText) {
+          const found = closestTextOccurrence(source, movedText, change.toStart, fromStart);
+          if (found >= 0) toStart = found;
+        }
+        if (fromStart !== change.fromStart || toStart !== change.toStart) {
+          change.fromStart = fromStart;
+          change.fromEnd = fromStart + originalText.length;
+          change.toStart = toStart;
+          change.toEnd = toStart + movedText.length;
+          change.start = change.toStart;
+          change.end = change.toEnd;
+          changed = true;
+        }
+        continue;
+      }
+
+      const visibleText = change.type === "delete"
+        ? (change.retained ? String(change.originalText || "") : "")
+        : String(change.text || "");
+      if (!visibleText) continue;
+      const rangeEnd = change.start + visibleText.length;
+      if (rangeEnd <= source.length && source.slice(change.start, rangeEnd) === visibleText) {
+        if (change.end !== rangeEnd && change.type !== "delete") {
+          change.end = rangeEnd;
+          changed = true;
+        }
+        continue;
+      }
+      const found = closestTextOccurrence(source, visibleText, change.start);
+      if (found < 0) continue;
+      change.start = found;
+      change.end = found + visibleText.length;
+      changed = true;
+    }
+    return changed;
+  }
+
+  function seedInitialEditorState(next) {
+    if (!next || typeof next !== "object") return false;
+    const fileName = String(next.fileName || "");
+    if (!fileName) return false;
+    const nextValue = String(next.value || "");
+    currentState = next;
+    currentFile = fileName;
+
+    const repairedArtifact = repairInitialWholeDocumentInsertArtifact(fileName, nextValue);
+    const repairedRanges = repairHydratedChangeRanges(fileName, nextValue);
+    lastValueByFile.set(fileName, nextValue);
+    if (trackingEnabled()) {
+      ensureBaseline(fileName, nextValue);
+      trackedHistoryByFile.delete(fileName);
+      ensureTrackedHistory(fileName, nextValue);
+    }
+    if (promoteExistingDeleteInsertPairToMove(fileName)) saveState({ project: false, render: false });
+    if (repairedArtifact || repairedRanges) saveState({ render: false });
+    renderPane();
+    scheduleOverlayRender();
+    updateSelectionPopup();
+    updateCursorChange();
+    dispatchReviewState();
+    return true;
+  }
+
   function retainedDeletionCursor(splice) {
     if (lastLocalInputType === "deleteContentForward") return splice.oldEnd;
     return splice.start;
@@ -1328,6 +1539,16 @@
 
   function routeEditorState(next) {
     if (!next || typeof next !== "object") return;
+    if (initialEditorHydrationPending && !applyingTrackedHistory) {
+      // Keep only the newest bootstrap snapshot. It is deliberately not used as
+      // lastValueByFile until project review metadata has been loaded and a final
+      // live editor state has been read. This prevents empty -> full-document
+      // bootstrap transitions from becoming tracked edits.
+      latestInitialEditorState = next;
+      currentState = next;
+      currentFile = String(next.fileName || "");
+      return;
+    }
     if (pendingRetainedRestore && !applyingTrackedHistory) {
       // While a tracked deletion is being restored into the physical editor,
       // CollabTeX may emit transient states with the source text absent. Those
@@ -2559,13 +2780,15 @@
           // the visible moved text. Per-line bars can leave gaps between visual
           // editor rows and make the marker look shorter than the moved block.
           const moveTargetBounds = targetLineRects.reduce((bounds, to) => ({
-            left: Math.min(bounds.left, to.left),
             top: Math.min(bounds.top, to.top),
             bottom: Math.max(bounds.bottom, to.bottom)
-          }), { left: Infinity, top: Infinity, bottom: -Infinity });
+          }), { top: Infinity, bottom: -Infinity });
+          const gutterX = Number(response.gutterX);
+          const fallbackLeft = Math.min(...targetLineRects.map((to) => to.left)) - 6;
+          const markerLeft = Number.isFinite(gutterX) ? gutterX + 1 : fallbackLeft;
           addRect(markupLayer, {
-            left: moveTargetBounds.left - 6,
-            right: moveTargetBounds.left - 2,
+            left: markerLeft,
+            right: markerLeft + 4,
             top: moveTargetBounds.top,
             bottom: moveTargetBounds.bottom
           }, "smarttex-review-move-target");
@@ -2756,27 +2979,48 @@
     createPane();
     renderPane();
     dispatchReviewState();
+
+    // Capture editor events during metadata hydration, but do not diff them yet.
+    // CollabTeX can transiently expose an empty source buffer during reload.
     try {
       const response = await bridgeRequest("getState", {}, 5000);
       if (response?.state) routeEditorState(response.state);
     } catch (_error) {
-      // The normal editor-state event will initialize review when the editor becomes available.
+      // A later editor-state event or the final state read below will initialize review.
     }
+
     try {
       const remote = await readRemoteReviewState();
       reviewState = mergeReviewStates(reviewState, remote);
-      if (currentFile) promoteExistingDeleteInsertPairToMove(currentFile);
       projectFileKnown = true;
       lastFullRemoteReadAt = Date.now();
       scheduleLocalSave(0);
-      renderPane();
-      scheduleOverlayRender();
-      dispatchReviewState();
-      reviewActivated = trackingEnabled() || reviewState.changes.length > 0;
-      ensureProjectPolling();
     } catch (_error) {
       // Review metadata does not exist in projects that have not used review yet.
     }
+
+    // Read the live document once more after metadata hydration. This is the only
+    // state allowed to seed lastValueByFile on reload; earlier bootstrap states
+    // may contain an empty or partially initialized editor buffer.
+    let settledState = null;
+    try {
+      const response = await bridgeRequest("getState", {}, 5000);
+      settledState = response?.state || null;
+    } catch (_error) {
+      settledState = null;
+    }
+    if (!settledState) settledState = latestInitialEditorState;
+    initialEditorHydrationPending = false;
+    latestInitialEditorState = null;
+    if (settledState) seedInitialEditorState(settledState);
+    else {
+      renderPane();
+      scheduleOverlayRender();
+      dispatchReviewState();
+    }
+
+    reviewActivated = trackingEnabled() || reviewState.changes.length > 0;
+    ensureProjectPolling();
     reviewActivated = true;
     ensureProjectPolling();
   }
@@ -2835,7 +3079,15 @@
     hideChangePopup();
   });
 
-  loadInitialState().catch((error) => {
-    console.error("SmartTeX review initialization failed:", error);
-  });
+  dispatchReviewHydrationState(true);
+  loadInitialState()
+    .catch((error) => {
+      console.error("SmartTeX review initialization failed:", error);
+    })
+    .finally(() => {
+      // Signal only after the authoritative remote review state has been merged
+      // and the final live editor snapshot has seeded the tracking engine. The
+      // MAIN-world bridge uses this as the trigger for one final structure pass.
+      dispatchReviewHydrationState(false);
+    });
 })();

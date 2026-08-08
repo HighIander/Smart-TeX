@@ -96,6 +96,7 @@
   let commentsSectionCollapsed = false;
   let reviewSplitRatio = 0.5;
   let reviewSplitterDragging = false;
+  let paneAwaitingInitialReviewState = false;
   const readActivity = new Map();
 
   function emptyData() {
@@ -2557,7 +2558,7 @@
         <section class="smarttex-review-section smarttex-track-section">
           <header class="smarttex-review-subheader">
             <button type="button" class="smarttex-review-section-toggle smarttex-track-section-toggle" aria-expanded="true" title="Minimize track changes" aria-label="Minimize track changes">▾</button>
-            <strong>track changes</strong>
+            <strong>track changes (beta)</strong>
             <span class="smarttex-track-change-count"></span>
           </header>
           <div class="smarttex-review-section-body smarttex-track-section-body">
@@ -2775,12 +2776,14 @@
       return;
     }
 
-    // When the authoritative review runtime is already available and tracking
-    // is off, always start with the Track Changes section minimized. Do not
-    // rely on the persisted section state here: opening an inactive review
-    // pane should consistently prioritize the Comments section.
+    // Apply the automatic collapsed state only when the pane itself is opened.
+    // Turning tracking off while the pane is already open must not collapse the
+    // section underneath the user's pointer. If review.js has not published its
+    // initial state yet, defer this one-time open decision until the first state
+    // event arrives.
     const runtimeReviewState = globalThis.__smartTeXReviewState;
-    if (runtimeReviewState && typeof runtimeReviewState === "object" && !runtimeReviewState.tracking) {
+    paneAwaitingInitialReviewState = !(runtimeReviewState && typeof runtimeReviewState === "object");
+    if (!paneAwaitingInitialReviewState && !runtimeReviewState.tracking) {
       trackSectionCollapsed = true;
       applyReviewSectionLayout();
     }
@@ -2799,6 +2802,7 @@
   function finishClosePane({ markAllRead = false } = {}) {
     if (markAllRead) markCurrentFileRead({ refresh: false });
     paneOpen = false;
+    paneAwaitingInitialReviewState = false;
     if (pane) pane.hidden = true;
     if (paneGeometryFrame) {
       cancelAnimationFrame(paneGeometryFrame);
@@ -3074,13 +3078,16 @@
     }
     renderTrackChangesList();
 
-    // Review state can arrive after the Comments pane was constructed because
-    // comments.js is injected before review.js. Once tracking is known to be
-    // off, minimize the Track Changes section immediately as well, covering
-    // both normal pane opening and late review-state initialization.
-    if (paneOpen && !reviewUiState.tracking && !trackSectionCollapsed) {
-      trackSectionCollapsed = true;
-      applyReviewSectionLayout();
+    // If the pane was opened before review.js published its initial state,
+    // perform the open-time collapse decision exactly once here. Later state
+    // changes (including toggling tracking off) preserve the user's current
+    // expanded/collapsed layout.
+    if (paneOpen && paneAwaitingInitialReviewState) {
+      paneAwaitingInitialReviewState = false;
+      if (!reviewUiState.tracking && !trackSectionCollapsed) {
+        trackSectionCollapsed = true;
+        applyReviewSectionLayout();
+      }
     }
 
     maybeAutoOpenForCurrentDocument();
