@@ -17,7 +17,7 @@ const toolbar = read("editor-toolbar.js");
 const reference = read("reference-autocomplete.js");
 const figure = read("figure-autocomplete.js");
 
-assert.equal(manifest.version, "1.4.34");
+assert.equal(manifest.version, "2.0");
 
 assert.match(bridge, /overlayOcclusionObserver/);
 assert.match(bridge, /attributeFilter:\s*\["hidden", "class", "style", "open", "aria-hidden"\]/);
