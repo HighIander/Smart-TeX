@@ -11,7 +11,7 @@
     #citation-hover-test-result { position: fixed; right: 10px; bottom: 10px; }
   </style>
 </head>
-<body class="smarttex-document-live">
+<body>
   <div class="cm-content">See \cite{Lovelace} for details.</div>
   <output id="citation-hover-test-result">Citation hover test running</output>
   <script>
@@ -140,15 +140,13 @@ See \cite{Lovelace} for details.
       );
 
       popup.querySelector(".smarttex-citation-popup-refresh").click();
-      let refreshedWhileLive = false;
+      let refreshed = false;
       for (let i = 0; i < 120; i += 1) {
         const title = popup.querySelector(
           ".smarttex-reference-popup-citation-title"
         )?.textContent || "";
         if (title.includes("Refreshed Notes")) {
-          refreshedWhileLive = document.body.classList.contains(
-            "smarttex-document-live"
-          );
+          refreshed = true;
           break;
         }
         await delay(25);
@@ -182,7 +180,7 @@ See \cite{Lovelace} for details.
       const checks = {
         refreshButtonAtTop,
         fullCitation,
-        refreshedWhileLive,
+        refreshed,
         popupRemainsWhileScrolling,
         suppressedInsideCommand
       };

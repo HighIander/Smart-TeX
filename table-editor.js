@@ -5,6 +5,10 @@
 
   const contextTools = global.SmartTeXLatexContext;
 
+  function taskCheckpoint(iteration = 0, interval = 128) {
+    global.SmartTeXInteractionTasks?.checkpoint?.(iteration, interval);
+  }
+
   function isEscaped(source, index) {
     let count = 0;
     for (let position = index - 1; position >= 0 && source[position] === "\\"; position -= 1) {
@@ -23,6 +27,7 @@
     if (source[start] !== opening) return null;
     let depth = 0;
     for (let index = start; index < source.length; index += 1) {
+      taskCheckpoint(index - start);
       if (source[index] === "\\" && !/[A-Za-z@]/.test(source[index + 1] || "")) {
         index += 1;
         continue;
@@ -145,6 +150,7 @@
     let position = 0;
     const boundary = emptyBoundary();
     while (position < source.length) {
+      taskCheckpoint(position);
       const whitespace = source.slice(position).match(/^\s*/)?.[0] || "";
       position += whitespace.length;
       const token = ruleTokenAt(source, position);
@@ -204,6 +210,7 @@
     };
 
     for (let index = 0; index < body.length; index += 1) {
+      taskCheckpoint(index);
       const character = body[index];
       if (comment) {
         if (character === "\n" || character === "\r") comment = false;
@@ -405,6 +412,7 @@
     };
 
     for (let index = 0; index < spec.length; index += 1) {
+      taskCheckpoint(index);
       const character = spec[index];
       if (/\s/.test(character)) continue;
       if (character === "|") {
@@ -617,6 +625,7 @@
     let offset = 1;
 
     for (let rowIndex = 0; rowIndex < model.rows.length; rowIndex += 1) {
+      taskCheckpoint(rowIndex, 16);
       const boundaryLines = serializeBoundary(
         model.boundaries[rowIndex] || emptyBoundary(),
         model.columnCount,
@@ -921,6 +930,7 @@
 
   function insertCellAtLogicalColumn(row, column) {
     for (let index = 0; index < row.cells.length; index += 1) {
+      taskCheckpoint(index, 16);
       const cell = row.cells[index];
       if (column > cell.logicalStart && column < cell.logicalEnd && cell.span > 1) {
         cell.raw = setMulticolumnCount(cell.raw, cell.span + 1);

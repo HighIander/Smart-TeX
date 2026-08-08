@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX editor toolbar harness</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; }
+    #ide-redesign-panel-editor { min-height: 52px; }
+    .toolbar-editor { display: flex; align-items: center; min-height: 44px; }
+    #editor-toolbar-test-result { position: fixed; right: 10px; bottom: 10px; }
+  </style>
+</head>
+<body>
+  <section id="ide-redesign-panel-editor">
+    <div class="toolbar toolbar-editor" role="toolbar"><button type="button">Editor</button></div>
+  </section>
+  <output id="editor-toolbar-test-result">Editor toolbar test running</output>
+  <script>
+    let activeSource = "";
+    let activeSelectionFrom = 0;
+    let activeSelectionTo = 0;
+    const edits = [];
+    const selections = [];
+    globalThis.browser = {};
+
+    function dispatch(value, selectionFrom, selectionTo = selectionFrom) {
+      activeSource = value;
+      activeSelectionFrom = selectionFrom;
+      activeSelectionTo = selectionTo;
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex: selectionTo,
+          selectionFrom,
+          selectionTo,
+          selectionAnchor: selectionFrom,
+          selectionHead: selectionTo,
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "harness"
+        })
+      }));
+    }
+
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      if (request.type === "getState") {
+        window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+          detail: JSON.stringify({
+            requestId: request.requestId,
+            ok: true,
+            state: {
+              value: activeSource,
+              cursorIndex: activeSelectionTo,
+              selectionFrom: activeSelectionFrom,
+              selectionTo: activeSelectionTo,
+              selectionAnchor: activeSelectionFrom,
+              selectionHead: activeSelectionTo,
+              fileName: "main.tex",
+              focused: true,
+              editorKind: "harness"
+            }
+          })
+        }));
+        return;
+      }
+      if (request.type === "replaceRange") {
+        edits.push(request);
+        activeSource = activeSource.slice(0, request.start) + request.text + activeSource.slice(request.end);
+        activeSelectionFrom = request.selectionStart;
+        activeSelectionTo = request.selectionEnd;
+      }
+      if (request.type === "setSelection") {
+        selections.push(request);
+        activeSelectionFrom = Math.min(request.anchor, request.head);
+        activeSelectionTo = Math.max(request.anchor, request.head);
+      }
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({ requestId: request.requestId, ok: true })
+      }));
+    });
+  </script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-editor.js"></script>
+  <script src="../editor-toolbar.js"></script>
+  <script>
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    async function waitFor(selector) {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const element = document.querySelector(selector);
+        if (element) return element;
+        await delay(20);
+      }
+      throw new Error(`${selector} did not become ready`);
+    }
+    async function waitForEdit(count) {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (edits.length >= count) return edits[count - 1];
+        await delay(20);
+      }
+      throw new Error(`Edit ${count} did not arrive`);
+    }
+
+    async function run() {
+      const checks = {};
+      dispatch("alpha", 0, 5);
+      const toolbar = await waitFor(".smarttex-document-editing-toolbar");
+
+      toolbar.querySelector('button[aria-label="Bold"]').click();
+      const bold = await waitForEdit(1);
+      checks.bold = bold.text === String.raw`\textbf{alpha}` && bold.selectionStart === 8;
+
+      dispatch("one\ntwo", 0, 7);
+      toolbar.querySelector('button[aria-label="Bulleted list"]').click();
+      const list = await waitForEdit(2);
+      checks.list = list.text.includes(String.raw`\begin{itemize}`) &&
+        (list.text.match(/\\item /g) || []).length === 2;
+
+      dispatch("E=mc^2", 0, 6);
+      toolbar.querySelector('button[aria-label="Add equation"]').click();
+      const equation = await waitForEdit(3);
+      checks.equation = equation.text.includes(String.raw`\begin{equation}`) &&
+        equation.text.includes(String.raw`\label{eq:equation}`) &&
+        equation.text.includes("E=mc^2");
+
+      dispatch("", 0, 0);
+      toolbar.querySelector('button[aria-label="Add figure"]').click();
+      const figure = await waitForEdit(4);
+      checks.figure = figure.text.includes(String.raw`\begin{figure}`) &&
+        figure.text.includes(String.raw`\includegraphics[width=0.8\linewidth]{`) &&
+        figure.text.includes(String.raw`\caption{}`) &&
+        figure.text.includes(String.raw`\label{fig:figure}`);
+
+      dispatch("word", 0, 4);
+      const size = toolbar.querySelector('select[aria-label="Text size"]');
+      size.value = "small";
+      size.dispatchEvent(new Event("change", { bubbles: true }));
+      const sized = await waitForEdit(5);
+      checks.size = sized.text === String.raw`{\small word}`;
+
+      dispatch("before reference and target", 3, 8);
+      window.dispatchEvent(new CustomEvent("smarttex:navigation-history-push", {
+        detail: JSON.stringify({
+          fileName: "main.tex",
+          cursorIndex: 8,
+          anchor: 3,
+          head: 8
+        })
+      }));
+      await delay(20);
+      const back = toolbar.querySelector(
+        'button[aria-label="Back to the previous editor position"]'
+      );
+      checks.backVisible = Boolean(back && !back.hidden && !back.disabled);
+      back?.click();
+      for (let attempt = 0; attempt < 50 && selections.length < 1; attempt += 1) {
+        await delay(10);
+      }
+      checks.backRestoresSelection = Boolean(
+        selections[0] &&
+        selections[0].anchor === 3 &&
+        selections[0].head === 8 &&
+        back.hidden
+      );
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#editor-toolbar-test-result");
+      output.textContent = passed
+        ? "Editor toolbar test passed"
+        : `Editor toolbar test failed: ${JSON.stringify(checks)}`;
+      output.dataset.result = passed ? "passed" : "failed";
+      document.documentElement.dataset.editorToolbarTest = passed ? "passed" : "failed";
+    }
+
+    run().catch((error) => {
+      const output = document.querySelector("#editor-toolbar-test-result");
+      output.textContent = `Editor toolbar test failed: ${error.message}`;
+      output.dataset.result = "failed";
+      document.documentElement.dataset.editorToolbarTest = "failed";
+      console.error(error);
+    });
+  </script>
+</body>
+</html>

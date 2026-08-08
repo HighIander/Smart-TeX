@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX raster figure zoom harness</title>
+  <link rel="stylesheet" href="../content.css">
+</head>
+<body>
+  <output id="figure-raster-zoom-test-result">Raster zoom test running</output>
+  <script>
+    globalThis.browser = { runtime: { getURL(path) { return path; } } };
+  </script>
+  <script src="../figure-renderer.js"></script>
+  <script>
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    async function run() {
+      const sourceCanvas = document.createElement("canvas");
+      sourceCanvas.width = 1200;
+      sourceCanvas.height = 600;
+      const sourceContext = sourceCanvas.getContext("2d");
+      sourceContext.fillRect(0, 0, 1200, 600);
+      sourceContext.clearRect(100, 100, 1000, 400);
+      const source = sourceCanvas.toDataURL("image/png");
+
+      const renderer = globalThis.SmartTeXFigureRenderer;
+      const figure = document.createElement("figure");
+      figure.className = "smarttex-figure-popup";
+      const viewport = document.createElement("div");
+      viewport.className = "smarttex-figure-popup-viewport";
+      viewport.style.width = "400px";
+      viewport.style.height = "220px";
+      const media = document.createElement("div");
+      media.className = "smarttex-figure-popup-media smarttex-figure-layout";
+      media.dataset.smarttexDesiredWidthPx = "400";
+      const row = document.createElement("div");
+      row.className = "smarttex-figure-layout-row";
+      const panel = document.createElement("div");
+      panel.className = "smarttex-figure-layout-panel";
+      panel.dataset.smarttexWidthRatio = "1";
+      panel.style.flexBasis = "100%";
+      const image = await renderer.createMedia("figure.png", source, {
+        imageClass: "smarttex-figure-popup-image"
+      });
+      image.dataset.smarttexLocalWidthRatio = "1";
+      image.dataset.smarttexImageScale = "1";
+      image.style.width = "100%";
+      panel.appendChild(image);
+      row.appendChild(panel);
+      media.appendChild(row);
+      viewport.appendChild(media);
+      figure.appendChild(viewport);
+      document.body.appendChild(figure);
+      renderer.observePopupLayout(media);
+      await image.decode();
+      await delay(60);
+
+      const baseMediaWidth = media.getBoundingClientRect().width;
+      const baseImageWidth = image.getBoundingClientRect().width;
+      const rect = viewport.getBoundingClientRect();
+      viewport.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        deltaY: -120,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2
+      }));
+      await delay(120);
+
+      const controller = viewport.__smarttexFigureZoom;
+      const zoomedMediaWidth = media.getBoundingClientRect().width;
+      const zoomedImageWidth = image.getBoundingClientRect().width;
+      const passed = Boolean(
+        controller.scale > 1 &&
+        image.naturalWidth === 1200 &&
+        zoomedMediaWidth > baseMediaWidth * 1.1 &&
+        zoomedImageWidth > baseImageWidth * 1.1 &&
+        !/scale\s*\(/i.test(media.style.transform || "")
+      );
+      const diagnostics = {
+        scale: controller.scale,
+        naturalWidth: image.naturalWidth,
+        baseMediaWidth,
+        zoomedMediaWidth,
+        baseImageWidth,
+        zoomedImageWidth,
+        transform: media.style.transform
+      };
+      const output = document.querySelector("#figure-raster-zoom-test-result");
+      output.textContent = passed
+        ? "Raster figure zoom test passed"
+        : `Raster figure zoom test failed: ${JSON.stringify(diagnostics)}`;
+      document.documentElement.dataset.figureRasterZoomTest = passed ? "passed" : "failed";
+    }
+
+    run().catch((error) => {
+      const output = document.querySelector("#figure-raster-zoom-test-result");
+      output.textContent = `Raster figure zoom test failed: ${error.message}`;
+      document.documentElement.dataset.figureRasterZoomTest = "failed";
+    });
+  </script>
+</body>
+</html>

@@ -9,26 +9,33 @@
   const AUTOCOMPLETE_KEY = "smarttex:autocomplete:v1";
   const REFERENCE_POPUPS_KEY = "smarttex:reference-popups:v1";
   const STRUCTURE_HIGHLIGHT_KEY = "smarttex:structure-highlight:v1";
+  const LABEL_REFERENCE_GUARD_KEY = "smarttex:label-reference-guard:v1";
+  const COMMENT_PROFILE_KEY = globalThis.SmartTeXCommentProfile?.KEY || "smarttex:comment-profile:v1";
+
+  const DEFAULT_SITES = ["collabtex.helmholtz.cloud"];
+  const DEFAULT_FEATURES = Object.freeze({ equations: true, tables: true, figures: true });
+  const DEFAULT_AUTOCOMPLETE = Object.freeze({ referenceOrder: "document" });
+  const DEFAULT_POPUPS = Object.freeze({ trigger: "cursor", environmentTrigger: "cursor" });
+  const DEFAULT_LABEL_GUARD = Object.freeze({ enabled: true });
   const DEFAULT_HIGHLIGHTS = Object.freeze({
     environmentEnabled: true,
-    environmentColor: "#8ec5ff",
-    captionEnabled: true,
+    environmentColor: "#dfedfb",
+    environmentFirstLineEnabled: true,
+    environmentFirstLineColor: "#c7e4ff",
+    sectionEnabled: true,
+    sectionColor: "#c4a7ff",
+    captionEnabled: false,
     captionColor: "#70afea",
-    labelEnabled: true,
+    labelEnabled: false,
     labelColor: "#8fd19e",
     referenceEnabled: true,
-    referenceColor: "#8fd19e",
-    nonumberEnabled: true,
+    referenceColor: "#bcf0c8",
+    nonumberEnabled: false,
     nonumberColor: "#ffe69a",
     inlineMathEnabled: true,
-    inlineMathColor: "#8ec5ff"
-  });
-  const DEFAULT_SITES = ["collabtex.helmholtz.cloud"];
-  const DEFAULT_FEATURES = Object.freeze({
-    equations: true,
-    tables: true,
-    figures: true,
-    liveDocumentPreview: false
+    inlineMathColor: "#cce5ff",
+    activeEnabled: true,
+    activeStrength: 55
   });
   const BUILT_IN_SITES = new Set(DEFAULT_SITES);
 
@@ -37,19 +44,22 @@
   const equationsInput = document.querySelector("#smarttex-feature-equations");
   const tablesInput = document.querySelector("#smarttex-feature-tables");
   const figuresInput = document.querySelector("#smarttex-feature-figures");
-  const liveDocumentPreviewInput = document.querySelector(
-    "#smarttex-feature-live-document-preview"
-  );
   const referenceOrderInput = document.querySelector("#smarttex-reference-order");
-  const referencePopupTriggerInput = document.querySelector(
-    "#smarttex-reference-popup-trigger"
-  );
-  const environmentPopupTriggerInput = document.querySelector(
-    "#smarttex-environment-popup-trigger"
-  );
+  const referencePopupTriggerInput = document.querySelector("#smarttex-reference-popup-trigger");
+  const environmentPopupTriggerInput = document.querySelector("#smarttex-environment-popup-trigger");
+  const labelReferenceGuardInput = document.querySelector("#smarttex-label-reference-guard-enabled");
+  const commentNameInput = document.querySelector("#smarttex-comment-user-name");
+  const commentColorInput = document.querySelector("#smarttex-comment-user-color");
+  const status = document.querySelector("#smarttex-options-status");
+  const activeStrengthOutput = document.querySelector("#smarttex-highlight-active-strength-output");
+
   const highlightControls = {
     environmentEnabled: document.querySelector("#smarttex-highlight-environment-enabled"),
     environmentColor: document.querySelector("#smarttex-highlight-environment-color"),
+    environmentFirstLineEnabled: document.querySelector("#smarttex-highlight-environment-first-line-enabled"),
+    environmentFirstLineColor: document.querySelector("#smarttex-highlight-environment-first-line-color"),
+    sectionEnabled: document.querySelector("#smarttex-highlight-section-enabled"),
+    sectionColor: document.querySelector("#smarttex-highlight-section-color"),
     captionEnabled: document.querySelector("#smarttex-highlight-caption-enabled"),
     captionColor: document.querySelector("#smarttex-highlight-caption-color"),
     labelEnabled: document.querySelector("#smarttex-highlight-label-enabled"),
@@ -59,10 +69,10 @@
     nonumberEnabled: document.querySelector("#smarttex-highlight-nonumber-enabled"),
     nonumberColor: document.querySelector("#smarttex-highlight-nonumber-color"),
     inlineMathEnabled: document.querySelector("#smarttex-highlight-inline-math-enabled"),
-    inlineMathColor: document.querySelector("#smarttex-highlight-inline-math-color")
+    inlineMathColor: document.querySelector("#smarttex-highlight-inline-math-color"),
+    activeEnabled: document.querySelector("#smarttex-highlight-active-enabled"),
+    activeStrength: document.querySelector("#smarttex-highlight-active-strength")
   };
-  const highlightReset = document.querySelector("#smarttex-highlight-reset");
-  const status = document.querySelector("#smarttex-options-status");
 
   let loading = true;
   let saveTimer = 0;
@@ -84,24 +94,34 @@
 
   function sitesFromForm() {
     return [...new Set(
-      sitesInput.value
-        .split(/\r?\n/)
-        .map(normalizeDomain)
-        .filter(Boolean)
+      sitesInput.value.split(/\r?\n/).map(normalizeDomain).filter(Boolean)
     )];
+  }
+
+  function validColor(value, fallback) {
+    return /^#[0-9a-f]{6}$/i.test(String(value || ""))
+      ? String(value).toLowerCase()
+      : fallback;
   }
 
   function highlightSettingsFromForm() {
     return Object.fromEntries(
-      Object.entries(highlightControls).map(([key, control]) => [
-        key,
-        control.type === "checkbox"
-          ? control.checked
-          : (/^#[0-9a-f]{6}$/i.test(control.value)
-            ? control.value.toLowerCase()
-            : DEFAULT_HIGHLIGHTS[key])
-      ])
+      Object.entries(highlightControls).map(([key, control]) => {
+        if (control.type === "checkbox") return [key, control.checked];
+        if (control.type === "range") {
+          return [key, Math.max(0, Math.min(100, Number(control.value) || 0))];
+        }
+        return [key, validColor(control.value, DEFAULT_HIGHLIGHTS[key])];
+      })
     );
+  }
+
+  function updateActiveStrengthOutput() {
+    const control = highlightControls.activeStrength;
+    if (!activeStrengthOutput || !control) return;
+    activeStrengthOutput.value = `${Math.round(Number(control.value) || 0)}%`;
+    activeStrengthOutput.textContent = activeStrengthOutput.value;
+    control.disabled = highlightControls.activeEnabled?.checked === false;
   }
 
   function settingsFromForm() {
@@ -113,8 +133,7 @@
         [FEATURES_KEY]: {
           equations: equationsInput.checked,
           tables: tablesInput.checked,
-          figures: figuresInput.checked,
-          liveDocumentPreview: liveDocumentPreviewInput.checked
+          figures: figuresInput.checked
         },
         [AUTOCOMPLETE_KEY]: {
           referenceOrder: referenceOrderInput.value === "alphabetical"
@@ -122,12 +141,18 @@
             : "document"
         },
         [REFERENCE_POPUPS_KEY]: {
-          trigger: referencePopupTriggerInput.value === "hover"
-            ? "hover"
-            : "cursor",
-          environmentTrigger: environmentPopupTriggerInput.value === "hover"
-            ? "hover"
-            : "cursor"
+          trigger: referencePopupTriggerInput.value === "hover" ? "hover" : "cursor",
+          environmentTrigger: environmentPopupTriggerInput.value === "hover" ? "hover" : "cursor"
+        },
+        [LABEL_REFERENCE_GUARD_KEY]: {
+          enabled: labelReferenceGuardInput.checked
+        },
+        [COMMENT_PROFILE_KEY]: globalThis.SmartTeXCommentProfile?.normalize?.({
+          name: commentNameInput?.value,
+          color: commentColorInput?.value
+        }) || {
+          name: String(commentNameInput?.value || "Anonymous").trim().slice(0, 80) || "Anonymous",
+          color: validColor(commentColorInput?.value, "#268bd2")
         },
         [STRUCTURE_HIGHLIGHT_KEY]: highlightSettingsFromForm()
       }
@@ -165,30 +190,21 @@
 
     saveQueue = saveQueue.catch(() => {}).then(async () => {
       const granted = await permissionResult;
-      if (!granted) {
-        throw new Error("Access to one or more configured editor sites was not granted.");
-      }
-
+      if (!granted) throw new Error("Access to one or more configured editor sites was not granted.");
       await extensionApi.storage.local.set(settings.storage);
 
       if (synchronizeSites) {
-        const response = await extensionApi.runtime.sendMessage({
-          type: "smarttex-sync-editor-sites"
-        });
+        const response = await extensionApi.runtime.sendMessage({ type: "smarttex-sync-editor-sites" });
         if (response?.ok === false) {
           throw new Error(response.error || "SmartTeX could not activate the configured sites.");
         }
         lastSiteFingerprint = settings.sites.join("\n");
         if (revision === saveRevision) sitesInput.value = lastSiteFingerprint;
       }
-
       if (revision === saveRevision) showStatus("Saved.");
     }).catch((error) => {
-      if (revision === saveRevision) {
-        showStatus(error?.message || String(error), true);
-      }
+      if (revision === saveRevision) showStatus(error?.message || String(error), true);
     });
-
     return saveQueue;
   }
 
@@ -201,14 +217,89 @@
     }, Math.max(0, Number(delay) || 0));
   }
 
+  function setHighlightControl(key, value) {
+    const control = highlightControls[key];
+    if (!control) return;
+    if (control.type === "checkbox") control.checked = value !== false;
+    else control.value = String(value);
+  }
+
+  const resetActions = {
+    sites() {
+      sitesInput.value = DEFAULT_SITES.join("\n");
+      save({ requestPermissions: true, synchronizeSites: true });
+    },
+    equations() { equationsInput.checked = DEFAULT_FEATURES.equations; scheduleSave(); },
+    tables() { tablesInput.checked = DEFAULT_FEATURES.tables; scheduleSave(); },
+    figures() { figuresInput.checked = DEFAULT_FEATURES.figures; scheduleSave(); },
+    referencePopupTrigger() { referencePopupTriggerInput.value = DEFAULT_POPUPS.trigger; scheduleSave(); },
+    environmentPopupTrigger() { environmentPopupTriggerInput.value = DEFAULT_POPUPS.environmentTrigger; scheduleSave(); },
+    labelReferenceGuard() { labelReferenceGuardInput.checked = DEFAULT_LABEL_GUARD.enabled; scheduleSave(); },
+    referenceOrder() { referenceOrderInput.value = DEFAULT_AUTOCOMPLETE.referenceOrder; scheduleSave(); },
+    environmentHighlight() {
+      setHighlightControl("environmentEnabled", DEFAULT_HIGHLIGHTS.environmentEnabled);
+      setHighlightControl("environmentColor", DEFAULT_HIGHLIGHTS.environmentColor);
+      scheduleSave();
+    },
+    environmentFirstLineHighlight() {
+      setHighlightControl("environmentFirstLineEnabled", DEFAULT_HIGHLIGHTS.environmentFirstLineEnabled);
+      setHighlightControl("environmentFirstLineColor", DEFAULT_HIGHLIGHTS.environmentFirstLineColor);
+      scheduleSave();
+    },
+    sectionHighlight() {
+      setHighlightControl("sectionEnabled", DEFAULT_HIGHLIGHTS.sectionEnabled);
+      setHighlightControl("sectionColor", DEFAULT_HIGHLIGHTS.sectionColor);
+      scheduleSave();
+    },
+    captionHighlight() {
+      setHighlightControl("captionEnabled", DEFAULT_HIGHLIGHTS.captionEnabled);
+      setHighlightControl("captionColor", DEFAULT_HIGHLIGHTS.captionColor);
+      scheduleSave();
+    },
+    labelHighlight() {
+      setHighlightControl("labelEnabled", DEFAULT_HIGHLIGHTS.labelEnabled);
+      setHighlightControl("labelColor", DEFAULT_HIGHLIGHTS.labelColor);
+      scheduleSave();
+    },
+    referenceHighlight() {
+      setHighlightControl("referenceEnabled", DEFAULT_HIGHLIGHTS.referenceEnabled);
+      setHighlightControl("referenceColor", DEFAULT_HIGHLIGHTS.referenceColor);
+      scheduleSave();
+    },
+    nonumberHighlight() {
+      setHighlightControl("nonumberEnabled", DEFAULT_HIGHLIGHTS.nonumberEnabled);
+      setHighlightControl("nonumberColor", DEFAULT_HIGHLIGHTS.nonumberColor);
+      scheduleSave();
+    },
+    inlineMathHighlight() {
+      setHighlightControl("inlineMathEnabled", DEFAULT_HIGHLIGHTS.inlineMathEnabled);
+      setHighlightControl("inlineMathColor", DEFAULT_HIGHLIGHTS.inlineMathColor);
+      scheduleSave();
+    },
+    activeEnabled() {
+      setHighlightControl("activeEnabled", DEFAULT_HIGHLIGHTS.activeEnabled);
+      updateActiveStrengthOutput();
+      scheduleSave();
+    },
+    activeStrength() {
+      setHighlightControl("activeStrength", DEFAULT_HIGHLIGHTS.activeStrength);
+      updateActiveStrengthOutput();
+      scheduleSave();
+    }
+  };
+
   async function load() {
+    const ensuredProfile = await globalThis.SmartTeXCommentProfile?.ensure?.(extensionApi.storage.local);
     const stored = await extensionApi.storage.local.get([
       SITES_KEY,
       FEATURES_KEY,
       AUTOCOMPLETE_KEY,
       REFERENCE_POPUPS_KEY,
+      LABEL_REFERENCE_GUARD_KEY,
+      COMMENT_PROFILE_KEY,
       STRUCTURE_HIGHLIGHT_KEY
     ]);
+
     const sites = Array.isArray(stored?.[SITES_KEY]?.sites)
       ? stored[SITES_KEY].sites
       : DEFAULT_SITES;
@@ -216,63 +307,82 @@
     sitesInput.value = normalizedSites.join("\n");
     lastSiteFingerprint = normalizedSites.join("\n");
 
-    const features = stored?.[FEATURES_KEY] || DEFAULT_FEATURES;
+    const features = { ...DEFAULT_FEATURES, ...(stored?.[FEATURES_KEY] || {}) };
     equationsInput.checked = features.equations !== false;
     tablesInput.checked = features.tables !== false;
     figuresInput.checked = features.figures !== false;
-    liveDocumentPreviewInput.checked = features.liveDocumentPreview === true;
-    referenceOrderInput.value = stored?.[AUTOCOMPLETE_KEY]?.referenceOrder === "alphabetical"
+
+    const autocomplete = stored?.[AUTOCOMPLETE_KEY] || DEFAULT_AUTOCOMPLETE;
+    referenceOrderInput.value = autocomplete.referenceOrder === "alphabetical"
       ? "alphabetical"
       : "document";
 
-    const popupSettings = stored?.[REFERENCE_POPUPS_KEY] || {};
-    referencePopupTriggerInput.value = popupSettings.trigger === "hover"
-      ? "hover"
-      : "cursor";
-    environmentPopupTriggerInput.value = popupSettings.environmentTrigger === "hover"
-      ? "hover"
-      : "cursor";
+    const popupSettings = stored?.[REFERENCE_POPUPS_KEY] || DEFAULT_POPUPS;
+    referencePopupTriggerInput.value = popupSettings.trigger === "hover" ? "hover" : "cursor";
+    environmentPopupTriggerInput.value = popupSettings.environmentTrigger === "hover" ? "hover" : "cursor";
+    labelReferenceGuardInput.checked = stored?.[LABEL_REFERENCE_GUARD_KEY]?.enabled !== false;
+
+    const commentProfile = globalThis.SmartTeXCommentProfile?.normalize?.(stored?.[COMMENT_PROFILE_KEY], ensuredProfile)
+      || stored?.[COMMENT_PROFILE_KEY]
+      || ensuredProfile
+      || { name: "Anonymous", color: "#268bd2" };
+    if (commentNameInput) commentNameInput.value = commentProfile.name || "Anonymous";
+    if (commentColorInput) commentColorInput.value = validColor(commentProfile.color, "#268bd2");
 
     const storedHighlights = stored?.[STRUCTURE_HIGHLIGHT_KEY] || {};
     const merged = { ...DEFAULT_HIGHLIGHTS, ...storedHighlights };
-    if (storedHighlights.color && !storedHighlights.environmentColor) {
-      merged.environmentColor = storedHighlights.color;
+    const hasLegacyCombinedHighlight = storedHighlights.enabled !== undefined || storedHighlights.color !== undefined;
+    const legacyEnvironmentEnabled = storedHighlights.environmentEnabled !== undefined
+      ? storedHighlights.environmentEnabled !== false
+      : storedHighlights.enabled !== false;
+    const legacyEnvironmentColor = validColor(
+      storedHighlights.environmentColor || storedHighlights.color,
+      DEFAULT_HIGHLIGHTS.environmentColor
+    );
+    merged.environmentEnabled = legacyEnvironmentEnabled;
+    merged.environmentColor = legacyEnvironmentColor;
+    if (hasLegacyCombinedHighlight && storedHighlights.environmentFirstLineEnabled === undefined) {
+      merged.environmentFirstLineEnabled = legacyEnvironmentEnabled;
     }
-    // Migrate the former global `enabled` flag to the environment/section
-    // category. Other annotation categories, including inline equations,
-    // remain independently configurable.
-    if (
-      storedHighlights.environmentEnabled === undefined &&
-      storedHighlights.enabled !== undefined
-    ) {
-      merged.environmentEnabled = storedHighlights.enabled !== false;
+    if (hasLegacyCombinedHighlight && storedHighlights.environmentFirstLineColor === undefined) {
+      merged.environmentFirstLineColor = legacyEnvironmentColor;
     }
+    if (hasLegacyCombinedHighlight && storedHighlights.sectionEnabled === undefined) merged.sectionEnabled = legacyEnvironmentEnabled;
+    if (hasLegacyCombinedHighlight && storedHighlights.sectionColor === undefined) merged.sectionColor = legacyEnvironmentColor;
+
     for (const [key, control] of Object.entries(highlightControls)) {
-      if (!control) continue;
       if (control.type === "checkbox") control.checked = merged[key] !== false;
-      else control.value = /^#[0-9a-f]{6}$/i.test(String(merged[key] || ""))
-        ? String(merged[key]).toLowerCase()
-        : DEFAULT_HIGHLIGHTS[key];
+      else if (control.type === "range") {
+        const numeric = Number(merged[key]);
+        control.value = String(Math.max(0, Math.min(100,
+          Number.isFinite(numeric) ? numeric : DEFAULT_HIGHLIGHTS[key]
+        )));
+      } else {
+        control.value = validColor(merged[key], DEFAULT_HIGHLIGHTS[key]);
+      }
     }
+    updateActiveStrengthOutput();
 
     loading = false;
     showStatus("Saved.");
   }
 
-  highlightReset.addEventListener("click", () => {
-    for (const [key, control] of Object.entries(highlightControls)) {
-      if (!control) continue;
-      if (control.type === "checkbox") control.checked = DEFAULT_HIGHLIGHTS[key] !== false;
-      else control.value = DEFAULT_HIGHLIGHTS[key];
-    }
-    scheduleSave(0);
+  document.querySelector("#smarttex-highlight-reset")?.addEventListener("click", () => {
+    for (const [key, value] of Object.entries(DEFAULT_HIGHLIGHTS)) setHighlightControl(key, value);
+    updateActiveStrengthOutput();
+    scheduleSave();
   });
+
+  for (const button of document.querySelectorAll("[data-reset-setting]")) {
+    button.addEventListener("click", () => resetActions[button.dataset.resetSetting]?.());
+  }
 
   form.addEventListener("submit", (event) => event.preventDefault());
   form.addEventListener("input", (event) => {
+    if (event.target === highlightControls.activeStrength || event.target === highlightControls.activeEnabled) {
+      updateActiveStrengthOutput();
+    }
     if (event.target === sitesInput) {
-      // Domain permission prompts require a completed edit and are therefore
-      // handled by the change event below rather than on every keystroke.
       scheduleSave(350);
       return;
     }
@@ -292,4 +402,6 @@
     loading = false;
     showStatus(error?.message || String(error), true);
   });
+
+  globalThis.SmartTeXPrivacyConsent?.showIfNeeded();
 })();

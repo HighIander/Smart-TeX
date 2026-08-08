@@ -82,6 +82,7 @@
   <output id="controls-test-result">Controls test running</output>
   <script>
     const featureKey = "smarttex:features:v1";
+    const popupKey = "smarttex:reference-popups:v1";
     let fakeFeatures = { equations: true, tables: true, figures: true };
     const storageListeners = [];
     const sentMessages = [];
@@ -92,7 +93,10 @@
       storage: {
         local: {
           async get() {
-            return { [featureKey]: { ...fakeFeatures } };
+            return {
+              [featureKey]: { ...fakeFeatures },
+              [popupKey]: { trigger: "hover", environmentTrigger: "cursor" }
+            };
           }
         },
         onChanged: {
@@ -177,6 +181,10 @@ E=mc^2
 \includegraphics[width=1200px]{figures/preview}
 \caption{Oversized figure}
 \end{figure}`;
+    const narrowCaptionFigureSource = String.raw`\begin{figure}
+\includegraphics[width=180px]{figures/preview}
+\caption{This deliberately long caption must wrap inside the media width rather than widening the popup. It repeats enough descriptive text to require vertical caption scrolling while the rendered figure remains completely visible and fixed in place. This deliberately long caption must wrap inside the media width rather than widening the popup. It repeats enough descriptive text to require vertical caption scrolling while the rendered figure remains completely visible and fixed in place.}
+\end{figure}`;
 
     function dispatch(value, cursorIndex, focused = true) {
       window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
@@ -247,9 +255,6 @@ E=mc^2
         !popup.classList.contains("smarttex-preview-stale") &&
         Boolean(popup.querySelector(".katex"))
       );
-      document.documentElement.classList.add("smarttex-document-live");
-      checks.popupVisibleDuringLivePreview = getComputedStyle(popup).display !== "none";
-      document.documentElement.classList.remove("smarttex-document-live");
 
       const operatorEnvironmentSource = String.raw`\DeclareMathOperator{\erfcx}{erfcx}
 \begin{equation}
@@ -359,10 +364,111 @@ E=mc^2
         }));
       }
       await delay(220);
-      checks.oversizedFigureScrollbar = Boolean(
-        oversizedScrollable &&
+      checks.oversizedFigureFitsWithoutScrollbar = Boolean(
+        !oversizedScrollable &&
         !popup.hidden &&
-        oversizedViewport.scrollLeft > 0
+        oversizedViewport.scrollLeft === 0
+      );
+
+      const zoomControls = popup.querySelector(".smarttex-figure-zoom-controls");
+      const zoomMedia = popup.querySelector(".smarttex-figure-popup-media");
+      const zoomController = oversizedViewport?.__smarttexFigureZoom;
+      const zoomRect = oversizedViewport?.getBoundingClientRect();
+      if (oversizedViewport && zoomRect) {
+        oversizedViewport.dispatchEvent(new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          deltaY: -120,
+          clientX: zoomRect.left + zoomRect.width * 0.8,
+          clientY: zoomRect.top + zoomRect.height * 0.65
+        }));
+      }
+      await delay(40);
+      const transformAfterWheel = zoomMedia?.style.transform || "";
+      const panBeforeDrag = zoomController
+        ? { x: zoomController.panX, y: zoomController.panY }
+        : null;
+      if (oversizedViewport && zoomRect && zoomController) {
+        oversizedViewport.dispatchEvent(new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          pointerId: 17,
+          clientX: zoomRect.left + zoomRect.width * 0.5,
+          clientY: zoomRect.top + zoomRect.height * 0.5
+        }));
+        oversizedViewport.dispatchEvent(new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          pointerId: 17,
+          clientX: zoomRect.left + zoomRect.width * 0.42,
+          clientY: zoomRect.top + zoomRect.height * 0.42
+        }));
+        oversizedViewport.dispatchEvent(new PointerEvent("pointerup", {
+          bubbles: true,
+          pointerId: 17,
+          clientX: zoomRect.left + zoomRect.width * 0.42,
+          clientY: zoomRect.top + zoomRect.height * 0.42
+        }));
+      }
+      await delay(40);
+      checks.figureZoomControls = Boolean(
+        zoomControls &&
+        zoomControls.querySelector('button[aria-label="Zoom out"]') &&
+        zoomControls.querySelector('button[aria-label="Zoom in"]') &&
+        zoomController?.scale > 1 &&
+        oversizedViewport.classList.contains("smarttex-figure-popup-zoomed") &&
+        getComputedStyle(oversizedViewport).cursor === "grab" &&
+        transformAfterWheel.includes("scale(")
+      );
+      checks.figureWheelZoomsToPointer = Boolean(
+        zoomController &&
+        (Math.abs(zoomController.panX) > 0.1 || Math.abs(zoomController.panY) > 0.1)
+      );
+      checks.figureDragPans = Boolean(
+        zoomController &&
+        panBeforeDrag &&
+        (
+          Math.abs(zoomController.panX - panBeforeDrag.x) > 0.1 ||
+          Math.abs(zoomController.panY - panBeforeDrag.y) > 0.1
+        )
+      );
+
+      dispatch(
+        narrowCaptionFigureSource,
+        narrowCaptionFigureSource.indexOf("includegraphics")
+      );
+      popup = await waitForPreview("figure");
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const candidateCaption = popup.querySelector(".smarttex-float-popup-caption");
+        const candidateImage = popup.querySelector(".smarttex-figure-popup-image");
+        if (
+          candidateCaption &&
+          candidateImage &&
+          candidateCaption.scrollHeight > candidateCaption.clientHeight
+        ) break;
+        await delay(25);
+      }
+      const narrowFigurePopup = popup.querySelector(".smarttex-figure-popup");
+      const narrowViewport = popup.querySelector(".smarttex-figure-popup-viewport");
+      const narrowImage = popup.querySelector(".smarttex-figure-popup-image");
+      const narrowCaption = popup.querySelector(".smarttex-float-popup-caption");
+      const narrowFigureWidth = narrowFigurePopup?.getBoundingClientRect().width || 0;
+      const narrowImageWidth = narrowImage?.getBoundingClientRect().width || 0;
+      checks.figureWidthFollowsMedia = Boolean(
+        narrowFigureWidth > 0 &&
+        narrowImageWidth > 0 &&
+        narrowFigureWidth <= narrowImageWidth + 2
+      );
+      checks.captionIsOnlyScrollbar = Boolean(
+        narrowCaption &&
+        narrowViewport &&
+        narrowCaption.scrollHeight > narrowCaption.clientHeight &&
+        getComputedStyle(narrowCaption).overflowY === "auto" &&
+        narrowViewport.scrollWidth <= narrowViewport.clientWidth + 1 &&
+        narrowViewport.scrollHeight <= narrowViewport.clientHeight + 1 &&
+        getComputedStyle(narrowViewport).overflow === "hidden"
       );
 
       dispatch(figureSource, figureCursor);
@@ -375,6 +481,13 @@ E=mc^2
         if (captionReferenceAfterOversize) break;
         await delay(20);
       }
+      captionReferenceAfterOversize.dispatchEvent(new PointerEvent("pointerenter"));
+      await delay(30);
+      checks.captionReferenceDisabled = !document.querySelector(
+        ".smarttex-caption-reference-popup:not([hidden])"
+      );
+      changeFeatures({ equations: true, tables: false, figures: true });
+      await delay(80);
       captionReferenceAfterOversize.dispatchEvent(new PointerEvent("pointerenter"));
       await delay(30);
       checks.captionReferenceHover = Boolean(

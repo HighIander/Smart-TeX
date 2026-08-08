@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX figure environment preview harness</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 20px; }
+    #smarttex-equation-preview { width: 640px; }
+  </style>
+</head>
+<body>
+  <output id="figure-environment-preview-test-result">Figure environment preview test running</output>
+  <section id="smarttex-equation-preview" data-preview-kind="figure" hidden>
+    <div class="smarttex-equation-output"></div>
+  </section>
+  <script>globalThis.browser = { runtime: { getURL(path) { return path; } } };</script>
+  <script src="../figure-renderer.js"></script>
+  <script>
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    async function run() {
+      const preview = document.querySelector("#smarttex-equation-preview");
+      const output = preview.querySelector(".smarttex-equation-output");
+      const figure = document.createElement("figure");
+      figure.className = "smarttex-figure-popup";
+      const viewport = document.createElement("div");
+      viewport.className = "smarttex-figure-popup-viewport";
+      const media = document.createElement("div");
+      media.className = "smarttex-figure-popup-media smarttex-figure-layout";
+      media.dataset.smarttexDesiredWidthPx = "520";
+
+      for (let index = 0; index < 2; index += 1) {
+        const row = document.createElement("div");
+        row.className = "smarttex-figure-layout-row";
+        const panel = document.createElement("div");
+        panel.className = "smarttex-figure-layout-panel";
+        panel.dataset.smarttexWidthRatio = "1";
+        panel.style.flexBasis = "100%";
+        const image = document.createElement("img");
+        image.className = "smarttex-figure-popup-image";
+        image.dataset.smarttexLocalWidthRatio = "1";
+        image.style.width = "100%";
+        image.src = `data:image/svg+xml,${encodeURIComponent(
+          `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="260"><rect width="800" height="260" fill="white"/><text x="40" y="140" font-size="60">Figure ${index + 1}</text></svg>`
+        )}`;
+        panel.appendChild(image);
+        row.appendChild(panel);
+        media.appendChild(row);
+      }
+
+      viewport.appendChild(media);
+      figure.appendChild(viewport);
+      output.appendChild(figure);
+
+      // This mirrors content.js: observe while the popup is connected but still
+      // hidden, then reveal it before the scheduled animation-frame layout pass.
+      globalThis.SmartTeXFigureRenderer.observePopupLayout(media);
+      const initializedWhileHidden = Boolean(viewport.__smarttexFigureZoom);
+      preview.hidden = false;
+      await Promise.all([...media.querySelectorAll("img")].map((image) => image.decode()));
+      await delay(80);
+
+      const controller = viewport.__smarttexFigureZoom;
+      const firstRect = viewport.getBoundingClientRect();
+      controller?.refresh();
+      controller?.refresh();
+      await delay(30);
+      const refreshedRect = viewport.getBoundingClientRect();
+      const imageRects = [...media.querySelectorAll("img")].map((image) => image.getBoundingClientRect());
+      const passed = Boolean(
+        !initializedWhileHidden &&
+        controller &&
+        firstRect.width > 100 && firstRect.height > 100 &&
+        refreshedRect.width > 100 && refreshedRect.height > 100 &&
+        imageRects.every((rect) => rect.width > 100 && rect.height > 20)
+      );
+      const diagnostics = {
+        initializedWhileHidden,
+        firstRect: { width: firstRect.width, height: firstRect.height },
+        refreshedRect: { width: refreshedRect.width, height: refreshedRect.height },
+        imageRects: imageRects.map((rect) => ({ width: rect.width, height: rect.height })),
+        frozen: viewport.classList.contains("smarttex-figure-popup-viewport-frozen")
+      };
+      document.querySelector("#figure-environment-preview-test-result").textContent = passed
+        ? "Figure environment preview test passed"
+        : `Figure environment preview test failed: ${JSON.stringify(diagnostics)}`;
+      document.documentElement.dataset.figureEnvironmentPreviewTest = passed ? "passed" : "failed";
+    }
+
+    run().catch((error) => {
+      document.querySelector("#figure-environment-preview-test-result").textContent =
+        `Figure environment preview test failed: ${error.stack || error.message}`;
+      document.documentElement.dataset.figureEnvironmentPreviewTest = "failed";
+    });
+  </script>
+</body>
+</html>

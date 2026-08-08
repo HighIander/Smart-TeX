@@ -5,12 +5,26 @@
 
   const extensionApi = globalThis.browser ?? globalThis.chrome;
   const SITES_KEY = "smarttex:editor-sites:v1";
+  const FEATURES_KEY = "smarttex:features:v1";
+  const LEGACY_DOCUMENT_PREVIEW_SETTINGS_KEY = "smarttex:document-preview-settings:v1";
   const DEFAULT_SITES = ["collabtex.helmholtz.cloud"];
   const BRIDGE_SCRIPT_ID = "smarttex-editor-bridge-v1";
   const DEPENDENCY_SCRIPT_ID = "smarttex-preview-dependencies-v1";
   const CONTENT_SCRIPT_ID = "smarttex-equation-preview-v1";
+  const LEGACY_BOOTSTRAP_SCRIPT_ID = "smarttex-editor-bootstrap-v1";
   let registrationQueue = Promise.resolve();
   const dependencyRepairByTarget = new Map();
+
+
+  async function removeLegacyDocumentPreviewSettings() {
+    const stored = await extensionApi.storage.local.get(FEATURES_KEY);
+    const features = stored?.[FEATURES_KEY];
+    if (features && Object.prototype.hasOwnProperty.call(features, "liveDocumentPreview")) {
+      const { liveDocumentPreview: _removed, ...remainingFeatures } = features;
+      await extensionApi.storage.local.set({ [FEATURES_KEY]: remainingFeatures });
+    }
+    await extensionApi.storage.local.remove(LEGACY_DOCUMENT_PREVIEW_SETTINGS_KEY);
+  }
 
   function bytesToBase64(bytes) {
     let binary = "";
@@ -98,7 +112,7 @@
     }
 
     const matches = (await configuredSites()).map(matchPattern);
-    const ids = [BRIDGE_SCRIPT_ID, DEPENDENCY_SCRIPT_ID, CONTENT_SCRIPT_ID];
+    const ids = [BRIDGE_SCRIPT_ID, DEPENDENCY_SCRIPT_ID, CONTENT_SCRIPT_ID, LEGACY_BOOTSTRAP_SCRIPT_ID];
     for (const id of ids) {
       await extensionApi.scripting.unregisterContentScripts({ ids: [id] }).catch(() => {});
     }
@@ -108,7 +122,7 @@
       {
         id: BRIDGE_SCRIPT_ID,
         matches,
-        js: ["latex-context.js", "page-bridge.js"],
+        js: ["interaction-tasks.js", "latex-context.js", "page-bridge.js"],
         runAt: "document_idle",
         allFrames: false,
         persistAcrossSessions: true,
@@ -118,6 +132,7 @@
         id: DEPENDENCY_SCRIPT_ID,
         matches,
         js: [
+          "interaction-tasks.js",
           "font-loader.js",
           "vendor/katex/katex.min.js",
           "latex-context.js",
@@ -140,10 +155,18 @@
           "content.css"
         ],
         js: [
+          "privacy-consent.js",
+          "privacy-consent-content.js",
           "popup-gate.js",
+          "comment-profile.js",
           "content.js",
+          "settings-menu.js",
+          "figure-autocomplete.js",
+          "editor-toolbar.js",
+          "label-reference-guard.js",
           "project-files.js",
-          "document-preview.js",
+          "comments.js",
+          "review.js",
           "citation-autocomplete.js",
           "reference-autocomplete.js"
         ],
@@ -172,8 +195,10 @@
           });
         }
         return undefined;
-      }).then(queueContentScriptSync).catch((error) => {
-        console.error("SmartTeX content-script registration failed:", error);
+      }).then(queueContentScriptSync).then(() => {
+        return extensionApi.runtime.openOptionsPage();
+      }).catch((error) => {
+        console.error("SmartTeX installation initialization failed:", error);
       });
       return;
     }
@@ -205,6 +230,7 @@
       const repair = extensionApi.scripting.executeScript({
         target,
         files: [
+          "interaction-tasks.js",
           "vendor/katex/katex.min.js",
           "latex-context.js",
           "table-renderer.js",
@@ -261,7 +287,9 @@
     extensionApi.runtime.openOptionsPage();
   });
 
-  queueContentScriptSync().catch((error) => {
-    console.error("SmartTeX content-script registration failed:", error);
-  });
+  removeLegacyDocumentPreviewSettings()
+    .then(queueContentScriptSync)
+    .catch((error) => {
+      console.error("SmartTeX initialization failed:", error);
+    });
 })();

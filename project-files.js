@@ -3,6 +3,8 @@
 (() => {
   "use strict";
 
+  if (globalThis.SmartTeXPageContext?.isDocumentPage?.() === false) return;
+
   if (globalThis.__smartTeXProjectFilesLoaded || window.top !== window) return;
   globalThis.__smartTeXProjectFilesLoaded = true;
 
@@ -462,6 +464,7 @@
   }
 
   function attachCloudButton() {
+    if (globalThis.SmartTeXPageContext?.isDocumentPage?.() === false) return;
     const toolbarSlot = document.querySelector("#smarttex-toolbar-slot");
     if (!toolbarSlot) return;
     let button = toolbarSlot.querySelector("#smarttex-cloud-button");
@@ -1005,6 +1008,7 @@
   }
 
   function findFileToolbar() {
+    if (globalThis.SmartTeXPageContext?.isDocumentPage?.() === false) return null;
     // Prefer the SmartTeX top-toolbar slot so the Nextcloud action is placed
     // immediately to the right of the [S] menu button. Fall back to the file
     // toolbar while the top toolbar is still being initialized.

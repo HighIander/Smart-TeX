@@ -30,24 +30,44 @@ const harnesses = [
     attribute: "referenceAutocompleteTest"
   },
   {
-    file: "document-preview-harness.html",
-    attribute: "documentPreviewTest"
+    file: "includegraphics-hover-preview-harness.html",
+    attribute: "includegraphicsHoverTest"
   },
   {
-    file: "paragraph-structure-harness.html",
-    attribute: "paragraphStructureTest"
+    file: "figure-autocomplete-harness.html",
+    attribute: "figureAutocompleteTest"
+  },
+  {
+    file: "direct-autocomplete-routing-harness.html",
+    attribute: "directRoutingTest"
   },
   {
     file: "editor-reference-harness.html",
     attribute: "editorReferenceTest"
   },
   {
-    file: "popup-trigger-navigation-harness.html",
-    attribute: "popupTriggerNavigationTest"
+    file: "popup-trigger-harness.html",
+    attribute: "popupTriggerTest"
   },
   {
     file: "controls-harness.html",
     attribute: "controlsTest"
+  },
+  {
+    file: "figure-high-resolution-zoom-harness.html",
+    attribute: "figureHighResolutionZoomTest"
+  },
+  {
+    file: "figure-raster-zoom-harness.html",
+    attribute: "figureRasterZoomTest"
+  },
+  {
+    file: "figure-environment-preview-harness.html",
+    attribute: "figureEnvironmentPreviewTest"
+  },
+  {
+    file: "equation-cursor-performance-harness.html",
+    attribute: "equationCursorPerformanceTest"
   },
   {
     file: "preview-harness.html",
@@ -60,6 +80,10 @@ const harnesses = [
   {
     file: "table-editing-harness.html",
     attribute: "tableEditingTest"
+  },
+  {
+    file: "editor-toolbar-harness.html",
+    attribute: "editorToolbarTest"
   },
   {
     file: "popup-interaction-harness.html",

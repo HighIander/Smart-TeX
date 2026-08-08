@@ -35,8 +35,32 @@
   margin-right: 6px;
 }
 
+#smarttex-toolbar-slot #smarttex-options-button {
+  position: relative;
+}
+
+.smarttex-toolbar-loading-spinner {
+  display: none;
+  position: absolute;
+  right: -4px;
+  top: -4px;
+  width: 13px;
+  height: 13px;
+  box-sizing: border-box;
+  border: 2px solid rgb(255 255 255 / 34%);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  background: transparent;
+  pointer-events: none;
+  animation: smarttex-spinner-spin 0.7s linear infinite;
+}
+
+#smarttex-options-button.smarttex-initializing .smarttex-toolbar-loading-spinner {
+  display: block;
+}
+
 #smarttex-toolbar-slot #smarttex-options-button.smarttex-toolbar-button {
-  position: static;
+  position: relative;
   inset: auto;
   display: inline-grid;
   place-items: center;
@@ -184,7 +208,7 @@
 
 #smarttex-equation-preview[data-preview-kind="figure"] {
   width: max-content;
-  min-width: 220px;
+  min-width: 0;
   max-width: min(56vw, calc(100vw - 24px));
   max-height: min(70vh, calc(100vh - 24px));
 }
@@ -208,26 +232,27 @@
 .smarttex-figure-popup-viewport {
   width: max-content;
   max-width: 100%;
-  max-height: min(50vh, 520px);
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable both-edges;
+  max-height: none;
+  overflow: hidden;
+  overscroll-behavior: none;
+  scrollbar-gutter: auto;
   pointer-events: auto;
-  touch-action: pan-x pan-y;
+  touch-action: none;
 }
 
 .smarttex-figure-popup-media {
   display: grid;
-  gap: 10px;
+  gap: calc(10px * var(--smarttex-popup-zoom, 1));
   width: max-content;
-  max-width: none;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .smarttex-figure-layout-row {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  gap: 8px;
+  gap: calc(8px * var(--smarttex-popup-zoom, 1));
   width: 100%;
   min-width: 0;
 }
@@ -235,24 +260,24 @@
 .smarttex-figure-layout-panel {
   display: grid;
   flex: 0 0 auto;
-  gap: 8px;
+  gap: calc(8px * var(--smarttex-popup-zoom, 1));
   align-content: start;
   justify-items: center;
   min-width: 0;
-  max-width: none;
+  max-width: 100%;
 }
 
 .smarttex-figure-layout-panel > img,
 .smarttex-figure-layout-panel > .smarttex-figure-popup-placeholder,
 .smarttex-figure-layout-panel > .smarttex-document-figure-placeholder {
   box-sizing: border-box;
-  max-width: none;
+  max-width: 100%;
 }
 
 .smarttex-figure-popup-image {
   display: block;
   height: auto;
-  max-width: none;
+  max-width: 100%;
   max-height: none;
   object-fit: contain;
 }
@@ -260,7 +285,7 @@
 .smarttex-figure-popup-pdf {
   display: block;
   height: auto;
-  max-width: none;
+  max-width: 100%;
   max-height: none;
   background: #fff;
 }
@@ -280,10 +305,19 @@
 }
 
 .smarttex-float-popup-caption {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
+  max-height: min(18vh, 160px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   color: inherit;
   font: 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif;
   text-align: center;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -1234,672 +1268,7 @@
   }
 }
 
-/* Full-document KaTeX preview inside the CollabTeX PDF pane. */
-#smarttex-document-preview-toggle,
-#smarttex-document-preview-toggle *,
-#smarttex-document-preview-controls,
-#smarttex-document-preview-controls *,
-.smarttex-document-preview-settings,
-.smarttex-document-preview-settings *,
-.smarttex-document-editing-toolbar,
-.smarttex-document-editing-toolbar *,
-.smarttex-document-preview,
-.smarttex-document-preview *,
-.smarttex-document-preview *::before,
-.smarttex-document-preview *::after {
-  box-sizing: border-box;
-}
-
-.smarttex-document-preview-controls {
-  position: relative;
-  display: inline-flex;
-  align-items: stretch;
-  margin: 0 4px;
-}
-
-.smarttex-document-preview-controls[hidden] {
-  display: none !important;
-}
-
-#smarttex-document-preview-toggle.smarttex-document-preview-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 68px;
-  min-height: 30px;
-  margin: 0;
-  padding: 4px 9px;
-  border: 1px solid #4968c5;
-  border-radius: 6px 0 0 6px;
-  color: #fff;
-  background: linear-gradient(135deg, #4b6dca 0%, #7a5cca 100%);
-  box-shadow:
-    0 1px 2px rgb(15 23 42 / 18%),
-    inset 0 1px 0 rgb(255 255 255 / 16%);
-  font: 700 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-#smarttex-document-preview-toggle:hover,
-#smarttex-document-preview-toggle:focus-visible {
-  border-color: #3158b8;
-  color: #fff;
-  background: linear-gradient(135deg, #405fbc 0%, #6e50bc 100%);
-}
-
-#smarttex-document-preview-toggle:focus-visible {
-  outline: 2px solid #9cc8ff;
-  outline-offset: 2px;
-}
-
-#smarttex-document-preview-toggle.smarttex-document-preview-toggle-active {
-  border-color: #3158b8;
-  color: #fff;
-  background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
-}
-
-.smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active {
-  border-color: #3158b8;
-  color: #fff;
-  background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
-}
-
-.smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active:hover,
-.smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active:focus-visible,
-.smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active[aria-expanded="true"] {
-  border-color: #274da7;
-  color: #fff;
-  background: linear-gradient(135deg, #405fbc 0%, #6e50bc 100%);
-}
-
-.smarttex-document-preview-settings-button {
-  display: inline-grid;
-  place-items: center;
-  width: 27px;
-  min-width: 27px;
-  min-height: 30px;
-  margin-left: -1px;
-  padding: 0;
-  border: 1px solid #4968c5;
-  border-radius: 0 6px 6px 0;
-  color: #fff;
-  background: linear-gradient(135deg, #4b6dca 0%, #7a5cca 100%);
-  box-shadow:
-    0 1px 2px rgb(15 23 42 / 18%),
-    inset 0 1px 0 rgb(255 255 255 / 16%);
-  font: 700 12px/1 system-ui, sans-serif;
-  cursor: pointer;
-}
-
-.smarttex-document-preview-settings-button:hover,
-.smarttex-document-preview-settings-button:focus-visible,
-.smarttex-document-preview-settings-button[aria-expanded="true"] {
-  z-index: 1;
-  border-color: #3158b8;
-  color: #fff;
-  background: linear-gradient(135deg, #405fbc 0%, #6e50bc 100%);
-}
-
-.smarttex-document-preview-settings-button:focus-visible {
-  outline: 2px solid #9cc8ff;
-  outline-offset: 2px;
-}
-
-.smarttex-document-preview-settings[hidden] {
-  display: none !important;
-}
-
-.smarttex-document-preview-settings {
-  position: fixed;
-  z-index: 2147483647;
-  display: grid;
-  gap: 12px;
-  width: min(300px, calc(100vw - 16px));
-  padding: 13px 14px 14px;
-  border: 1px solid #b9c4d0;
-  border-radius: 9px;
-  color: #25364a;
-  background: #fff;
-  box-shadow: 0 12px 32px rgb(15 23 42 / 24%);
-  font: 13px/1.35 Inter, ui-sans-serif, system-ui, sans-serif;
-}
-
-.smarttex-document-preview-size-row {
-  display: grid;
-  grid-template-columns: auto minmax(100px, 1fr) 42px;
-  gap: 9px;
-  align-items: center;
-}
-
-.smarttex-document-preview-size-row input {
-  width: 100%;
-  accent-color: #3158b8;
-}
-
-.smarttex-document-preview-size-row output {
-  color: #526174;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.smarttex-document-preview-option-row {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  width: max-content;
-  cursor: pointer;
-}
-
-.smarttex-document-preview-option-row input {
-  margin: 0;
-  accent-color: #3158b8;
-}
-
-.smarttex-document-preview-toggle-mark {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border: 1px solid currentColor;
-  border-radius: 4px;
-  font: 800 11px/1 Georgia, "Times New Roman", serif;
-}
-
-.smarttex-document-native-hidden,
-.smarttex-native-recompile-hidden {
-  display: none !important;
-}
-
-.smarttex-document-preview[hidden] {
-  display: none !important;
-}
-
-.smarttex-document-preview {
-  --smarttex-document-font-size: 13px;
-
-  position: relative;
-  align-self: stretch;
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  min-height: 0;
-  overflow-x: scroll;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-  padding: clamp(10px, 1.5vw, 18px);
-  color: #191919;
-  background: #737b85;
-  overscroll-behavior: contain;
-  cursor: grab;
-}
-
-
-.smarttex-document-preview.smarttex-document-horizontal-overflow {
-  overflow-x: scroll;
-  scrollbar-gutter: stable;
-}
-
-.smarttex-document-preview::-webkit-scrollbar:horizontal {
-  height: 12px;
-}
-
-.smarttex-document-preview:focus {
-  outline: none;
-}
-
-.smarttex-document-preview.smarttex-document-panning {
-  cursor: grabbing;
-  user-select: none;
-}
-
-.smarttex-document-zoom-stage {
-  position: relative;
-  min-width: 1px;
-  min-height: 1px;
-  max-width: none;
-  margin: 0 auto;
-}
-
-.smarttex-document-zoom-controls {
-  position: sticky;
-  z-index: 8;
-  top: 8px;
-  left: 8px;
-  display: flex;
-  width: max-content;
-  margin: 0 0 -34px;
-  border: 1px solid rgb(82 97 116 / 45%);
-  border-radius: 999px;
-  overflow: hidden;
-  opacity: 0;
-  background: rgb(255 255 255 / 94%);
-  box-shadow: 0 3px 12px rgb(15 23 42 / 20%);
-  pointer-events: none;
-  transition: opacity 120ms ease;
-}
-
-.smarttex-document-preview:hover .smarttex-document-zoom-controls,
-.smarttex-document-preview:focus-within .smarttex-document-zoom-controls {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.smarttex-document-zoom-controls button {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  color: #34465a;
-  background: transparent;
-  font: 800 18px/1 system-ui, sans-serif;
-  cursor: pointer;
-}
-
-.smarttex-document-zoom-controls button:hover,
-.smarttex-document-zoom-controls button:focus-visible {
-  color: #1f66bd;
-  background: #e8f2ff;
-}
-
-.smarttex-document-zoom-controls output {
-  display: grid;
-  place-items: center;
-  min-width: 48px;
-  border-right: 1px solid rgb(82 97 116 / 25%);
-  border-left: 1px solid rgb(82 97 116 / 25%);
-  color: #526174;
-  font: 700 11px/1 ui-sans-serif, system-ui, sans-serif;
-}
-
-.smarttex-document-editing-toolbar {
-  position: static;
-  z-index: auto;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  width: max-content;
-  max-width: min(100%, 520px);
-  min-height: 30px;
-  margin: 0 5px;
-  padding: 1px 3px;
-  overflow: auto hidden;
-  border: 0;
-  border-radius: 5px;
-  color: #34465a;
-  background: transparent;
-  box-shadow: none;
-  scrollbar-width: thin;
-}
-
-.smarttex-document-editing-toolbar-editor {
-  margin-left: auto;
-}
-
-.smarttex-document-editing-toolbar-pdf {
-  flex: 0 1 auto;
-}
-
-.smarttex-document-editing-toolbar button[hidden],
-.smarttex-document-editing-toolbar select[hidden] {
-  display: none !important;
-}
-
-.smarttex-document-editing-toolbar button,
-.smarttex-document-editing-toolbar select {
-  display: inline-grid;
-  flex: 0 0 auto;
-  place-items: center;
-  min-width: 28px;
-  height: 27px;
-  margin: 0;
-  padding: 3px 6px;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  color: inherit;
-  background: transparent;
-  font: 700 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
-  cursor: pointer;
-}
-
-.smarttex-document-editing-toolbar select {
-  display: block;
-  width: 67px;
-  font-weight: 600;
-}
-
-.smarttex-document-editing-toolbar button:hover,
-.smarttex-document-editing-toolbar button:focus-visible,
-.smarttex-document-editing-toolbar select:hover,
-.smarttex-document-editing-toolbar select:focus-visible {
-  border-color: #9fc4eb;
-  color: #175ea8;
-  background: #e8f2ff;
-  outline: none;
-}
-
-.smarttex-document-editing-toolbar button[aria-pressed="true"] {
-  border-color: #4a91d8;
-  color: #0d559c;
-  background: #d8ebff;
-  box-shadow: inset 0 0 0 1px rgb(49 121 191 / 16%);
-}
-
-.smarttex-document-editing-toolbar svg {
-  width: 19px;
-  height: 19px;
-  overflow: visible;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.smarttex-document-editing-toolbar svg circle,
-.smarttex-document-editing-toolbar svg text {
-  fill: currentColor;
-  stroke: none;
-}
-
-.smarttex-toolbar-letter {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 16px;
-}
-
-.smarttex-toolbar-underlined {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.smarttex-document-toolbar-divider {
-  flex: 0 0 auto;
-  width: 1px;
-  height: 21px;
-  margin: 0 2px;
-  background: #cbd5e1;
-}
-
-.smarttex-document-page::selection,
-.smarttex-document-page *::selection {
-  color: inherit;
-  background: rgb(49 132 222 / 32%);
-}
-
-::highlight(smarttex-editor-selection) {
-  color: inherit;
-  background: rgb(49 132 222 / 32%);
-}
-
-.smarttex-document-cursor-position-hidden .smarttex-document-text-caret,
-.smarttex-document-cursor-position-hidden .smarttex-rendered-caret,
-.smarttex-document-cursor-position-hidden .smarttex-rendered-operator-caret,
-.smarttex-document-cursor-position-hidden .smarttex-table-rendered-caret {
-  display: none !important;
-}
-
-.smarttex-document-cursor-position-hidden .smarttex-source-selection,
-.smarttex-document-cursor-position-hidden .smarttex-document-active-source {
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-.smarttex-source-selection {
-  border-radius: 2px;
-  background: rgb(49 132 222 / 32%);
-  box-shadow: 0 0 0 1px rgb(49 132 222 / 8%);
-}
-
-.smarttex-document-page {
-  width: min(960px, 100%);
-  min-height: calc(100% - 2px);
-  margin: 0;
-  padding: clamp(42px, 7vw, 76px) clamp(18px, 3vw, 34px);
-  color: #151515;
-  background: #fff;
-  box-shadow: 0 3px 18px rgb(15 23 42 / 28%);
-  font-family: "Latin Modern Roman", "Computer Modern Serif", Georgia, serif;
-  font-size: var(--smarttex-document-font-size);
-  line-height: 1.62;
-  cursor: text;
-}
-
-.smarttex-document-page h1,
-.smarttex-document-page h2,
-.smarttex-document-page h3,
-.smarttex-document-page h4,
-.smarttex-document-page h5 {
-  color: inherit;
-  font-family: inherit;
-  line-height: 1.22;
-}
-
-.smarttex-document-page h2 {
-  margin: 2.1em 0 0.75em;
-  font-size: 1.55em;
-}
-
-.smarttex-document-page h3 {
-  margin: 1.75em 0 0.65em;
-  font-size: 1.28em;
-}
-
-.smarttex-document-page h4,
-.smarttex-document-page h5 {
-  margin: 1.4em 0 0.55em;
-  font-size: 1.08em;
-}
-
-.smarttex-document-page p {
-  margin: 0.72em 0;
-  text-align: justify;
-  text-justify: inter-word;
-  hyphens: auto;
-  white-space: pre-line;
-}
-
-.smarttex-document-title {
-  margin: 0 0 3em;
-  text-align: center;
-}
-
-.smarttex-document-title p,
-.smarttex-document-caption {
-  text-align: center;
-}
-
-.smarttex-document-title h1 {
-  margin: 0 0 0.75em;
-  font-size: 1.8em;
-}
-
-.smarttex-document-title p,
-.smarttex-document-title small {
-  display: block;
-  margin: 0.35em 0;
-}
-
-.smarttex-document-equation {
-  margin: 1.4em 0;
-  padding: 0.5em 0.75em;
-  overflow-x: auto;
-  text-align: center;
-}
-
-.smarttex-document-equation > .katex-display {
-  margin: 0;
-}
-
-.smarttex-document-inline-equation {
-  display: inline-block;
-  margin: 0 0.1em;
-  vertical-align: baseline;
-}
-
-.smarttex-document-table {
-  max-width: 100%;
-  margin: 1.8em auto;
-  overflow-x: auto;
-}
-
-.smarttex-document-table figcaption {
-  margin-bottom: 0.65em;
-  font-size: 0.9em;
-  text-align: center;
-}
-
-.smarttex-document-table .smarttex-table-preview {
-  font-family: inherit;
-}
-
-.smarttex-document-figure {
-  max-width: 100%;
-  margin: 1.9em auto;
-  text-align: center;
-}
-
-.smarttex-document-figure-layout-viewport {
-  max-width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-inline: contain;
-}
-
-.smarttex-document-figure-images {
-  display: grid;
-  gap: 0.75em;
-  width: 100%;
-  max-width: 100%;
-}
-
-.smarttex-document-figure img {
-  display: block;
-  max-width: min(100%, 680px);
-  max-height: 65vh;
-  object-fit: contain;
-}
-
-.smarttex-document-figure-pdf {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: min(100%, 680px);
-  max-height: 65vh;
-  background: #fff;
-}
-
-.smarttex-document-figure figcaption {
-  margin-top: 0.7em;
-  font-size: 0.92em;
-}
-
-.smarttex-document-figure-caption .smarttex-inline-latex {
-  display: inline;
-}
-
-.smarttex-document-figure-caption .katex {
-  font-size: 1em;
-}
-
-.smarttex-document-figure-placeholder {
-  display: grid;
-  place-items: center;
-  width: min(100%, 520px);
-  min-height: 130px;
-  padding: 18px;
-  border: 1px dashed #98a5b4;
-  border-radius: 7px;
-  color: #607083;
-  background:
-    linear-gradient(135deg, rgb(238 242 247 / 70%) 25%, transparent 25%) 0 0 / 18px 18px,
-    linear-gradient(315deg, rgb(238 242 247 / 70%) 25%, transparent 25%) 0 0 / 18px 18px,
-    #fafbfc;
-  font: 600 0.9em/1.35 ui-sans-serif, system-ui, sans-serif;
-  overflow-wrap: anywhere;
-}
-
-.smarttex-document-caption {
-  font-size: 0.92em;
-  text-align: center;
-}
-
-.smarttex-document-bold {
-  font-weight: 700;
-}
-
-.smarttex-document-italic {
-  font-style: italic;
-}
-
-.smarttex-document-underline {
-  text-decoration: underline;
-  text-underline-offset: 0.12em;
-}
-
-.smarttex-document-active-source {
-  border-radius: 5px;
-  background: rgb(49 88 184 / 5%);
-}
-
-.smarttex-document-render-error {
-  padding: 9px 11px;
-  border: 1px solid #ffb3b7;
-  border-radius: 6px;
-  color: #8f1d2c;
-  background: #fff0f1;
-  text-align: left;
-}
-
-.smarttex-document-render-error code {
-  font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
-  white-space: pre-wrap;
-}
-
-.smarttex-document-empty {
-  color: #667085;
-  text-align: center;
-}
-
-.smarttex-document-text-caret {
-  position: relative;
-  pointer-events: none;
-  display: inline-block;
-  width: 0;
-  height: 1.06em;
-  vertical-align: -0.13em;
-}
-
-.smarttex-document-text-caret::after {
-  position: absolute;
-  z-index: 2;
-  top: -0.03em;
-  left: -1px;
-  width: 2px;
-  height: 1.13em;
-  border-radius: 1px;
-  background: #1674d1;
-  content: "";
-  animation: smarttex-caret-blink 1.05s steps(1, end) infinite;
-}
-
-.smarttex-document-focused .smarttex-document-text-caret::after,
-.smarttex-document-focused .katex-html .smarttex-rendered-caret::after,
-.smarttex-document-focused .smarttex-table-rendered-caret::after {
-  background: #169447;
-}
-
-.smarttex-document-focused .smarttex-table-operator-caret::after,
-.smarttex-document-focused .katex-html .smarttex-rendered-operator-caret::after {
-  background: #d32f2f;
-}
-
+/* Shared reference and citation popup styling. */
 .smarttex-document-reference {
   border-radius: 2px;
   color: #175ea8;
@@ -1921,18 +1290,25 @@
   z-index: 2147483647;
   width: 18px;
   height: 18px;
-  margin: 9px 0 0 9px;
+  margin: 0;
   border: 2px solid rgb(75 95 120 / 28%);
   border-top-color: #1769aa;
   border-radius: 50%;
-  background: rgb(255 255 255 / 88%);
+  background: transparent;
   box-shadow: 0 1px 5px rgb(15 23 42 / 24%);
   pointer-events: none;
-  animation: smarttex-document-spin 0.7s linear infinite;
+  animation: smarttex-spinner-spin 0.7s linear infinite;
 }
 
 .smarttex-popup-loading-spinner[hidden] {
   display: none !important;
+}
+
+
+@keyframes smarttex-spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .smarttex-document-reference-popup {
@@ -1971,7 +1347,7 @@
 }
 
 .smarttex-document-reference-popup.smarttex-reference-popup-compact .smarttex-figure-popup-viewport {
-  max-height: 180px;
+  max-height: none;
 }
 
 .smarttex-document-reference-popup.smarttex-reference-popup-compact .smarttex-figure-popup,
@@ -2052,26 +1428,28 @@
   text-underline-offset: 0.13em;
 }
 
-.smarttex-editor-reference-popup .smarttex-figure-popup,
 .smarttex-editor-reference-popup .smarttex-table-popup {
   width: 100%;
 }
 
 .smarttex-editor-reference-popup .smarttex-figure-popup-media,
 .smarttex-editor-reference-popup .smarttex-figure-popup-placeholder {
-  width: 100%;
+  max-width: 100%;
 }
 
 .smarttex-editor-reference-popup .smarttex-figure-popup-image,
-.smarttex-editor-reference-popup .smarttex-figure-popup-pdf {
-  max-width: none;
+.smarttex-editor-reference-popup .smarttex-figure-popup-pdf,
+.smarttex-document-reference-popup .smarttex-figure-popup-image,
+.smarttex-document-reference-popup .smarttex-figure-popup-pdf {
+  max-width: 100%;
   max-height: none;
 }
 
 .smarttex-editor-reference-popup .smarttex-figure-popup-viewport,
 .smarttex-document-reference-popup .smarttex-figure-popup-viewport {
   max-width: 100%;
-  max-height: 270px;
+  max-height: none;
+  overflow: hidden;
 }
 
 .smarttex-editor-reference-popup .smarttex-table-scroll {
@@ -2129,7 +1507,8 @@
   border: 2px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
-  animation: smarttex-document-spin 0.7s linear infinite;
+  background: transparent;
+  animation: smarttex-spinner-spin 0.7s linear infinite;
 }
 
 .smarttex-reference-popup-citation {
@@ -2176,75 +1555,7 @@
   overflow-wrap: anywhere;
 }
 
-.smarttex-document-figure-hover-anchor {
-  cursor: zoom-in;
-}
-
-.smarttex-document-figure-hover-popup {
-  width: 100%;
-}
-
-.smarttex-document-figure-hover-popup .smarttex-document-figure-image,
-.smarttex-document-figure-hover-popup .smarttex-document-figure-pdf {
-  max-width: none;
-  max-height: none;
-}
-
-
-@media (prefers-reduced-motion: reduce) {
-  .smarttex-document-text-caret::after {
-    animation: none;
-  }
-}
-
 @media (prefers-color-scheme: dark) {
-  .smarttex-document-preview-settings {
-    border-color: #48586c;
-    color: #d9e2ee;
-    background: #182230;
-  }
-
-  #smarttex-document-preview-toggle:hover,
-  #smarttex-document-preview-toggle:focus-visible,
-  .smarttex-document-preview-settings-button:hover,
-  .smarttex-document-preview-settings-button:focus-visible,
-  .smarttex-document-preview-settings-button[aria-expanded="true"] {
-    border-color: #3158b8;
-    color: #fff;
-    background: linear-gradient(135deg, #405fbc 0%, #6e50bc 100%);
-  }
-
-  .smarttex-document-preview-size-row output {
-    color: #9cadc1;
-  }
-
-  #smarttex-document-preview-toggle.smarttex-document-preview-toggle-active {
-    border-color: #667eea;
-    color: #fff;
-    background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
-  }
-
-  .smarttex-document-preview-settings-button.smarttex-document-preview-settings-button-active {
-    border-color: #667eea;
-    color: #fff;
-    background: linear-gradient(135deg, #3158b8 0%, #6847b8 100%);
-  }
-
-  .smarttex-document-editing-toolbar {
-    color: #d9e2ee;
-    background: transparent;
-  }
-
-  .smarttex-document-editing-toolbar button[aria-pressed="true"] {
-    border-color: #3979cb;
-    color: #9ed0ff;
-    background: #12375c;
-  }
-
-  .smarttex-document-toolbar-divider {
-    background: #526174;
-  }
-
   .smarttex-document-reference-popup {
     border-color: #48586c;
     color: #e3ebf5;
@@ -2289,15 +1600,12 @@
   .smarttex-reference-popup-missing {
     color: #9cadc1;
   }
-}
 
-@media (max-width: 720px) {
-  .smarttex-document-preview {
-    padding: 12px;
-  }
-
-  .smarttex-document-page {
-    padding: 34px 18px;
+  .smarttex-popup-loading-spinner {
+    border-color: rgb(188 202 219 / 34%);
+    border-top-color: #79b8ff;
+    background: rgb(24 34 48 / 92%);
+    box-shadow: 0 1px 6px rgb(0 0 0 / 45%);
   }
 }
 
@@ -2405,6 +1713,7 @@ body.smarttex-citation-autocomplete-active .ace_autocomplete {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .smarttex-citation-list-parsing {
@@ -2435,7 +1744,8 @@ body.smarttex-citation-autocomplete-active .ace_autocomplete {
   border: 2px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
-  animation: smarttex-document-spin 0.7s linear infinite;
+  background: transparent;
+  animation: smarttex-spinner-spin 0.7s linear infinite;
 }
 
 .smarttex-citation-item {
@@ -2684,107 +1994,18 @@ body.smarttex-citation-autocomplete-active .ace_autocomplete {
   background: currentColor;
 }
 
-/* Busy indicator for both live-preview rendering and native PDF compilation. */
-.smarttex-document-activity-spinner {
-  position: fixed;
-  z-index: 2147483646;
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid rgb(82 97 116 / 35%);
-  border-radius: 50%;
-  background: rgb(255 255 255 / 92%);
-  box-shadow: 0 3px 12px rgb(15 23 42 / 20%);
-  pointer-events: none;
-}
-
-.smarttex-document-activity-spinner[hidden] {
+/* Reference-label/custom autocomplete. */
+body.smarttex-custom-autocomplete-active .cm-tooltip-autocomplete,
+body.smarttex-custom-autocomplete-active .ace_autocomplete,
+body.smarttex-custom-autocomplete-active .ace_autocomplete_popup {
   display: none !important;
 }
 
-.smarttex-document-activity-spinner-ring {
-  width: 17px;
-  height: 17px;
-  border: 2px solid rgb(49 88 184 / 24%);
-  border-top-color: #3158b8;
-  border-radius: 50%;
-  animation: smarttex-document-spin 650ms linear infinite;
-}
-
-@keyframes smarttex-document-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Match formatting controls to the actual editor theme rather than only OS theme. */
-.smarttex-document-editing-toolbar.smarttex-editor-dark {
-  color: #d9e2ee;
-}
-
-.smarttex-document-editing-toolbar.smarttex-editor-dark button,
-.smarttex-document-editing-toolbar.smarttex-editor-dark select {
-  color: #d9e2ee;
-  background: transparent;
-}
-
-.smarttex-document-editing-toolbar.smarttex-editor-dark select option {
-  color: #e5edf7;
-  background: #182230;
-}
-
-.smarttex-document-editing-toolbar.smarttex-editor-dark button:hover,
-.smarttex-document-editing-toolbar.smarttex-editor-dark button:focus-visible,
-.smarttex-document-editing-toolbar.smarttex-editor-dark select:hover,
-.smarttex-document-editing-toolbar.smarttex-editor-dark select:focus-visible {
-  border-color: #4f78a5;
-  color: #9dceff;
-  background: #18324d;
-}
-
-.smarttex-document-editing-toolbar.smarttex-editor-dark button[aria-pressed="true"] {
-  border-color: #5b9add;
-  color: #d7ebff;
-  background: #20466c;
-  box-shadow: inset 0 0 0 1px rgb(121 192 255 / 16%);
-}
-
-.smarttex-document-editing-toolbar.smarttex-editor-dark .smarttex-document-toolbar-divider {
-  background: #536174;
-}
-
-@media (prefers-color-scheme: dark) {
-  .smarttex-document-activity-spinner {
-    border-color: rgb(130 151 176 / 45%);
-    background: rgb(24 34 48 / 94%);
-    box-shadow: 0 3px 12px rgb(0 0 0 / 36%);
-  }
-
-  .smarttex-document-activity-spinner-ring {
-    border-color: rgb(121 192 255 / 22%);
-    border-top-color: #79c0ff;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .smarttex-document-activity-spinner-ring {
-    animation-duration: 1.4s;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  .smarttex-popup-loading-spinner {
-    border-color: rgb(188 202 219 / 34%);
-    border-top-color: #79b8ff;
-    background: rgb(24 34 48 / 92%);
-    box-shadow: 0 1px 6px rgb(0 0 0 / 45%);
-  }
-}
-
-/* Reference-label autocomplete. */
-body.smarttex-custom-autocomplete-active .cm-tooltip-autocomplete,
-body.smarttex-custom-autocomplete-active .ace_autocomplete {
+/* While the caret is anywhere inside \includegraphics{...}, SmartTeX owns
+   filename completion even when its popup is momentarily hidden. */
+body.smarttex-figure-autocomplete-context-active .cm-tooltip-autocomplete,
+body.smarttex-figure-autocomplete-context-active .ace_autocomplete,
+body.smarttex-figure-autocomplete-context-active .ace_autocomplete_popup {
   display: none !important;
 }
 
@@ -2887,6 +2108,7 @@ body.smarttex-custom-autocomplete-active .ace_autocomplete {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .smarttex-reference-autocomplete-item {
@@ -3028,30 +2250,6 @@ body.smarttex-custom-autocomplete-active .ace_autocomplete {
   }
 }
 
-/* Navigation history button shown after following a popup title link. */
-.smarttex-document-editing-toolbar .smarttex-document-back-button[hidden],
-.smarttex-document-editing-toolbar .smarttex-document-back-divider[hidden] {
-  display: none !important;
-}
-
-.smarttex-document-editing-toolbar .smarttex-document-back-button svg {
-  width: 18px;
-  height: 18px;
-}
-
-/* Keep the navigation-history arrow at the far left while the editing controls remain right-aligned. */
-.smarttex-document-editing-toolbar.smarttex-document-has-back {
-  width: 100%;
-  max-width: none;
-  justify-content: flex-end;
-}
-
-.smarttex-document-editing-toolbar.smarttex-document-has-back
-  .smarttex-document-back-divider {
-  margin-right: auto;
-}
-
-
 body.smarttex-editor-dark .smarttex-citation-list-parsing,
 html.smarttex-editor-dark .smarttex-citation-list-parsing,
 body[data-theme="dark"] .smarttex-citation-list-parsing,
@@ -3062,7 +2260,200 @@ html[data-theme="dark"] .smarttex-citation-list-parsing {
   box-shadow: 0 4px 16px rgb(0 0 0 / 34%);
 }
 
-/* Source-aware table editing controls. */
+/* Keep captions inside reference previews constrained to the rendered media.
+   Long captions may scroll vertically, but they never widen the figure popup. */
+.smarttex-document-reference-popup .smarttex-table-popup,
+.smarttex-editor-reference-popup .smarttex-table-popup {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.smarttex-document-reference-popup .smarttex-figure-popup,
+.smarttex-editor-reference-popup .smarttex-figure-popup {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.smarttex-document-reference-popup[data-smarttex-content-kind="figure"] {
+  width: fit-content;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.smarttex-document-reference-popup[data-smarttex-content-kind="figure"] .smarttex-reference-popup-target {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.smarttex-document-reference-popup[data-smarttex-content-kind="figure"] .smarttex-reference-popup-heading {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.smarttex-document-reference-popup[data-smarttex-content-kind="figure"] .smarttex-float-popup-caption {
+  max-height: 105px;
+}
+
+.smarttex-document-reference-popup .smarttex-float-popup-caption,
+.smarttex-editor-reference-popup .smarttex-float-popup-caption {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#smarttex-toolbar-slot .smarttex-nextcloud-update-all {
+  margin-left: 4px;
+  align-self: center;
+}
+
+
+/* Preview for the currently selected native includegraphics completion. */
+#smarttex-graphic-autocomplete-preview {
+  position: fixed;
+  z-index: 2147483645;
+  box-sizing: border-box;
+  width: min(430px, calc(100vw - 24px));
+  max-height: min(68vh, 560px);
+  overflow: hidden;
+  border: 1px solid #aeb9c8;
+  border-radius: 12px;
+  background: #f8faff;
+  color: #27364a;
+  box-shadow: 0 12px 34px rgb(31 45 65 / 24%);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+#smarttex-graphic-autocomplete-preview[hidden] {
+  display: none !important;
+}
+
+#smarttex-graphic-autocomplete-preview .smarttex-preview-heading {
+  min-width: 0;
+}
+
+#smarttex-graphic-autocomplete-preview .smarttex-preview-meta {
+  display: block;
+  min-width: 0;
+  max-width: 62%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-graphic-autocomplete-output {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  height: min(46vh, 410px);
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.smarttex-graphic-autocomplete-output .smarttex-figure-popup-placeholder {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.smarttex-graphic-autocomplete-image {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+body.smarttex-dark-mode #smarttex-graphic-autocomplete-preview,
+html[data-theme="dark"] #smarttex-graphic-autocomplete-preview,
+body[data-theme="dark"] #smarttex-graphic-autocomplete-preview {
+  border-color: #536176;
+  background: #202735;
+  color: #edf2f8;
+}
+
+/* Source-editing toolbar retained independently from the removed full-document preview. */
+.smarttex-document-editing-toolbar,
+.smarttex-document-editing-toolbar *,
+.smarttex-document-toolbar-dropdown,
+.smarttex-document-toolbar-dropdown *,
+.smarttex-table-dialog-overlay,
+.smarttex-table-dialog-overlay * {
+  box-sizing: border-box;
+}
+
+.smarttex-document-editing-toolbar {
+  position: static;
+  z-index: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: max-content;
+  max-width: min(100%, 520px);
+  min-height: 30px;
+  margin: 0 5px 0 auto;
+  padding: 1px 3px;
+  overflow: auto hidden;
+  border: 0;
+  border-radius: 5px;
+  color: #34465a;
+  background: transparent;
+  box-shadow: none;
+  scrollbar-width: thin;
+}
+
+.smarttex-document-editing-toolbar button[hidden],
+.smarttex-document-editing-toolbar select[hidden] {
+  display: none !important;
+}
+
+.smarttex-document-editing-toolbar button,
+.smarttex-document-editing-toolbar select {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  min-width: 28px;
+  height: 27px;
+  margin: 0;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  font: 700 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-document-editing-toolbar select {
+  display: block;
+  width: 67px;
+  font-weight: 600;
+}
+
+.smarttex-document-editing-toolbar button:hover,
+.smarttex-document-editing-toolbar button:focus-visible,
+.smarttex-document-editing-toolbar select:hover,
+.smarttex-document-editing-toolbar select:focus-visible {
+  border-color: #9fc4eb;
+  color: #175ea8;
+  background: #e8f2ff;
+  outline: none;
+}
+
+.smarttex-document-editing-toolbar button[aria-pressed="true"] {
+  border-color: #4a91d8;
+  color: #0d559c;
+  background: #d8ebff;
+  box-shadow: inset 0 0 0 1px rgb(49 121 191 / 16%);
+}
+
 .smarttex-document-editing-toolbar button:disabled {
   opacity: 0.38;
   cursor: not-allowed;
@@ -3073,6 +2464,45 @@ html[data-theme="dark"] .smarttex-citation-list-parsing {
   border-color: transparent;
   color: inherit;
   background: transparent;
+}
+
+.smarttex-document-editing-toolbar svg {
+  width: 19px;
+  height: 19px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.smarttex-document-editing-toolbar svg circle,
+.smarttex-document-editing-toolbar svg text {
+  fill: currentColor;
+  stroke: none;
+}
+
+.smarttex-toolbar-letter {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 16px;
+}
+
+.smarttex-toolbar-underlined {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.smarttex-document-toolbar-divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 21px;
+  margin: 0 2px;
+  background: #cbd5e1;
 }
 
 .smarttex-document-editing-toolbar .smarttex-toolbar-icon-badge {
@@ -3086,9 +2516,7 @@ html[data-theme="dark"] .smarttex-citation-list-parsing {
   stroke-width: 1.6;
 }
 
-.smarttex-document-editing-toolbar .smarttex-toolbar-icon-emphasis,
-.smarttex-document-toolbar-dropdown 
-.smarttex-border-remove {
+.smarttex-document-toolbar-dropdown .smarttex-border-remove {
   fill: none;
   stroke: #c92a2a;
   stroke-width: 2.4;
@@ -3126,17 +2554,6 @@ html[data-theme="dark"] .smarttex-citation-list-parsing {
   stroke-width: 3;
 }
 
-.smarttex-document-toolbar-dropdown-item:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
-}
-
-.smarttex-document-toolbar-dropdown-item:disabled:hover,
-.smarttex-document-toolbar-dropdown-item:disabled:focus-visible {
-  color: inherit;
-  background: transparent;
-}
-
 .smarttex-document-toolbar-dropdown {
   position: fixed;
   z-index: 2147483639;
@@ -3154,7 +2571,7 @@ html[data-theme="dark"] .smarttex-citation-list-parsing {
 }
 
 .smarttex-document-toolbar-dropdown[hidden] {
-  display: none;
+  display: none !important;
 }
 
 .smarttex-document-toolbar-dropdown-item {
@@ -3177,6 +2594,17 @@ html[data-theme="dark"] .smarttex-citation-list-parsing {
   color: #145d9f;
   background: #e7f2ff;
   outline: none;
+}
+
+.smarttex-document-toolbar-dropdown-item:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.smarttex-document-toolbar-dropdown-item:disabled:hover,
+.smarttex-document-toolbar-dropdown-item:disabled:focus-visible {
+  color: inherit;
+  background: transparent;
 }
 
 .smarttex-document-toolbar-dropdown-icon {
@@ -3357,9 +2785,39 @@ html[data-theme="dark"] .smarttex-citation-list-parsing {
   background: #2877bf;
 }
 
-.smarttex-document-toolbar-dropdown.smarttex-editor-dark,
-.smarttex-table-dialog-overlay:has(.smarttex-table-dialog.smarttex-editor-dark) {
+.smarttex-document-editing-toolbar.smarttex-editor-dark {
+  color: #cbd8e6;
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark button,
+.smarttex-document-editing-toolbar.smarttex-editor-dark select {
+  color: inherit;
+  background: transparent;
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark select option {
   color: #dce7f3;
+  background: #1b2837;
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark button:hover,
+.smarttex-document-editing-toolbar.smarttex-editor-dark button:focus-visible,
+.smarttex-document-editing-toolbar.smarttex-editor-dark select:hover,
+.smarttex-document-editing-toolbar.smarttex-editor-dark select:focus-visible {
+  border-color: #4f78a5;
+  color: #9dceff;
+  background: #18324d;
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark button[aria-pressed="true"] {
+  border-color: #5b9add;
+  color: #d7ebff;
+  background: #20466c;
+  box-shadow: inset 0 0 0 1px rgb(121 192 255 / 16%);
+}
+
+.smarttex-document-editing-toolbar.smarttex-editor-dark .smarttex-document-toolbar-divider {
+  background: #536174;
 }
 
 .smarttex-document-toolbar-dropdown.smarttex-editor-dark {
@@ -3378,30 +2836,6 @@ html[data-theme="dark"] .smarttex-citation-list-parsing {
 .smarttex-document-toolbar-dropdown.smarttex-editor-dark .smarttex-table-border-mode {
   border-color: #46596e;
   color: #b9c9da;
-}
-
-@media (prefers-color-scheme: dark) {
-  .smarttex-table-dialog {
-    border-color: #52657a;
-    color: #dce7f3;
-    background: #1b2837;
-  }
-
-  .smarttex-table-dialog label {
-    color: #b9c9da;
-  }
-
-  .smarttex-table-dialog input {
-    border-color: #52657a;
-    color: #e4edf7;
-    background: #14202d;
-  }
-
-  .smarttex-table-dialog-actions button {
-    border-color: #52657a;
-    color: #dce7f3;
-    background: #243446;
-  }
 }
 
 .smarttex-table-dialog.smarttex-editor-dark {
@@ -3432,29 +2866,2915 @@ html[data-theme="dark"] .smarttex-citation-list-parsing {
   background: #2877bf;
 }
 
-/* Keep captions inside reference previews constrained to the popup width.
-   The media itself may remain horizontally scrollable, but its intrinsic width
-   must not force figure or table captions onto a single over-wide line. */
-.smarttex-document-reference-popup .smarttex-figure-popup,
-.smarttex-document-reference-popup .smarttex-table-popup,
-.smarttex-editor-reference-popup .smarttex-figure-popup,
-.smarttex-editor-reference-popup .smarttex-table-popup {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
+@media (max-width: 620px) {
+  .smarttex-document-editing-toolbar {
+    max-width: min(100%, 360px);
+  }
+
+  .smarttex-table-dialog {
+    grid-template-columns: 1fr;
+  }
+
+  .smarttex-table-dialog label,
+  .smarttex-table-dialog label:nth-of-type(n + 3) {
+    grid-column: 1;
+  }
 }
 
-.smarttex-document-reference-popup .smarttex-float-popup-caption,
-.smarttex-editor-reference-popup .smarttex-float-popup-caption {
+/* Zoom and pan controls for figure popups. */
+.smarttex-figure-popup-viewport {
+  position: relative;
+}
+
+.smarttex-figure-popup-media {
+  transform-origin: 0 0;
+  will-change: width, transform;
+}
+
+.smarttex-figure-zoom-controls {
+  position: absolute;
+  z-index: 4;
+  top: 7px;
+  right: 7px;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid rgb(82 97 116 / 48%);
+  border-radius: 999px;
+  opacity: 0;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 3px 12px rgb(15 23 42 / 22%);
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.smarttex-figure-popup-viewport:hover .smarttex-figure-zoom-controls,
+.smarttex-figure-popup-viewport:focus-within .smarttex-figure-zoom-controls,
+.smarttex-figure-popup-viewport.smarttex-figure-popup-zoomed .smarttex-figure-zoom-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.smarttex-figure-zoom-controls button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: #34465a;
+  background: transparent;
+  font: 800 18px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-figure-zoom-controls button:hover,
+.smarttex-figure-zoom-controls button:focus-visible {
+  color: #1f66bd;
+  background: #e8f2ff;
+  outline: none;
+}
+
+.smarttex-figure-zoom-output {
+  display: grid;
+  place-items: center;
+  min-width: 46px;
+  border-right: 1px solid rgb(82 97 116 / 25%);
+  border-left: 1px solid rgb(82 97 116 / 25%);
+  color: #526174;
+  font: 700 11px/1 ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-figure-popup-viewport.smarttex-figure-popup-zoomed {
+  cursor: grab;
+}
+
+.smarttex-figure-popup-viewport.smarttex-figure-popup-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+body.smarttex-dark-mode .smarttex-figure-zoom-controls,
+html[data-theme="dark"] .smarttex-figure-zoom-controls,
+body[data-theme="dark"] .smarttex-figure-zoom-controls {
+  border-color: rgb(130 151 176 / 48%);
+  background: rgb(24 34 48 / 94%);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 36%);
+}
+
+body.smarttex-dark-mode .smarttex-figure-zoom-controls button,
+html[data-theme="dark"] .smarttex-figure-zoom-controls button,
+body[data-theme="dark"] .smarttex-figure-zoom-controls button,
+body.smarttex-dark-mode .smarttex-figure-zoom-output,
+html[data-theme="dark"] .smarttex-figure-zoom-output,
+body[data-theme="dark"] .smarttex-figure-zoom-output {
+  color: #cbd8e6;
+}
+
+/* Navigation history remains available independently of the removed live preview. */
+.smarttex-document-editing-toolbar .smarttex-document-back-button[hidden],
+.smarttex-document-editing-toolbar .smarttex-document-back-divider[hidden] {
+  display: none !important;
+}
+
+.smarttex-document-editing-toolbar .smarttex-document-back-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.smarttex-document-editing-toolbar.smarttex-document-has-back {
+  width: 100%;
+  max-width: none;
+  justify-content: flex-end;
+}
+
+.smarttex-document-editing-toolbar.smarttex-document-has-back
+  .smarttex-document-back-divider {
+  margin-right: auto;
+}
+
+/* Figure-file autocomplete inside \includegraphics{...}. */
+#smarttex-figure-autocomplete-popup,
+#smarttex-figure-autocomplete-popup *,
+#smarttex-figure-autocomplete-popup *::before,
+#smarttex-figure-autocomplete-popup *::after {
   box-sizing: border-box;
+}
+
+#smarttex-figure-autocomplete-popup[hidden] {
+  display: none !important;
+}
+
+#smarttex-figure-autocomplete-popup {
+  position: fixed;
+  z-index: 2147483646;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(560px, calc(100vw - 18px));
+  max-height: min(470px, calc(100vh - 18px));
+  overflow: hidden;
+  border: 1px solid rgb(111 127 147 / 52%);
+  border-radius: 10px;
+  color: #1d2939;
+  background: #fff;
+  box-shadow:
+    0 16px 42px rgb(15 23 42 / 24%),
+    0 3px 9px rgb(15 23 42 / 12%);
+  font: 12px/1.38 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-figure-autocomplete-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid #e3e8ef;
+  color: #475569;
+  background: #f7f9fc;
+}
+
+.smarttex-figure-autocomplete-query {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-figure-autocomplete-unused {
+  max-width: min(310px, 42vw);
+  padding: 3px 8px;
+  overflow: hidden;
+  border: 1px solid #9dc9ef;
+  border-radius: 999px;
+  color: #175f99;
+  background: #eaf5ff;
+  font: 650 10.5px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.smarttex-figure-autocomplete-unused:hover {
+  border-color: #5aa9e7;
+  background: #dceeff;
+}
+
+.smarttex-figure-autocomplete-unused.smarttex-figure-autocomplete-unused-active {
+  border-color: #0f63ad;
+  color: #fff;
+  background: #1674c7;
+}
+
+.smarttex-figure-autocomplete-unused.smarttex-figure-autocomplete-unused-active:hover {
+  background: #0f63ad;
+}
+
+.smarttex-figure-autocomplete-close {
+  display: inline-grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #64748b;
+  background: transparent;
+  font: 500 19px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-figure-autocomplete-close:hover {
+  color: #172033;
+  background: #e7edf5;
+}
+
+.smarttex-figure-autocomplete-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.smarttex-figure-autocomplete-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
   width: 100%;
   min-width: 0;
-  max-width: 100%;
-  white-space: normal;
+  padding: 8px 11px;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid #edf0f4;
+  border-radius: 0;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.smarttex-figure-autocomplete-item:hover,
+.smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-selected {
+  background: #eceff3;
+}
+
+/* Blue means one thing only: the text currently in includegraphics exactly
+   equals this file path. Keyboard selection/hover remains neutral gray. */
+.smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact {
+  background: #e1f0ff;
+  box-shadow: inset 3px 0 #1674d1;
+}
+
+.smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact:hover,
+.smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact.smarttex-figure-autocomplete-selected {
+  background: #e1f0ff;
+  box-shadow: inset 3px 0 #1674d1;
+}
+
+.smarttex-figure-autocomplete-check {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  color: #17833f;
+  font: 800 15px/1 system-ui, sans-serif;
+}
+
+.smarttex-figure-autocomplete-path {
+  min-width: 0;
+  overflow: hidden;
+  color: #0969da;
+  background: transparent;
+  font: 650 11.5px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-figure-autocomplete-status {
+  color: #17833f;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.smarttex-figure-autocomplete-empty {
+  margin: 0;
+  padding: 22px 16px;
+  color: #66768a;
+  text-align: center;
+}
+
+@media (prefers-color-scheme: dark) {
+  #smarttex-figure-autocomplete-popup {
+    border-color: rgb(130 151 176 / 60%);
+    color: #e3ebf5;
+    background: #182230;
+    box-shadow:
+      0 18px 48px rgb(0 0 0 / 48%),
+      0 3px 10px rgb(0 0 0 / 28%);
+  }
+
+  .smarttex-figure-autocomplete-header {
+    border-color: #3a4657;
+    color: #9cadc1;
+    background: #222e3e;
+  }
+
+  .smarttex-figure-autocomplete-unused {
+    border-color: #436d96;
+    color: #b9dcff;
+    background: #17324c;
+  }
+
+  .smarttex-figure-autocomplete-unused:hover {
+    border-color: #5c96cb;
+    background: #1d4264;
+  }
+
+  .smarttex-figure-autocomplete-unused.smarttex-figure-autocomplete-unused-active {
+    border-color: #74b9f2;
+    color: #fff;
+    background: #1669ae;
+  }
+
+  .smarttex-figure-autocomplete-item {
+    border-color: #354154;
+    color: #d9e2ee;
+    background: #182230;
+  }
+
+  .smarttex-figure-autocomplete-item:hover,
+  .smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-selected {
+    background: #303846;
+  }
+
+  .smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact,
+  .smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact:hover,
+  .smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact.smarttex-figure-autocomplete-selected {
+    background: #123a61;
+    box-shadow: inset 3px 0 #58a6ff;
+  }
+
+  .smarttex-figure-autocomplete-path {
+    color: #79c0ff;
+  }
+
+  .smarttex-figure-autocomplete-check,
+  .smarttex-figure-autocomplete-status {
+    color: #66d58a;
+  }
+
+  .smarttex-figure-autocomplete-empty {
+    color: #9cadc1;
+  }
+
+  .smarttex-figure-autocomplete-close {
+    color: #aab8ca;
+  }
+
+  .smarttex-figure-autocomplete-close:hover {
+    color: #fff;
+    background: #35445a;
+  }
+}
+
+@media (max-width: 620px) {
+  .smarttex-figure-autocomplete-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .smarttex-figure-autocomplete-unused {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+    max-width: 100%;
+  }
+
+  .smarttex-figure-autocomplete-close {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+/* Label-reference guard */
+.smarttex-label-guard-dialog {
+  position: fixed;
+  z-index: 2147483646;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  overflow: hidden;
+  color: #17202b;
+  background: #fff;
+  border: 1px solid #aeb8c5;
+  border-radius: 8px;
+  box-shadow: 0 12px 36px rgb(0 0 0 / 26%);
+  font: 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.smarttex-label-guard-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 10px 8px 12px;
+  border-bottom: 1px solid #d8dee7;
+  background: #f4f7fa;
+}
+
+.smarttex-label-guard-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.smarttex-label-guard-count,
+.smarttex-label-guard-description {
+  margin: 3px 0 0;
+  color: #536171;
+}
+
+.smarttex-label-guard-description {
+  padding: 0 12px;
+}
+
+.smarttex-label-guard-close {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: flex-start;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #536171;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font-size: 22px;
+  line-height: 24px;
+  cursor: pointer;
+}
+
+.smarttex-label-guard-close:hover {
+  color: #15202c;
+  background: #e2e8ef;
+}
+
+.smarttex-label-guard-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 8px 0 0;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.smarttex-label-guard-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  padding: 8px;
+  border: 1px solid #d8dee7;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.smarttex-label-guard-item + .smarttex-label-guard-item {
+  margin-top: 6px;
+}
+
+.smarttex-label-guard-link {
+  min-width: 0;
+  color: #0969da;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.smarttex-label-guard-link:hover,
+.smarttex-label-guard-link:focus-visible {
+  text-decoration: underline;
+}
+
+.smarttex-label-guard-excerpt {
+  grid-column: 1 / -1;
+  color: #667587;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-label-guard-item-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.smarttex-label-guard-item-actions button,
+.smarttex-label-guard-footer button {
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 1px solid #aeb8c5;
+  border-radius: 5px;
+  background: #f6f8fa;
+  color: #253242;
+  cursor: pointer;
+}
+
+.smarttex-label-guard-change,
+.smarttex-label-guard-update-all {
+  border-color: #1f75cb !important;
+  background: #1f75cb !important;
+  color: #fff !important;
+}
+
+.smarttex-label-guard-item-actions button:hover,
+.smarttex-label-guard-footer button:hover:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+.smarttex-label-guard-dialog button:disabled,
+.smarttex-label-guard-dialog [aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.smarttex-label-guard-status {
+  min-height: 18px;
+  padding: 0 12px 6px;
+  color: #536171;
+}
+
+.smarttex-label-guard-status-error {
+  color: #b42318;
+}
+
+.smarttex-label-guard-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 9px 10px;
+  border-top: 1px solid #d8dee7;
+  background: #f4f7fa;
+}
+
+.smarttex-label-guard-preview {
+  position: fixed;
+  z-index: 2147483647;
+  width: min(640px, calc(100vw - 20px));
+  max-height: min(430px, calc(100vh - 20px));
+  overflow: auto;
+  padding: 8px 11px 11px;
+  color: #17202b;
+  background: #fff;
+  border: 1px solid #aeb8c5;
+  border-radius: 7px;
+  box-shadow: 0 10px 32px rgb(0 0 0 / 28%);
+  pointer-events: auto;
+  font: 11.5px/1.48 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.smarttex-label-guard-preview-heading {
+  margin-bottom: 6px;
+  color: #667587;
+  font: 12px/1.3 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.smarttex-label-guard-preview-body {
   overflow-wrap: anywhere;
 }
 
-#smarttex-toolbar-slot .smarttex-nextcloud-update-all {
-  margin-left: 4px;
+.smarttex-label-guard-preview .katex-display {
+  margin: 5px 0;
+  overflow: visible;
+}
+
+.smarttex-label-guard-preview-math {
+  display: inline-block;
+  margin: 0 0.08em;
+  vertical-align: -0.08em;
+}
+
+.smarttex-label-guard-preview-math-display {
+  display: block;
+  overflow-x: auto;
+}
+
+.smarttex-label-guard-preview-link {
+  color: #0969da;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.smarttex-label-guard-preview-link:hover,
+.smarttex-label-guard-preview-link:focus-visible {
+  text-decoration: underline;
+}
+
+.smarttex-label-guard-preview-link[aria-disabled="true"] {
+  color: inherit;
+  cursor: default;
+  text-decoration: none;
+}
+
+.smarttex-label-guard-preview-current {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: rgb(255 214 102 / 42%);
+}
+
+.smarttex-label-guard-preview-emphasis {
+  font-style: italic;
+}
+
+.smarttex-label-guard-preview-code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #edf2f7;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-label-guard-dialog,
+  .smarttex-label-guard-item,
+  .smarttex-label-guard-preview {
+    color: #dce6f2;
+    background: #182230;
+    border-color: #3a4657;
+  }
+
+  .smarttex-label-guard-header,
+  .smarttex-label-guard-footer {
+    background: #222e3e;
+    border-color: #3a4657;
+  }
+
+  .smarttex-label-guard-count,
+  .smarttex-label-guard-description,
+  .smarttex-label-guard-excerpt,
+  .smarttex-label-guard-status,
+  .smarttex-label-guard-preview-heading {
+    color: #9cadc1;
+  }
+
+  .smarttex-label-guard-link {
+    color: #79c0ff;
+  }
+
+  .smarttex-label-guard-preview-link {
+    color: #79c0ff;
+  }
+
+  .smarttex-label-guard-preview-current {
+    background: rgb(160 118 24 / 55%);
+  }
+
+  .smarttex-label-guard-preview-code {
+    background: #2b394b;
+  }
+
+  .smarttex-label-guard-close {
+    color: #aab8ca;
+  }
+
+  .smarttex-label-guard-close:hover {
+    color: #fff;
+    background: #35445a;
+  }
+
+  .smarttex-label-guard-item-actions button,
+  .smarttex-label-guard-footer button {
+    color: #dce6f2;
+    background: #263244;
+    border-color: #4a586c;
+  }
+
+  .smarttex-label-guard-status-error {
+    color: #ff8f86;
+  }
+}
+
+.smarttex-label-guard-busy .smarttex-label-guard-link {
+  pointer-events: none;
+}
+
+/* While the editor viewport is actually moving, hide all source-positioned
+   overlays. Highlights and badges are repositioned after scrolling settles;
+   popup elements are explicitly closed and are not automatically restored. */
+html.smarttex-editor-scrolling #smarttex-source-structure-highlights,
+html.smarttex-editor-scrolling #smarttex-source-number-badges,
+html.smarttex-editor-scrolling #smarttex-comment-highlights,
+html.smarttex-editor-scrolling #smarttex-comment-icons,
+html.smarttex-editor-scrolling #smarttex-comment-selection-popup,
+html.smarttex-editor-scrolling #smarttex-equation-preview,
+html.smarttex-editor-scrolling #smarttex-graphic-autocomplete-preview,
+html.smarttex-editor-scrolling #smarttex-reference-autocomplete-popup,
+html.smarttex-editor-scrolling #smarttex-citation-popup,
+html.smarttex-editor-scrolling #smarttex-figure-autocomplete-popup,
+html.smarttex-editor-scrolling .smarttex-document-reference-popup,
+html.smarttex-editor-scrolling .smarttex-label-guard-preview,
+html.smarttex-editor-scrolling .smarttex-popup-loading-spinner {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.smarttex-label-guard-preview-secondary {
+  color: #526174;
+  font-size: 0.95em;
+}
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-label-guard-preview-secondary {
+    color: #aebed0;
+  }
+}
+
+/* SmartTeX per-document options menu opened from the S hamburger button. */
+#smarttex-settings-menu,
+#smarttex-settings-menu *,
+#smarttex-settings-menu *::before,
+#smarttex-settings-menu *::after {
+  box-sizing: border-box;
+}
+
+#smarttex-settings-menu[hidden] {
+  display: none !important;
+}
+
+#smarttex-settings-menu {
+  position: fixed;
+  z-index: 2147483647;
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  overflow: hidden;
+  border: 1px solid rgb(111 127 147 / 55%);
+  border-radius: 12px;
+  color: #172033;
+  background: rgb(255 255 255 / 98%);
+  box-shadow: 0 18px 46px rgb(15 23 42 / 24%), 0 3px 10px rgb(15 23 42 / 14%);
+  font: 13px/1.35 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#smarttex-settings-menu > header,
+#smarttex-settings-menu > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-color: #d8e0ea;
+  background: #f8fafc;
+}
+
+#smarttex-settings-menu > header {
+  border-bottom: 1px solid #d8e0ea;
+}
+
+#smarttex-settings-menu > footer {
+  border-top: 1px solid #d8e0ea;
+}
+
+.smarttex-settings-close,
+.smarttex-settings-reset {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid transparent;
+  color: #526071;
+  background: transparent;
+  cursor: pointer;
+}
+
+.smarttex-settings-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
+  font: 22px/1 system-ui, sans-serif;
+}
+
+.smarttex-settings-reset {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-color: #c8d2df;
+  border-radius: 7px;
+  font: 17px/1 system-ui, sans-serif;
+}
+
+.smarttex-settings-close:hover,
+.smarttex-settings-reset:hover:not(:disabled) {
+  color: #0969da;
+  background: #eaf4ff;
+}
+
+.smarttex-settings-reset:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.smarttex-settings-use-presets {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid #d8e0ea;
+  background: #eef6ff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.smarttex-settings-use-presets input,
+.smarttex-settings-checkbox-label input,
+.smarttex-settings-highlight-label input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #1674d1;
+}
+
+.smarttex-settings-scroll-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#smarttex-settings-menu section {
+  margin: 0;
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid #e5eaf0;
+  background: transparent;
+}
+
+#smarttex-settings-menu section:last-child {
+  border-bottom: 0;
+}
+
+#smarttex-settings-menu h3 {
+  margin: 0 0 8px;
+  color: #344054;
+  font: 700 12px/1.3 Inter, ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.smarttex-settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 0;
+}
+
+.smarttex-settings-row + .smarttex-settings-row {
+  border-top: 1px solid rgb(216 224 234 / 65%);
+}
+
+.smarttex-settings-row label {
+  min-width: 0;
+  margin: 0;
+  color: inherit;
+  font: 600 13px/1.35 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-settings-checkbox-label,
+.smarttex-settings-highlight-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.smarttex-settings-row-select {
+  grid-template-columns: minmax(0, 1fr) minmax(126px, 42%) auto;
+}
+
+.smarttex-settings-row-select select {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 3px 25px 3px 7px;
+  border: 1px solid #b9c5d3;
+  border-radius: 7px;
+  color: #172033;
+  background: #fff;
+  font: 12px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-settings-row-highlight {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.smarttex-settings-row-highlight input[type="color"] {
+  width: 38px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid #b9c5d3;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.smarttex-settings-row-range {
+  grid-template-columns: minmax(0, 1fr) auto minmax(100px, 34%) auto;
+}
+
+.smarttex-settings-row-range input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: #1674d1;
+}
+
+.smarttex-settings-range-value {
+  min-width: 38px;
+  color: #526071;
+  font: 12px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-align: right;
+}
+
+#smarttex-settings-menu.smarttex-settings-using-presets .smarttex-settings-scroll-body {
+  background: #fbfcfe;
+}
+
+#smarttex-settings-menu :disabled:not(.smarttex-settings-reset) {
+  cursor: default;
+  opacity: 0.68;
+}
+
+.smarttex-settings-legal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+}
+
+.smarttex-settings-legal h3 {
+  flex: 0 0 100%;
+  margin-bottom: 2px !important;
+}
+
+.smarttex-settings-legal a {
+  color: #0969da;
+  text-decoration: none;
+}
+
+.smarttex-settings-legal a:hover {
+  text-decoration: underline;
+}
+
+.smarttex-settings-edit-presets {
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid #b9c5d3;
+  border-radius: 8px;
+  color: #24415f;
+  background: #fff;
+  font: 700 12px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-settings-edit-presets:hover {
+  border-color: #2583e9;
+  color: #0969da;
+  background: #eef6ff;
+}
+
+@media (max-width: 520px) {
+  .smarttex-settings-row-select,
+  .smarttex-settings-row-range {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .smarttex-settings-row-select select,
+  .smarttex-settings-row-range input[type="range"] {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  #smarttex-settings-menu {
+    border-color: #435269;
+    color: #e5edf7;
+    background: rgb(29 39 54 / 98%);
+  }
+
+  #smarttex-settings-menu > header,
+  #smarttex-settings-menu > footer,
+  .smarttex-settings-use-presets {
+    border-color: #415169;
+    background: #233044;
+  }
+
+  .smarttex-settings-use-presets {
+    background: #203851;
+  }
+
+  #smarttex-settings-menu section,
+  .smarttex-settings-row + .smarttex-settings-row {
+    border-color: #334155;
+  }
+
+  #smarttex-settings-menu h3 {
+    color: #aebdd0;
+  }
+
+  #smarttex-settings-menu.smarttex-settings-using-presets .smarttex-settings-scroll-body {
+    background: #1a2432;
+  }
+
+  .smarttex-settings-close,
+  .smarttex-settings-reset,
+  .smarttex-settings-range-value {
+    color: #aebdd0;
+  }
+
+  .smarttex-settings-reset,
+  .smarttex-settings-row-select select,
+  .smarttex-settings-row-highlight input[type="color"],
+  .smarttex-settings-edit-presets {
+    border-color: #53647a;
+  }
+
+  .smarttex-settings-row-select select,
+  .smarttex-settings-edit-presets {
+    color: #e5edf7;
+    background: #111827;
+  }
+
+  .smarttex-settings-close:hover,
+  .smarttex-settings-reset:hover:not(:disabled),
+  .smarttex-settings-edit-presets:hover {
+    color: #79c0ff;
+    background: #263b53;
+  }
+
+  .smarttex-settings-legal a {
+    color: #79c0ff;
+  }
+}
+
+/* Shared loading indicators for previews and completion lists. */
+.smarttex-inline-loading-spinner {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  background: transparent;
+  animation: smarttex-spinner-spin 0.7s linear infinite;
+}
+
+.smarttex-inline-loading-spinner[hidden] {
+  display: none !important;
+}
+
+.smarttex-list-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.smarttex-preview-heading-actions {
+  align-items: center;
+}
+
+.smarttex-preview-loading-indicator,
+.smarttex-graphic-preview-spinner {
+  color: #1769aa;
+}
+
+.smarttex-figure-popup-placeholder.smarttex-figure-popup-resolving {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  text-align: left;
+}
+
+.smarttex-figure-popup-placeholder.smarttex-figure-popup-resolving::before {
+  content: "";
+  width: 15px;
+  height: 15px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  background: transparent;
+  animation: smarttex-spinner-spin 0.7s linear infinite;
+}
+
+/* The includegraphics selection preview uses the same zoom/pan controller as
+   ordinary figure popups without changing the outer completion-popup size. */
+.smarttex-graphic-autocomplete-output .smarttex-graphic-autocomplete-figure {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.smarttex-graphic-autocomplete-output .smarttex-graphic-autocomplete-viewport {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+}
+
+.smarttex-graphic-autocomplete-output .smarttex-graphic-autocomplete-media {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.smarttex-graphic-autocomplete-output .smarttex-graphic-autocomplete-media > img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.smarttex-label-guard-footer-spacer {
+  flex: 1 1 auto;
+}
+
+.smarttex-label-guard-restore {
+  border-color: #74859a !important;
+  background: #fff !important;
+  color: #253242 !important;
+}
+
+.smarttex-toolbar-sigma {
+  font-size: 19px;
+  line-height: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-preview-loading-indicator,
+  .smarttex-graphic-preview-spinner {
+    color: #79c0ff;
+  }
+
+  .smarttex-label-guard-restore {
+    border-color: #607089 !important;
+    background: #263244 !important;
+    color: #dce6f2 !important;
+  }
+}
+
+.smarttex-graphic-autocomplete-output .smarttex-graphic-autocomplete-viewport.smarttex-figure-popup-zoomed .smarttex-graphic-autocomplete-image {
+  max-width: none;
+  max-height: none;
+}
+
+.smarttex-label-guard-footer {
+  flex-wrap: wrap;
+}
+
+/* Keep zoomed media inside a fixed clipping viewport. The media is removed
+   from intrinsic sizing after its base geometry has been captured, so panning
+   cannot enlarge the popup or its highlight-occlusion rectangle. */
+.smarttex-figure-popup-viewport.smarttex-figure-popup-viewport-frozen {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  contain: layout paint;
+}
+
+.smarttex-figure-popup-viewport.smarttex-figure-popup-viewport-frozen
+  > .smarttex-figure-popup-media.smarttex-figure-popup-media-pannable {
+  position: absolute;
+  inset: 0 auto auto 0;
+  margin: 0;
+}
+
+.smarttex-graphic-autocomplete-output,
+.smarttex-graphic-autocomplete-output .smarttex-graphic-autocomplete-figure,
+.smarttex-graphic-autocomplete-output .smarttex-graphic-autocomplete-viewport {
+  min-width: 0;
+  min-height: 0;
+}
+
+.smarttex-label-guard-preview-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  color: #667587;
+}
+
+.smarttex-label-guard-preview-loading .smarttex-inline-loading-spinner {
+  flex: 0 0 auto;
+}
+
+
+.smarttex-settings-comment-profile {
+  flex: 0 0 auto;
+  border-bottom: 1px solid #d8e0ea !important;
+  background: #fff !important;
+}
+.smarttex-settings-comment-profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.smarttex-settings-comment-profile-grid label {
+  margin: 0;
+  color: inherit;
+  font: 600 12px/1.3 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+.smarttex-settings-comment-profile-grid input[type="text"] {
+  display: block;
+  width: 100%;
+  height: 30px;
+  margin-top: 4px;
+  padding: 4px 7px;
+  border: 1px solid #b9c5d3;
+  border-radius: 7px;
+  color: #172033;
+  background: #fff;
+  font: 12px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+.smarttex-settings-comment-profile-grid input[type="color"] {
+  display: block;
+  width: 42px;
+  height: 30px;
+  margin-top: 4px;
+  padding: 2px;
+  border: 1px solid #b9c5d3;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+.smarttex-editor-dark .smarttex-settings-comment-profile,
+#smarttex-settings-menu.smarttex-editor-dark .smarttex-settings-comment-profile {
+  border-color: #3b4657 !important;
+  background: #222b38 !important;
+}
+#smarttex-settings-menu.smarttex-editor-dark .smarttex-settings-comment-profile-grid input[type="text"],
+#smarttex-settings-menu.smarttex-editor-dark .smarttex-settings-comment-profile-grid input[type="color"] {
+  border-color: #556176;
+  color: #e8eef7;
+  background: #18202c;
+}
+
+/* -------------------------------------------------------------------------
+   Collaborative comments and marker highlights
+   ------------------------------------------------------------------------- */
+
+#smarttex-comments-toggle-button.smarttex-comments-active,
+#smarttex-comments-toggle-button[aria-pressed="true"] {
+  background: rgba(31, 111, 235, 0.14) !important;
+  box-shadow: inset 0 0 0 1px rgba(31, 111, 235, 0.28);
+}
+
+#smarttex-comments-toggle-button {
+  position: relative;
+}
+
+#smarttex-comments-toggle-button.smarttex-comments-has-unread::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.92);
+  pointer-events: none;
+}
+
+.smarttex-editor-dark #smarttex-comments-toggle-button.smarttex-comments-has-unread::after {
+  box-shadow: 0 0 0 1.5px rgba(24, 32, 44, 0.96);
+}
+
+.smarttex-comments-unread-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin: 0 5px 0 1px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.22);
+  vertical-align: middle;
+}
+
+.smarttex-comment-entry.smarttex-comment-unread,
+.smarttex-comment-mark-entry.smarttex-comment-mark-unread {
+  box-shadow: inset 3px 0 0 rgba(245, 158, 11, 0.72);
+}
+
+
+/* The comments pane is body-mounted so it does not depend on CollabTeX's
+   internal split-pane DOM. The source editor gives up the same horizontal
+   space, making the dock appear between source and PDF even when React changes
+   the layout wrappers. */
+.cm-editor.smarttex-comments-editor-docked,
+.CodeMirror.smarttex-comments-editor-docked {
+  width: calc(100% - var(--smarttex-comments-dock-width, 340px)) !important;
+  max-width: calc(100% - var(--smarttex-comments-dock-width, 340px)) !important;
+  box-sizing: border-box !important;
+}
+
+.ace_editor.smarttex-comments-editor-docked {
+  width: calc(100% - var(--smarttex-comments-dock-width, 340px)) !important;
+  max-width: calc(100% - var(--smarttex-comments-dock-width, 340px)) !important;
+  right: auto !important;
+  box-sizing: border-box !important;
+}
+
+/* Legacy CollabTeX Ace directive: #editor is the actual editor surface below
+   the full-width formatting toolbar. Constrain both it and its nested wrapper
+   so the comments pane reserves real space immediately and while dragging. */
+#editor.smarttex-comments-editor-docked {
+  width: calc(100% - var(--smarttex-comments-dock-width, 340px)) !important;
+  max-width: calc(100% - var(--smarttex-comments-dock-width, 340px)) !important;
+  right: auto !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+#editor.smarttex-comments-editor-docked > .ace-editor-wrapper,
+#editor.smarttex-comments-editor-docked .ace_editor {
+  width: 100% !important;
+  max-width: 100% !important;
+  right: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* Legacy/current CollabTeX: keep the source layout pane itself at its native
+   full width so the formatting toolbar spans editor + comments. The actual
+   editor surface below the toolbar is narrowed via smarttex-comments-editor-docked. */
+.smarttex-comments-source-pane-docked {
+  overflow: hidden !important;
+}
+
+/* In PDF-only mode the PDF pane is right-anchored, so reducing only its width
+   reserves space for comments on its left without moving the outer workspace. */
+.smarttex-comments-pdf-pane-docked {
+  width: var(--smarttex-comments-pdf-width) !important;
+  max-width: var(--smarttex-comments-pdf-width) !important;
+}
+
+#smarttex-comments-pane {
+  --smarttex-comments-bg: #fff;
+  --smarttex-comments-fg: #172033;
+  --smarttex-comments-muted: #667587;
+  --smarttex-comments-border: rgba(93, 108, 128, 0.28);
+  --smarttex-comments-card: rgba(110, 128, 150, 0.065);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  min-width: 220px;
+  max-width: 680px;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  border-left: 1px solid var(--smarttex-comments-border);
+  border-right: 1px solid var(--smarttex-comments-border);
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-bg);
+  font: 13px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  z-index: 8;
+}
+
+#smarttex-comments-pane[hidden] {
+  display: none !important;
+}
+
+#smarttex-comments-pane.smarttex-comments-dark {
+  --smarttex-comments-border: rgba(195, 207, 224, 0.20);
+  --smarttex-comments-card: rgba(255, 255, 255, 0.055);
+}
+
+.smarttex-comments-resizer {
+  position: absolute;
+  z-index: 10;
+  top: 0;
+  left: -3px;
+  right: auto;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.smarttex-comments-resizer:hover,
+.smarttex-comments-resizer:active {
+  background: rgba(72, 136, 218, 0.24);
+}
+
+.smarttex-comments-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 5px 10px 5px 8px;
+  border-bottom: 1px solid var(--smarttex-comments-border);
+  background: var(--smarttex-comments-bg);
+}
+
+.smarttex-comments-header > strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.smarttex-comments-add {
+  display: inline-grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  padding: 0;
+  border: 1px solid var(--smarttex-comments-border);
+  border-radius: 6px;
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-card);
+  font: 600 21px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-comments-add:hover {
+  background: rgba(72, 136, 218, 0.15);
+}
+
+.smarttex-comments-close {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: flex-start;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--smarttex-comments-muted);
+  background: transparent;
+  font: 500 22px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-comments-close:hover {
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-card);
+}
+
+.smarttex-comments-sync-status {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin-left: 0;
+  text-align: right;
+  overflow: hidden;
+  color: var(--smarttex-comments-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-comments-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 10px 9px 14px;
+  scrollbar-gutter: stable;
+}
+
+.smarttex-comments-empty {
+  padding: 18px 8px;
+  color: var(--smarttex-comments-muted);
+  text-align: center;
+}
+
+.smarttex-comment-thread {
+  position: relative;
+  margin: 0 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--smarttex-comments-border);
+  border-left: 4px solid var(--smarttex-thread-color, #268bd2);
+  border-radius: 8px;
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-card);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.smarttex-comments-dark .smarttex-comment-thread {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+}
+
+.smarttex-comment-thread-target {
+  box-shadow: 0 0 0 2px var(--smarttex-thread-color, #268bd2), 0 2px 10px rgba(16, 24, 40, 0.16);
+}
+
+.smarttex-comment-thread-cursor-active,
+.smarttex-comment-thread-icon-active {
+  box-shadow: 0 0 0 2px var(--smarttex-thread-color, #268bd2), 0 2px 10px rgba(16, 24, 40, 0.16);
+}
+
+.smarttex-comment-thread-header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 31px;
+  padding: 3px 4px 2px 5px;
+  border-bottom: 1px solid var(--smarttex-comments-border);
+}
+
+.smarttex-comment-thread-collapsed .smarttex-comment-thread-header {
+  border-bottom: 0;
+}
+
+.smarttex-comment-thread-spacer {
+  flex: 1 1 auto;
+}
+
+.smarttex-comment-mark-entry .smarttex-comment-thread-header {
+  border-bottom: 0;
+}
+
+.smarttex-comment-mark-label {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  color: var(--smarttex-comments-fg);
+  font-size: 12px;
+}
+
+.smarttex-comment-mark-label strong {
+  overflow: hidden;
+  max-width: 120px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-comment-mark-label span {
+  color: var(--smarttex-comments-muted);
+  font-style: italic;
+}
+
+.smarttex-comment-mark-location svg {
+  fill: none;
+}
+
+.smarttex-comment-thread-location,
+.smarttex-comment-thread-action {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--smarttex-comments-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.smarttex-comment-thread-location {
+  color: var(--smarttex-thread-color, #268bd2);
+}
+
+.smarttex-comment-thread-location:hover,
+.smarttex-comment-thread-action:hover {
+  color: var(--smarttex-comments-fg);
+  background: rgba(114, 132, 156, 0.12);
+}
+
+.smarttex-comment-thread-trash:hover {
+  color: #d93025;
+  background: rgba(217, 48, 37, 0.10);
+}
+
+.smarttex-comment-color-button:hover {
+  color: var(--smarttex-thread-color, #268bd2);
+  background: rgba(72, 136, 218, 0.12);
+}
+
+.smarttex-comment-color-input {
+  position: fixed !important;
+  left: -10000px !important;
+  top: -10000px !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.smarttex-comment-thread-location svg,
+.smarttex-comment-thread-action svg,
+#smarttex-comment-selection-popup svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.smarttex-comment-thread-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.smarttex-comment-entry {
+  position: relative;
+  padding: 9px 9px 10px;
+  border-bottom: 1px solid var(--smarttex-comments-border);
+}
+
+.smarttex-comment-entry-heading,
+.smarttex-comment-draft-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 5px;
+}
+
+.smarttex-comment-entry-heading strong,
+.smarttex-comment-draft-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--smarttex-comments-fg);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-comment-entry-heading strong::before,
+.smarttex-comment-draft-heading strong::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 6px 1px 0;
+  border-radius: 50%;
+  background: var(--smarttex-comment-author-color, var(--smarttex-thread-color, #268bd2));
+  vertical-align: middle;
+}
+
+.smarttex-comment-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: #d93025;
+  background: transparent;
+  font: 700 18px/1 Arial, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-comment-remove:hover {
+  background: rgba(217, 48, 37, 0.11);
+}
+
+.smarttex-comment-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.smarttex-comment-reply-button {
+  align-self: flex-start;
+  margin: 7px 8px 8px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 5px;
+  color: #2d6fc0;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.smarttex-comments-dark .smarttex-comment-reply-button {
+  color: #78b7ff;
+}
+
+.smarttex-comment-reply-button:hover {
+  background: rgba(72, 136, 218, 0.12);
+}
+
+.smarttex-comment-reply-editor,
+.smarttex-comment-thread-draft {
+  padding: 8px;
+}
+
+.smarttex-comment-thread-draft {
+  border-style: dashed;
+}
+
+.smarttex-comment-thread-draft .smarttex-comment-draft-heading {
+  padding: 1px 1px 0;
+}
+
+.smarttex-comment-thread textarea,
+.smarttex-comment-reply-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 58px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 7px 8px;
+  border: 1px solid var(--smarttex-comments-border);
+  border-radius: 6px;
+  outline: none;
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-bg);
+  font: inherit;
+}
+
+.smarttex-comment-thread textarea:focus,
+.smarttex-comment-reply-editor textarea:focus {
+  border-color: #4b91e2;
+  box-shadow: 0 0 0 2px rgba(75, 145, 226, 0.16);
+}
+
+.smarttex-comment-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.smarttex-comment-edit-actions button,
+.smarttex-comments-footer button {
+  padding: 4px 9px;
+  border: 1px solid var(--smarttex-comments-border);
+  border-radius: 6px;
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-bg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.smarttex-comment-edit-actions button:hover,
+.smarttex-comments-footer button:hover {
+  background: var(--smarttex-comments-card);
+}
+
+.smarttex-comment-edit-actions .smarttex-comment-primary {
+  border-color: #337dc7;
+  color: #fff;
+  background: #337dc7;
+}
+
+.smarttex-comment-edit-actions .smarttex-comment-primary:hover {
+  background: #286db1;
+}
+
+.smarttex-comment-collapsed-preview {
+  overflow: hidden;
+  padding: 2px 9px 8px 9px;
+  color: var(--smarttex-comments-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-comments-footer {
+  flex: 0 0 auto;
+  padding: 8px 9px;
+  border-top: 1px solid var(--smarttex-comments-border);
+  background: var(--smarttex-comments-bg);
+}
+
+.smarttex-comments-footer button {
+  width: 100%;
+}
+
+#smarttex-comment-selection-popup {
+  position: fixed;
+  z-index: 2147483647;
+  display: flex;
+  gap: 3px;
+  box-sizing: border-box;
+  padding: 3px;
+  border: 1px solid rgba(93, 108, 128, 0.34);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 4px 16px rgba(18, 27, 41, 0.22);
+  backdrop-filter: blur(4px);
+}
+
+#smarttex-comment-selection-popup[hidden] {
+  display: none !important;
+}
+
+#smarttex-comment-selection-popup button {
+  display: inline-grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  padding: 5px;
+  border: 0;
+  border-radius: 5px;
+  color: #2f4055;
+  background: transparent;
+  cursor: pointer;
+}
+
+#smarttex-comment-selection-popup button:hover {
+  color: #1e65aa;
+  background: rgba(55, 126, 196, 0.12);
+}
+
+#smarttex-comment-selection-popup.smarttex-comments-dark {
+  border-color: rgba(198, 210, 226, 0.30);
+  background: rgba(31, 39, 51, 0.97);
+}
+#smarttex-comment-selection-popup.smarttex-comments-dark button {
+  color: #d9e4f2;
+}
+#smarttex-comment-selection-popup.smarttex-comments-dark button:hover {
+  color: #8fc5ff;
+  background: rgba(98, 166, 235, 0.15);
+}
+
+/* Keep CollabTeX's nested editor layout synchronized with the resized source
+   pane. The legacy vertical-resizable child has an inline pixel width that is
+   otherwise only recomputed on a browser/layout resize, causing it to paint
+   underneath the comments dock. */
+.smarttex-comments-source-pane-docked {
+  overflow: hidden !important;
+}
+
+.smarttex-comments-source-pane-docked > .editor-container,
+.smarttex-comments-source-pane-docked > .editor-container > .vertical-resizable-top,
+.smarttex-comments-source-pane-docked > .editor-container > .vertical-resizable-top-center,
+.smarttex-comments-source-pane-docked > .editor-container > .vertical-resizable-resizer {
+  width: 100% !important;
+  max-width: 100% !important;
+  right: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* SmartTeX confirmation overlay for destructive comment actions. */
+#smarttex-comments-confirm-overlay,
+#smarttex-comments-confirm-overlay * {
+  box-sizing: border-box;
+}
+
+#smarttex-comments-confirm-overlay[hidden] {
+  display: none !important;
+}
+
+#smarttex-comments-confirm-overlay {
+  position: fixed;
+  z-index: 2147483647;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(10, 18, 30, 0.38);
+  backdrop-filter: blur(1.5px);
+}
+
+.smarttex-comments-confirm-dialog {
+  width: min(420px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid rgba(94, 109, 130, 0.35);
+  border-radius: 10px;
+  color: #172033;
+  background: #fff;
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.30);
+  font: 13px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.smarttex-comments-confirm-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.smarttex-comments-confirm-dialog p {
+  margin: 0;
+  color: #59697c;
+}
+
+.smarttex-comments-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.smarttex-comments-confirm-actions button {
+  min-width: 78px;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid #b9c3cf;
+  border-radius: 6px;
+  background: #fff;
+  color: #172033;
+  cursor: pointer;
+}
+
+.smarttex-comments-confirm-actions .smarttex-comments-confirm-delete.smarttex-comments-confirm-danger {
+  border-color: #c9362b;
+  background: #c9362b;
+  color: #fff;
+}
+
+.smarttex-comments-confirm-actions .smarttex-comments-confirm-delete.smarttex-comments-confirm-primary {
+  border-color: #2563eb;
+  color: #fff;
+  background: #2563eb;
+}
+
+
+.smarttex-comments-confirm-actions button:focus-visible {
+  outline: 2px solid #2674d8;
+  outline-offset: 2px;
+}
+
+body.smarttex-dark #smarttex-comments-confirm-overlay .smarttex-comments-confirm-dialog,
+html[data-theme="dark"] #smarttex-comments-confirm-overlay .smarttex-comments-confirm-dialog,
+#smarttex-comments-confirm-overlay.smarttex-comments-dark .smarttex-comments-confirm-dialog {
+  border-color: rgba(195, 207, 224, 0.24);
+  color: #e7edf5;
+  background: #202a38;
+}
+
+body.smarttex-dark #smarttex-comments-confirm-overlay .smarttex-comments-confirm-dialog p,
+html[data-theme="dark"] #smarttex-comments-confirm-overlay .smarttex-comments-confirm-dialog p,
+#smarttex-comments-confirm-overlay.smarttex-comments-dark .smarttex-comments-confirm-dialog p {
+  color: #aab7c8;
+}
+
+/* Two aligned display-control rows directly below the Comments header. */
+.smarttex-comments-display-controls {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  border-bottom: 1px solid var(--smarttex-comments-border);
+  background: var(--smarttex-comments-bg);
+}
+
+.smarttex-comments-control-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 9px;
+  min-height: 32px;
+  padding: 3px 9px;
+}
+
+.smarttex-comments-control-row + .smarttex-comments-control-row {
+  border-top: 1px solid color-mix(in srgb, var(--smarttex-comments-border) 65%, transparent);
+}
+
+.smarttex-comments-icons-toggle,
+.smarttex-comments-marks-toggle {
+  width: 72px;
+  min-width: 72px;
+  padding: 3px 7px;
+  border: 1px solid var(--smarttex-comments-border);
+  border-radius: 6px;
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-card);
+  font: inherit;
+  cursor: pointer;
+}
+
+.smarttex-comments-icons-toggle[aria-pressed="false"],
+.smarttex-comments-marks-toggle[aria-pressed="false"] {
+  opacity: 0.62;
+}
+
+.smarttex-comments-opacity-label {
+  display: grid;
+  grid-template-columns: 48px minmax(80px, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--smarttex-comments-muted);
+  font-size: 11px;
+}
+
+.smarttex-comments-opacity-label > span {
+  text-align: right;
+}
+
+.smarttex-comments-opacity-label input[type="range"] {
+  min-width: 80px;
+  width: 100%;
+  margin: 0;
+}
+
+.smarttex-comments-opacity-label input[type="range"]:disabled {
+  opacity: 0.4;
+}
+
+/* Comments-pane display settings live behind the gear button and are collapsed
+   on every pane open. */
+.smarttex-comments-settings {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--smarttex-comments-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.smarttex-comments-settings svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.smarttex-comments-settings:hover,
+.smarttex-comments-settings-active {
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-card);
+}
+
+.smarttex-comments-close {
+  margin-left: 0;
+}
+
+.smarttex-comments-display-controls[hidden] {
+  display: none !important;
+}
+
+/* SmartTeX in-window color picker for comment/mark anchor colors. */
+#smarttex-comment-color-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: transparent;
+}
+
+#smarttex-comment-color-overlay[hidden] {
+  display: none !important;
+}
+
+.smarttex-comment-color-picker {
+  position: fixed;
+  width: 232px;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid rgba(83, 102, 126, 0.28);
+  border-radius: 9px;
+  color: #172033;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.25);
+  font: 12px/1.35 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-comment-color-title {
+  margin-bottom: 8px;
+  font-weight: 650;
+  font-size: 13px;
+}
+
+.smarttex-comment-color-swatches {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+  margin-bottom: 9px;
+}
+
+.smarttex-comment-color-swatch {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  outline: 1px solid rgba(71, 85, 105, 0.35);
+  background: var(--smarttex-swatch);
+  cursor: pointer;
+}
+
+.smarttex-comment-color-swatch:hover,
+.smarttex-comment-color-swatch:focus-visible {
+  outline: 2px solid #2674d8;
+  outline-offset: 1px;
+}
+
+.smarttex-comment-color-custom,
+.smarttex-comment-color-hex {
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.smarttex-comment-color-custom > span,
+.smarttex-comment-color-hex > span {
+  color: #667587;
+}
+
+.smarttex-comment-color-native {
+  width: 100%;
+  height: 30px;
+  padding: 1px 3px;
+  border: 1px solid #c8d1dc;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.smarttex-comment-color-hex-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 4px 7px;
+  border: 1px solid #c8d1dc;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.smarttex-comment-color-hex-input.smarttex-comment-color-invalid {
+  border-color: #d93025;
+  box-shadow: 0 0 0 1px rgba(217, 48, 37, 0.18);
+}
+
+.smarttex-comment-color-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.smarttex-comment-color-actions button {
+  min-width: 64px;
+  padding: 5px 9px;
+  border: 1px solid #c8d1dc;
+  border-radius: 6px;
+  color: #25364a;
+  background: #fff;
+  cursor: pointer;
+}
+
+.smarttex-comment-color-actions .smarttex-comment-color-apply {
+  border-color: #2674d8;
+  color: #fff;
+  background: #2674d8;
+}
+
+#smarttex-comment-color-overlay.smarttex-comments-dark .smarttex-comment-color-picker,
+body.smarttex-dark #smarttex-comment-color-overlay .smarttex-comment-color-picker,
+html[data-theme="dark"] #smarttex-comment-color-overlay .smarttex-comment-color-picker {
+  border-color: rgba(195, 207, 224, 0.24);
+  color: #e7edf5;
+  background: #202a38;
+}
+
+#smarttex-comment-color-overlay.smarttex-comments-dark .smarttex-comment-color-custom > span,
+#smarttex-comment-color-overlay.smarttex-comments-dark .smarttex-comment-color-hex > span {
+  color: #aab7c8;
+}
+
+#smarttex-comment-color-overlay.smarttex-comments-dark .smarttex-comment-color-native,
+#smarttex-comment-color-overlay.smarttex-comments-dark .smarttex-comment-color-hex-input {
+  border-color: #526174;
+  color: #e7edf5;
+  background: #182230;
+}
+
+#smarttex-comment-color-overlay.smarttex-comments-dark .smarttex-comment-color-actions button {
+  border-color: #526174;
+  color: #dce6f2;
+  background: #273447;
+}
+
+#smarttex-comment-color-overlay.smarttex-comments-dark .smarttex-comment-color-actions .smarttex-comment-color-apply {
+  border-color: #4d8ee8;
+  color: #fff;
+  background: #2d6fc5;
+}
+
+
+/* -------------------------------------------------------------------------
+   Integrated collaborative Track Changes controls and editor markup
+   ------------------------------------------------------------------------- */
+
+#smarttex-comments-toggle-button.smarttex-review-tracking-active::before {
+  content: "";
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #dc2626;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.94);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.smarttex-editor-dark #smarttex-comments-toggle-button.smarttex-review-tracking-active::before {
+  box-shadow: 0 0 0 1.5px rgba(24, 32, 44, 0.96);
+}
+
+.smarttex-comments-track-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--smarttex-comments-border);
+  background: var(--smarttex-comments-bg);
+}
+
+.smarttex-comments-track-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  padding: 3px 0;
+  color: var(--smarttex-comments-fg);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.smarttex-comments-track-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--smarttex-comments-muted) 42%, transparent);
+  transition: background 120ms ease;
+}
+
+.smarttex-comments-track-switch > span {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  transition: transform 120ms ease;
+}
+
+.smarttex-comments-track-toggle[aria-checked="true"] .smarttex-comments-track-switch {
+  background: #268bd2;
+}
+
+.smarttex-comments-track-toggle[aria-checked="true"] .smarttex-comments-track-switch > span {
+  transform: translateX(14px);
+}
+
+.smarttex-comments-track-view {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 30px;
+  border: 1px solid var(--smarttex-comments-border);
+  border-radius: 5px;
+  padding: 2px 7px;
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-bg);
+  font: inherit;
+}
+
+.smarttex-comments-track-view[hidden] {
+  display: none !important;
+}
+
+#smarttex-review-markup-layer,
+#smarttex-review-comment-highlights,
+#smarttex-review-temporary-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147482500;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.smarttex-review-addition-line {
+  position: fixed;
+  border-bottom: 2px solid #2563eb;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.smarttex-review-deletion-line {
+  position: fixed;
+  box-sizing: border-box;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(220, 38, 38, 0.08) 0,
+      rgba(220, 38, 38, 0.08) 48%,
+      #dc2626 48%,
+      #dc2626 calc(48% + 2px),
+      rgba(220, 38, 38, 0.08) calc(48% + 2px),
+      rgba(220, 38, 38, 0.08) 100%
+    );
+}
+
+.smarttex-review-deleted-text {
+  position: fixed;
+  display: inline-block;
+  max-width: min(55vw, 720px);
+  padding: 0 2px;
+  color: #dc2626;
+  background: rgba(255, 255, 255, 0.88);
+  text-decoration: line-through 2px #dc2626;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  font-family: monospace;
+  line-height: 1.25;
+}
+
+.smarttex-editor-dark .smarttex-review-deleted-text,
+body.smarttex-dark .smarttex-review-deleted-text,
+html[data-theme="dark"] .smarttex-review-deleted-text {
+  background: rgba(24, 32, 44, 0.9);
+}
+
+.smarttex-review-move-deletion-line {
+  position: fixed;
+  box-sizing: border-box;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(22, 163, 74, 0.08) 0,
+      rgba(22, 163, 74, 0.08) 48%,
+      #16a34a 48%,
+      #16a34a calc(48% + 2px),
+      rgba(22, 163, 74, 0.08) calc(48% + 2px),
+      rgba(22, 163, 74, 0.08) 100%
+    );
+}
+
+.smarttex-review-move-origin,
+.smarttex-review-move-target {
+  position: fixed;
+  width: 4px !important;
+  border-radius: 2px;
+  background: #16a34a;
+  pointer-events: none;
+}
+
+.smarttex-review-move-origin {
+  opacity: 0.45;
+}
+
+.smarttex-review-simple-deletion {
+  position: fixed;
+  width: 4px !important;
+  background: #dc2626;
+}
+
+.smarttex-review-change-hit {
+  position: fixed;
+  pointer-events: none;
+  background: transparent;
+}
+
+.smarttex-review-active-change {
+  position: fixed;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.smarttex-review-active-add {
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.smarttex-review-active-delete,
+.smarttex-review-deleted-text-active {
+  background: rgba(220, 38, 38, 0.18);
+}
+
+.smarttex-review-active-move {
+  background: rgba(22, 163, 74, 0.18);
+  box-shadow: inset 4px 0 0 #16a34a;
+}
+
+#smarttex-review-change-popup {
+  position: fixed;
+  z-index: 2147483646;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(100, 116, 139, 0.36);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.98);
+  color: #172033;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.22);
+  font: 12px/1.3 system-ui, sans-serif;
+}
+
+body.smarttex-dark #smarttex-review-change-popup,
+html[data-theme="dark"] #smarttex-review-change-popup {
+  background: rgba(24, 32, 44, 0.98);
+  color: #e8eef7;
+  border-color: rgba(195, 207, 224, 0.28);
+}
+
+.smarttex-review-change-popup-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+#smarttex-review-change-popup button {
+  width: 30px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(100, 116, 139, 0.28);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: 600 15px/1 system-ui, sans-serif;
+}
+
+#smarttex-review-change-popup button:hover {
+  background: rgba(100, 116, 139, 0.12);
+}
+
+#smarttex-review-change-popup .smarttex-review-accept { color: #16a34a; }
+#smarttex-review-change-popup .smarttex-review-reject { color: #dc2626; }
+#smarttex-review-change-popup .smarttex-review-info { color: #475569; }
+#smarttex-review-change-popup .smarttex-review-comment { color: #2563eb; }
+
+.smarttex-review-change-info {
+  max-width: 240px;
+  padding: 4px 5px 2px;
+  border-top: 1px solid rgba(100, 116, 139, 0.22);
+  color: inherit;
+  white-space: nowrap;
+}
+
+.smarttex-review-change-info[hidden] {
+  display: none !important;
+}
+
+#smarttex-review-original-overlay {
+  position: fixed;
+  z-index: 2147482400;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 4px 6px;
+  border: 0;
+  resize: none;
+  outline: 0;
+  color: #172033;
+  background: #fff;
+  font: inherit;
+  line-height: inherit;
+  white-space: pre;
+  overflow: auto;
+}
+
+body.smarttex-dark #smarttex-review-original-overlay,
+html[data-theme="dark"] #smarttex-review-original-overlay,
+#smarttex-review-original-overlay.smarttex-review-dark {
+  color: #e8eef7;
+  background: #18202c;
+}
+
+/* -------------------------------------------------------------------------
+   Unified Review & comments pane
+   ------------------------------------------------------------------------- */
+.smarttex-review-pane-titlebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 5px 7px 5px 10px;
+  border-bottom: 1px solid rgba(16, 34, 52, 0.36);
+  color: #fff;
+  background: #344454;
+}
+
+.smarttex-review-pane-titlebar > strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-review-pane-titlebar .smarttex-comments-sync-status {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.smarttex-review-pane-titlebar .smarttex-comments-close {
+  margin-left: auto;
   align-self: center;
+  color: #fff;
+}
+
+.smarttex-review-pane-titlebar .smarttex-comments-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.smarttex-review-sections {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.smarttex-review-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.smarttex-review-section-collapsed {
+  min-height: 0;
+}
+
+.smarttex-review-subheader,
+.smarttex-comments-header.smarttex-review-subheader {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 3px 7px;
+  border-bottom: 1px solid rgba(76, 129, 171, 0.28);
+  color: #16334d;
+  background: #d8ecff;
+}
+
+.smarttex-review-subheader > strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-review-section-toggle {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: #274d6d;
+  background: transparent;
+  font: 700 15px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-review-section-toggle:hover {
+  background: rgba(45, 105, 155, 0.12);
+}
+
+.smarttex-track-change-count {
+  min-width: 20px;
+  margin-left: auto;
+  color: #4b6983;
+  font-size: 11px;
+  text-align: right;
+}
+
+.smarttex-comments-header.smarttex-review-subheader .smarttex-comments-settings {
+  margin-left: auto;
+}
+
+.smarttex-review-section-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.smarttex-review-section-body[hidden] {
+  display: none !important;
+}
+
+.smarttex-review-horizontal-splitter {
+  position: relative;
+  flex: 0 0 7px;
+  height: 7px;
+  cursor: row-resize;
+  touch-action: none;
+  background: var(--smarttex-comments-bg);
+}
+
+.smarttex-review-horizontal-splitter::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 1px;
+  background: rgba(85, 118, 146, 0.48);
+}
+
+.smarttex-review-horizontal-splitter:hover::after,
+.smarttex-review-horizontal-splitter:active::after {
+  height: 2px;
+  background: #5a9bd0;
+}
+
+.smarttex-review-horizontal-splitter[hidden] {
+  display: none !important;
+}
+
+.smarttex-comments-track-row {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 5px 7px;
+  gap: 7px;
+}
+
+.smarttex-comments-track-toggle {
+  flex: 0 0 auto;
+}
+
+.smarttex-comments-track-view {
+  flex: 1 1 110px;
+  min-width: 92px;
+}
+
+.smarttex-track-accept-all,
+.smarttex-track-reject-all,
+.smarttex-track-change-card-actions button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 5px;
+  background: var(--smarttex-comments-bg);
+  font: 800 18px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-track-accept-all,
+.smarttex-track-change-accept {
+  border: 1px solid rgba(22, 163, 74, 0.45);
+  color: #15803d;
+}
+
+.smarttex-track-reject-all,
+.smarttex-track-change-reject {
+  border: 1px solid rgba(220, 38, 38, 0.45);
+  color: #dc2626;
+}
+
+.smarttex-track-accept-all:hover,
+.smarttex-track-change-accept:hover {
+  background: rgba(22, 163, 74, 0.10);
+}
+
+.smarttex-track-reject-all:hover,
+.smarttex-track-change-reject:hover {
+  background: rgba(220, 38, 38, 0.10);
+}
+
+.smarttex-track-accept-all:disabled,
+.smarttex-track-reject-all:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.smarttex-track-change-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 7px 8px 10px;
+  scrollbar-gutter: stable;
+}
+
+.smarttex-track-change-empty {
+  padding: 15px 8px;
+  color: var(--smarttex-comments-muted);
+  text-align: center;
+}
+
+.smarttex-track-change-card {
+  margin: 0 0 8px;
+  padding: 7px 8px 6px;
+  border: 1px solid var(--smarttex-comments-border);
+  border-left-width: 4px;
+  border-radius: 7px;
+  background: var(--smarttex-comments-card);
+  cursor: pointer;
+}
+
+.smarttex-track-change-card:hover {
+  box-shadow: 0 0 0 1px rgba(72, 136, 218, 0.22);
+}
+
+.smarttex-track-change-insert,
+.smarttex-track-change-replace {
+  border-left-color: #2563eb;
+}
+
+.smarttex-track-change-delete {
+  border-left-color: #dc2626;
+}
+
+.smarttex-track-change-move {
+  border-left-color: #16a34a;
+}
+
+.smarttex-track-change-card-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+
+.smarttex-track-change-card-heading strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.smarttex-track-change-author {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--smarttex-comments-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-track-change-card-heading time {
+  margin-left: auto;
+  color: var(--smarttex-comments-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.smarttex-track-change-excerpt {
+  overflow: hidden;
+  color: var(--smarttex-comments-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.smarttex-track-change-move-links {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.smarttex-track-change-move-links[hidden] {
+  display: none !important;
+}
+
+.smarttex-track-change-move-links a {
+  color: #166534;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.smarttex-comments-dark .smarttex-track-change-move-links a {
+  color: #86efac;
+}
+
+.smarttex-track-change-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--smarttex-comments-border);
+}
+
+.smarttex-track-change-card-actions button {
+  width: 26px;
+  height: 24px;
+  font-size: 16px;
+}
+
+.smarttex-comments-section-body .smarttex-comments-list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.smarttex-comments-section-body .smarttex-comments-footer {
+  flex: 0 0 auto;
+}
+
+/* Coloured flash/highlight when a change is selected from the review list. */
+.smarttex-review-temporary-highlight {
+  position: fixed;
+  border-radius: 2px;
+  background: rgba(37, 99, 235, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.38);
+}
+
+/* Dedicated three-choice stop-tracking dialog. */
+#smarttex-review-stop-overlay,
+#smarttex-review-stop-overlay * {
+  box-sizing: border-box;
+}
+
+#smarttex-review-stop-overlay {
+  position: fixed;
+  z-index: 2147483647;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(10, 18, 30, 0.38);
+  backdrop-filter: blur(1.5px);
+}
+
+.smarttex-review-stop-actions {
+  flex-wrap: wrap;
+}
+
+.smarttex-review-stop-actions .smarttex-review-stop-accept {
+  border-color: #15803d;
+  color: #fff;
+  background: #15803d;
+}
+
+.smarttex-review-stop-actions .smarttex-review-stop-reject {
+  border-color: #c9362b;
+  color: #fff;
+  background: #c9362b;
+}
+
+body.smarttex-dark #smarttex-review-stop-overlay .smarttex-comments-confirm-dialog,
+html[data-theme="dark"] #smarttex-review-stop-overlay .smarttex-comments-confirm-dialog,
+#smarttex-review-stop-overlay.smarttex-comments-dark .smarttex-comments-confirm-dialog {
+  border-color: rgba(195, 207, 224, 0.24);
+  color: #e7edf5;
+  background: #202a38;
+}
+
+body.smarttex-dark #smarttex-review-stop-overlay .smarttex-comments-confirm-dialog p,
+html[data-theme="dark"] #smarttex-review-stop-overlay .smarttex-comments-confirm-dialog p,
+#smarttex-review-stop-overlay.smarttex-comments-dark .smarttex-comments-confirm-dialog p {
+  color: #aab7c8;
 }

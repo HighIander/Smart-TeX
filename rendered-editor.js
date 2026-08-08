@@ -278,18 +278,37 @@
   function renderFigure(container, item, source) {
     const figure = document.createElement("figure");
     figure.className = "smarttex-rendered-editor-figure-content";
-    const model = figureRenderer.parseFigureLayout(item.context?.source || "");
+    const model = figureRenderer.parseFigureLayout(item.context?.source || "", {
+      environment: item.context?.environment
+    });
     const media = document.createElement("div");
     media.className = "smarttex-rendered-editor-figure-media";
     let imageCount = 0;
     for (const rowModel of model.rows || []) {
       const row = document.createElement("div");
       row.className = "smarttex-rendered-editor-figure-row";
-      for (const panelModel of rowModel.items || []) {
+      const rowItems = rowModel.items || [];
+      const relativeTotal = Math.max(
+        0,
+        Number(rowModel.relativeWidthRatio) || rowItems.reduce(
+          (sum, item) => sum + (
+            item.fixedWidthPx ? 0 : Math.max(0, Number(item.widthRatio) || 1)
+          ),
+          0
+        )
+      );
+      const normalizeRelativeWidths = Boolean(
+        rowModel.normalizeRelativeWidths ?? (
+          !rowItems.some((item) => Number(item.fixedWidthPx) > 0) &&
+          relativeTotal > 0
+        )
+      );
+      for (const panelModel of rowItems) {
         const panel = document.createElement("div");
         panel.className = "smarttex-rendered-editor-figure-panel";
         const ratio = Math.max(0.05, Number(panelModel.widthRatio) || 1);
-        panel.style.flexBasis = `${Math.min(100, ratio * 100)}%`;
+        const rowFraction = normalizeRelativeWidths ? ratio / relativeTotal : ratio;
+        panel.style.flexBasis = `${Math.min(100, rowFraction * 100)}%`;
         for (const imageModel of panelModel.images || []) {
           imageCount += 1;
           const placeholder = figurePlaceholder(imageModel.path, true);

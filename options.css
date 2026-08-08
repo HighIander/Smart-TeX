@@ -320,16 +320,229 @@ select:focus {
   }
 }
 
-.beta-badge {
-  display: inline-block;
-  margin-left: 0.35rem;
-  padding: 0.08rem 0.38rem;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  font-size: 0.72em;
-  font-weight: 700;
-  line-height: 1.2;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  vertical-align: 0.08em;
+
+.highlight-options-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 14px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.highlight-options-grid label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.highlight-options-grid input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #1674d1;
+}
+
+.highlight-options-grid input[type="color"] {
+  width: 48px;
+  height: 34px;
+  padding: 2px;
+  border: 1px solid #aebdcd;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.active-highlight-options {
+  margin: 6px 0 18px;
+  padding: 14px;
+  border: 1px solid #d8e0ea;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.active-highlight-toggle {
+  min-height: auto;
+  margin-bottom: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.active-highlight-toggle:hover {
+  border: 0;
+  background: transparent;
+}
+
+.active-highlight-strength-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 5px;
+}
+
+.active-highlight-strength-row label {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.active-highlight-strength-row output {
+  min-width: 3.25rem;
+  color: #526071;
+  font: 13px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-align: right;
+}
+
+#smarttex-highlight-active-strength {
+  width: 100%;
+  accent-color: #1674d1;
+}
+
+.active-highlight-hint {
+  margin: 7px 0 0;
+  font-size: 13px;
+}
+
+@media (max-width: 560px) {
+  .highlight-options-grid {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .highlight-options-grid input[type="color"],
+  .active-highlight-options {
+    border-color: #415169;
+  }
+
+  .active-highlight-options {
+    background: #233044;
+  }
+
+  .active-highlight-strength-row output {
+    color: #aebdd0;
+  }
+}
+
+#smarttex-highlight-active-strength:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* Preset-page layout and per-setting reset controls. */
+.section-heading-row,
+.preset-control-row,
+.preset-option-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+}
+
+.preset-control-row + .preset-control-row,
+.preset-control-row + .preset-option-row,
+.preset-option-row + .preset-option-row {
+  margin-top: 18px;
+}
+
+.preset-option-row .feature-option {
+  min-width: 0;
+}
+
+.option-reset-button {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid #b9c5d3;
+  border-radius: 8px;
+  color: #526071;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.option-reset-button:hover {
+  border-color: #2583e9;
+  color: #0969da;
+  background: #eef6ff;
+}
+
+.highlight-options-grid {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.active-highlight-strength-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+}
+
+.active-highlight-strength-row .option-reset-button {
+  margin-left: 8px;
+}
+
+@media (max-width: 560px) {
+  .highlight-options-grid {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .option-reset-button {
+    border-color: #53647a;
+    color: #aebdd0;
+  }
+
+  .option-reset-button:hover {
+    border-color: #6fb5ff;
+    color: #dbeafe;
+    background: #243750;
+  }
+}
+
+
+.smarttex-comment-profile-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: end;
+}
+.smarttex-comment-profile-options label {
+  margin: 0;
+  font-size: 14px;
+}
+.smarttex-comment-profile-options input[type="text"] {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  padding: 10px 12px;
+  border: 1px solid #b9c5d3;
+  border-radius: 9px;
+  background: #fff;
+  color: #172033;
+  font: inherit;
+}
+.smarttex-comment-profile-options input[type="color"] {
+  display: block;
+  width: 58px;
+  height: 42px;
+  margin-top: 7px;
+  padding: 3px;
+  border: 1px solid #b9c5d3;
+  border-radius: 9px;
+  background: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  .smarttex-comment-profile-options input[type="text"],
+  .smarttex-comment-profile-options input[type="color"] {
+    border-color: #4d5b70;
+    background: #182233;
+    color: #e5edf7;
+  }
 }

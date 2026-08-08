@@ -3,6 +3,43 @@
 (() => {
   "use strict";
 
+  function isSmartTeXEditorPage() {
+    // CollabTeX project overview routes can also be /project/<id>. Only load
+    // the MAIN-world bridge for the editor-specific shell or editing surface.
+    const sourcePanel = document.querySelector(
+      "#ide-redesign-panel-source-editor, #ide-redesign-panel-editor, " +
+      "[data-testid='source-editor'], [data-testid*='source-editor' i]"
+    );
+    const pdfPanel = document.querySelector(
+      "#ide-redesign-panel-pdf, [data-testid='pdf-preview'], [data-testid*='pdf-preview' i]"
+    );
+    const editorSurface = document.querySelector(
+      "#ide-redesign-panel-source-editor .cm-editor, " +
+      "#ide-redesign-panel-source-editor .CodeMirror, " +
+      "#ide-redesign-panel-source-editor .ace_editor, " +
+      "#ide-redesign-panel-source-editor [contenteditable='true'], " +
+      "#ide-redesign-panel-editor .cm-editor, " +
+      "#ide-redesign-panel-editor .CodeMirror, " +
+      "#ide-redesign-panel-editor .ace_editor, " +
+      "#ide-redesign-panel-editor [contenteditable='true'], " +
+      ".ide-redesign-editor-container .cm-editor, " +
+      ".ide-redesign-editor-container .ace_editor, " +
+      "[data-testid*='source-editor' i] .cm-editor, " +
+      "[data-testid*='source-editor' i] .ace_editor, " +
+      ".editor-pane .cm-editor, .editor-pane .ace_editor, " +
+      "#editor.ace_editor, #editor .ace_editor"
+    );
+    const editorToolbar = document.querySelector(
+      ".toolbar.toolbar-editor, .ol-cm-toolbar, [data-testid*='editor-toolbar' i]"
+    );
+    return Boolean(editorSurface || editorToolbar || (sourcePanel && pdfPanel));
+  }
+
+  // The bridge is origin-wide but editor-only. On the project overview this
+  // avoids installing the editor polling, mutation observers, geometry work,
+  // and structure parser that otherwise continue scanning a page with no editor.
+  if (!isSmartTeXEditorPage()) return;
+
   const staleStackingStyle = document.getElementById("smarttex-overlay-stacking-style");
   if (staleStackingStyle?.textContent?.includes(".ace_editor .ace_scroller")) {
     staleStackingStyle.remove();
@@ -13,8 +50,13 @@
   const STATE_EVENT = "smarttex:editor-state";
   const CITATION_REQUEST_EVENT = "smarttex:citation-editor-request";
   const CITATION_RESPONSE_EVENT = "smarttex:citation-editor-response";
+  const STRUCTURE_ANALYSIS_STATE_EVENT = "smarttex:structure-analysis-state";
+  const COMMENT_OVERLAY_STATE_EVENT = "smarttex:comment-overlay-state";
+  const COMMENT_ANCHOR_ACTIVATE_EVENT = "smarttex:comment-anchor-activate";
   const CITE_COMMAND = /\\(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/i;
   const REFERENCE_COMMAND = /\\(?:eqref|ref|pageref|autoref|cref|Cref|vref|Vref|nameref)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/;
+  const INCLUDEGRAPHICS_COMMAND = /\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^{}]*)$/i;
+  const FIGURE_FILE_PATTERN = /\.(?:png|jpe?g|gif|svg|pdf|eps|webp)$/i;
   let editorKind = "";
   let editor = null;
   let boundSession = null;
@@ -23,31 +65,85 @@
   let codeMirrorCleanup = null;
   let citationAutocompleteActive = false;
   let referenceAutocompleteActive = false;
+  let figureAutocompleteActive = false;
   let numberBadgeLayer = null;
   let structureHighlightLayer = null;
+  let commentHighlightLayer = null;
+  let commentIconLayer = null;
+  let commentOverlayAnchors = [];
+  let commentIconsVisible = true;
+  let commentIconOpacity = 1;
+  let commentMarksVisible = true;
+  let commentMarkOpacity = 0.30;
+  let lastPointerClientX = -10000;
+  let lastPointerClientY = -10000;
+  const markerConvertHoverUntil = new Map();
+  document.addEventListener("pointermove", (event) => {
+    lastPointerClientX = Number(event.clientX);
+    lastPointerClientY = Number(event.clientY);
+  }, { capture: true, passive: true });
+
   let structureHighlightSettings = {
     environmentEnabled: true,
-    environmentColor: "#8ec5ff",
-    captionEnabled: true,
+    environmentColor: "#dfedfb",
+    environmentFirstLineEnabled: true,
+    environmentFirstLineColor: "#c7e4ff",
+    sectionEnabled: true,
+    sectionColor: "#c4a7ff",
+    captionEnabled: false,
     captionColor: "#70afea",
-    labelEnabled: true,
+    labelEnabled: false,
     labelColor: "#8fd19e",
     referenceEnabled: true,
-    referenceColor: "#8fd19e",
-    nonumberEnabled: true,
+    referenceColor: "#bcf0c8",
+    nonumberEnabled: false,
     nonumberColor: "#ffe69a",
     inlineMathEnabled: true,
-    inlineMathColor: "#8ec5ff"
+    inlineMathColor: "#cce5ff",
+    activeEnabled: true,
+    activeStrength: 55
   };
   let lastEditorState = null;
   let cachedStructureSource = null;
   let cachedStructures = { badges: [], highlights: [] };
   let structureRefreshTimer = 0;
   let overlayFramePending = false;
+  let overlayFrameId = 0;
+  let structureAnalysisActive =
+    document.documentElement.dataset.smarttexStructureAnalysis === "pending";
+  const interactionTasks = globalThis.SmartTeXInteractionTasks;
+  const OCCLUDING_OVERLAY_SELECTOR = [
+    "[role='listbox']",
+    "[role='menu']",
+    "[role='dialog']",
+    "[role='tooltip']",
+    "[class*='popover']",
+    "[class*='popup']",
+    "[class*='tooltip']",
+    "[class*='spellcheck']",
+    "[class*='suggestion']"
+  ].join(",");
+
+  function taskCheckpoint(iteration = 0, interval = 128) {
+    interactionTasks?.checkpoint?.(iteration, interval);
+  }
+
+  function setStructureAnalysisState(active) {
+    const next = Boolean(active);
+    const state = next ? "pending" : "ready";
+    if (structureAnalysisActive === next && document.documentElement.dataset.smarttexStructureAnalysis === state) {
+      return;
+    }
+    structureAnalysisActive = next;
+    document.documentElement.dataset.smarttexStructureAnalysis = state;
+    window.dispatchEvent(new CustomEvent(STRUCTURE_ANALYSIS_STATE_EVENT, {
+      detail: JSON.stringify({ active: next })
+    }));
+  }
 
   function normalizedHighlightColor(value) {
     const color = String(value || "").trim();
-    return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : "#8ec5ff";
+    return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : "#dfedfb";
   }
 
   function colorWithAlpha(hexColor, alpha) {
@@ -56,6 +152,19 @@
     const green = Number.parseInt(normalized.slice(2, 4), 16);
     const blue = Number.parseInt(normalized.slice(4, 6), 16);
     return `rgba(${red},${green},${blue},${alpha})`;
+  }
+
+  function boundedPercent(value, fallback = 55) {
+    const numeric = Number(value);
+    return Math.max(0, Math.min(100, Number.isFinite(numeric) ? numeric : fallback));
+  }
+
+  function activeAlpha(normalAlpha, maximumAlpha, active, categoryEnabled, configuredStrengthMultiplier = 1) {
+    if (!active) return normalAlpha;
+    const strength = boundedPercent(structureHighlightSettings.activeStrength) / 100;
+    if (!categoryEnabled) return (0.10 + strength * 0.42) / 3;
+    const effectiveStrength = Math.min(1, strength * Math.max(0, Number(configuredStrengthMultiplier) || 0));
+    return normalAlpha + (maximumAlpha - normalAlpha) * effectiveStrength;
   }
 
   function ensureNumberBadgeLayer() {
@@ -78,20 +187,29 @@
       document.documentElement.appendChild(style);
     }
     style.textContent = `
-      /* The annotation canvas is a page-level layer. Lift only native editor
-         paint layers above it; never alter the editor scroller itself. */
+      /* Keep SmartTeX colour fields in the editor's own isolated stacking
+         context. Marker/selection layers remain above the colour fields, and
+         glyphs/carets remain above every translucent background. */
+      .ace_editor,
+      .cm-editor {
+        isolation: isolate;
+      }
+      .ace_editor .ace_marker-layer,
+      .cm-editor .cm-selectionLayer {
+        z-index: 2 !important;
+      }
       .ace_editor .ace_content,
       .ace_editor .ace_text-layer,
-      .ace_editor .ace_marker-layer,
+      .cm-editor .cm-content {
+        z-index: 3 !important;
+      }
       .ace_editor .ace_cursor-layer,
-      .cm-editor .cm-content,
-      .cm-editor .cm-selectionLayer,
       .cm-editor .cm-cursorLayer {
-        z-index: 2 !important;
+        z-index: 4 !important;
       }
       .ace_editor .ace_gutter,
       .cm-editor .cm-gutters {
-        z-index: 3 !important;
+        z-index: 5 !important;
       }
       .cm-editor .cm-panels,
       .cm-editor .cm-panel,
@@ -104,39 +222,50 @@
   }
 
   function ensureStructureHighlightLayer() {
-    if (structureHighlightLayer?.isConnected) return structureHighlightLayer;
-    structureHighlightLayer = document.createElement("div");
-    structureHighlightLayer.id = "smarttex-source-structure-highlights";
-    structureHighlightLayer.style.cssText = [
-      "position:fixed", "pointer-events:none", "overflow:hidden", "z-index:0"
-    ].join(";");
-    document.documentElement.appendChild(structureHighlightLayer);
+    const host = editorRootElement();
+    if (!host) return structureHighlightLayer;
+    if (getComputedStyle(host).position === "static") {
+      host.style.position = "relative";
+    }
+    if (!structureHighlightLayer) {
+      structureHighlightLayer = document.createElement("div");
+      structureHighlightLayer.id = "smarttex-source-structure-highlights";
+      structureHighlightLayer.style.cssText = [
+        "position:absolute", "pointer-events:none", "overflow:hidden", "z-index:1"
+      ].join(";");
+    }
+    if (structureHighlightLayer.parentElement !== host) {
+      host.appendChild(structureHighlightLayer);
+    }
     ensureOverlayStackingStyle();
     return structureHighlightLayer;
   }
 
-  function romanNumber(value) {
-    const table = [[1000,"M"],[900,"CM"],[500,"D"],[400,"CD"],[100,"C"],[90,"XC"],[50,"L"],[40,"XL"],[10,"X"],[9,"IX"],[5,"V"],[4,"IV"],[1,"I"]];
-    let number = Math.max(0, Number(value) || 0);
-    let result = "";
-    for (const [amount, symbol] of table) {
-      while (number >= amount) {
-        result += symbol;
-        number -= amount;
-      }
+  function ensureCommentHighlightLayer() {
+    const host = editorRootElement();
+    if (!host) return commentHighlightLayer;
+    if (getComputedStyle(host).position === "static") host.style.position = "relative";
+    if (!commentHighlightLayer) {
+      commentHighlightLayer = document.createElement("div");
+      commentHighlightLayer.id = "smarttex-comment-highlights";
+      commentHighlightLayer.style.cssText = [
+        "position:absolute", "pointer-events:none", "overflow:hidden", "z-index:1"
+      ].join(";");
     }
-    return result;
+    if (commentHighlightLayer.parentElement !== host) host.appendChild(commentHighlightLayer);
+    ensureOverlayStackingStyle();
+    return commentHighlightLayer;
   }
 
-  function alphaNumber(value) {
-    let number = Math.max(1, Number(value) || 1);
-    let result = "";
-    while (number > 0) {
-      number -= 1;
-      result = String.fromCharCode(65 + (number % 26)) + result;
-      number = Math.floor(number / 26);
-    }
-    return result;
+  function ensureCommentIconLayer() {
+    if (commentIconLayer?.isConnected) return commentIconLayer;
+    commentIconLayer = document.createElement("div");
+    commentIconLayer.id = "smarttex-comment-icons";
+    commentIconLayer.style.cssText = [
+      "position:fixed", "inset:0", "pointer-events:none", "z-index:2147483600", "overflow:hidden"
+    ].join(";");
+    document.documentElement.appendChild(commentIconLayer);
+    return commentIconLayer;
   }
 
   function lineStartIndex(source, index) {
@@ -165,7 +294,8 @@
     return -1;
   }
 
-  function appendCommandRanges(source, highlights) {
+  function appendCommandRanges(source, highlights, maskedSource = null) {
+    const searchable = maskedSource || globalThis.SmartTeXLatexContext?.maskIgnoredLatex?.(source) || source;
     const simple = [
       { pattern: /\\(?:nonumber|notag)\b/g, kind: "nonumber" },
       { pattern: /\\label\s*\{/g, kind: "label", group: true },
@@ -174,11 +304,12 @@
     ];
     for (const entry of simple) {
       let match;
-      while ((match = entry.pattern.exec(source))) {
+      while ((match = entry.pattern.exec(searchable))) {
+        taskCheckpoint(entry.pattern.lastIndex);
         let end = match.index + match[0].length;
         if (entry.group) {
-          const open = source.lastIndexOf("{", end - 1);
-          const groupEnd = balancedGroupEnd(source, open);
+          const open = searchable.lastIndexOf("{", end - 1);
+          const groupEnd = balancedGroupEnd(searchable, open);
           if (groupEnd > 0) end = groupEnd;
         }
         highlights.push({ start: match.index, end, firstLineEnd: end, kind: entry.kind, inline: true });
@@ -186,19 +317,20 @@
     }
 
     // Inline mathematics: unescaped $...$ and \\(...\\). Display $$...$$ is intentionally omitted.
-    for (let index = 0; index < source.length; index += 1) {
-      if (source[index] === "$" && !isEscaped(source, index) && source[index + 1] !== "$" && source[index - 1] !== "$" ) {
+    for (let index = 0; index < searchable.length; index += 1) {
+      taskCheckpoint(index);
+      if (searchable[index] === "$" && !isEscaped(searchable, index) && searchable[index + 1] !== "$" && searchable[index - 1] !== "$" ) {
         let end = index + 1;
-        while (end < source.length) {
-          if (source[end] === "$" && !isEscaped(source, end) && source[end + 1] !== "$" ) break;
+        while (end < searchable.length) {
+          if (searchable[end] === "$" && !isEscaped(searchable, end) && searchable[end + 1] !== "$" ) break;
           end += 1;
         }
-        if (end < source.length) {
+        if (end < searchable.length) {
           highlights.push({ start: index, end: end + 1, firstLineEnd: end + 1, kind: "inlineMath", inline: true });
           index = end;
         }
-      } else if (source.startsWith("\\(", index) && !isEscaped(source, index)) {
-        const end = source.indexOf("\\)", index + 2);
+      } else if (searchable.startsWith("\\(", index) && !isEscaped(searchable, index)) {
+        const end = searchable.indexOf("\\)", index + 2);
         if (end >= 0) {
           highlights.push({ start: index, end: end + 2, firstLineEnd: end + 2, kind: "inlineMath", inline: true });
           index = end + 1;
@@ -213,31 +345,24 @@
     const highlights = [];
     const sectionTokens = [];
     const counters = { figure: 0, table: 0 };
-    const sectionCounters = [0, 0, 0, 0];
-    const revtex = /\\documentclass(?:\s*\[[^\]]*\])?\s*\{[^{}]*revtex/i.test(source);
-    const tokenPattern = /\\begin\s*\{(equation\*?|align\*?|alignat\*?|flalign\*?|gather\*?|multline\*?|eqnarray\*?|figure\*?|table\*?)\}|\\(section|subsection|subsubsection|paragraph)(\*)?\s*\{/g;
     const latexContext = globalThis.SmartTeXLatexContext;
+    const masked = latexContext?.maskIgnoredLatex?.(source) || source;
+    const numberedSections = latexContext?.sectionNumbering?.(source) || [];
+    const sectionByStart = new Map(
+      numberedSections.map((section) => [section.sourceIndex, section])
+    );
+    const tokenPattern = /\\begin\s*\{(equation\*?|align\*?|alignat\*?|flalign\*?|gather\*?|multline\*?|eqnarray\*?|figure\*?|table\*?)\}|\\(section|subsection|subsubsection|paragraph)(\*)?\s*\{/g;
     const equationContexts = latexContext?.equationContexts?.(source)?.contexts || [];
     const equationByStart = new Map(equationContexts.map((context) => [context.openStart, context]));
     let match;
 
-    while ((match = tokenPattern.exec(source))) {
+    while ((match = tokenPattern.exec(masked))) {
+      taskCheckpoint(tokenPattern.lastIndex);
       if (match[2]) {
-        const level = ["section", "subsection", "subsubsection", "paragraph"].indexOf(match[2]);
-        if (match[3]) continue;
-        sectionCounters[level] += 1;
-        for (let index = level + 1; index < sectionCounters.length; index += 1) sectionCounters[index] = 0;
-        let number;
-        if (revtex) {
-          const parts = [];
-          if (sectionCounters[0]) parts.push(romanNumber(sectionCounters[0]));
-          if (level >= 1 && sectionCounters[1]) parts.push(alphaNumber(sectionCounters[1]));
-          if (level >= 2 && sectionCounters[2]) parts.push(String(sectionCounters[2]));
-          if (level >= 3 && sectionCounters[3]) parts.push(String(sectionCounters[3]));
-          number = parts.join(".");
-        } else {
-          number = sectionCounters.slice(0, level + 1).filter(Boolean).join(".");
-        }
+        const section = sectionByStart.get(match.index);
+        if (!section || section.starred) continue;
+        const level = section.level;
+        const number = section.number;
         const start = lineStartIndex(source, match.index);
         badges.push({ index: start, label: `Sec. ${number}` });
         sectionTokens.push({ start, level });
@@ -249,9 +374,9 @@
       const starred = environment.endsWith("*");
       const endPattern = new RegExp(`\\\\end\\s*\\{${environment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\}`, "g");
       endPattern.lastIndex = tokenPattern.lastIndex;
-      const endMatch = endPattern.exec(source);
+      const endMatch = endPattern.exec(masked);
       const bodyEnd = endMatch ? endMatch.index : source.length;
-      const body = source.slice(tokenPattern.lastIndex, bodyEnd);
+      const body = masked.slice(tokenPattern.lastIndex, bodyEnd);
 
       const start = lineStartIndex(source, match.index);
       const environmentHighlight = {
@@ -293,7 +418,7 @@
       });
     }
 
-    appendCommandRanges(source, highlights);
+    appendCommandRanges(source, highlights, masked);
     return { badges, highlights };
   }
 
@@ -312,6 +437,66 @@
     return editorViewportBounds()?.right || null;
   }
 
+  function editorRangeRects(startValue, endValue) {
+    const state = getEditorState();
+    const source = String(state?.value || "");
+    const start = Math.max(0, Math.min(Number(startValue) || 0, source.length));
+    const end = Math.max(start, Math.min(Number(endValue) || start, source.length));
+    const bounds = editorViewportBounds();
+    const first = editorScreenPosition(start);
+    if (!bounds || !first) return [];
+    const firstX = first.pageX - window.scrollX;
+    const firstY = first.pageY - window.scrollY;
+    const firstHeight = Math.max(2, Number(first.lineHeight) || 16);
+    if (end === start) {
+      // A zero-width review anchor (for example a deletion or move origin)
+      // must disappear completely when its source position is outside the
+      // visible editor viewport. Clamping it to the viewport edge makes the
+      // marker appear to "stick" to the top/bottom while the source text is
+      // scrolled away.
+      const rawLeft = firstX;
+      const rawRight = firstX + 2;
+      const rawTop = firstY;
+      const rawBottom = firstY + firstHeight;
+      if (
+        rawRight <= bounds.left || rawLeft >= bounds.right ||
+        rawBottom <= bounds.top || rawTop >= bounds.bottom
+      ) {
+        return [];
+      }
+      const rect = {
+        left: Math.max(bounds.left, rawLeft),
+        right: Math.min(bounds.right, rawRight),
+        top: Math.max(bounds.top, rawTop),
+        bottom: Math.min(bounds.bottom, rawBottom)
+      };
+      return rect.right > rect.left && rect.bottom > rect.top ? [rect] : [];
+    }
+    const last = editorScreenPosition(end);
+    if (!last) return [];
+    const lastX = last.pageX - window.scrollX;
+    const lastY = last.pageY - window.scrollY;
+    const lastHeight = Math.max(2, Number(last.lineHeight) || firstHeight);
+    const sameVisualLine = Math.abs(firstY - lastY) < Math.max(firstHeight, lastHeight) * 0.5;
+    const rects = [];
+    const push = (left, top, right, bottom) => {
+      const clipped = {
+        left: Math.max(bounds.left, left), top: Math.max(bounds.top, top),
+        right: Math.min(bounds.right, right), bottom: Math.min(bounds.bottom, bottom)
+      };
+      if (clipped.right > clipped.left && clipped.bottom > clipped.top) rects.push(clipped);
+    };
+    if (sameVisualLine) {
+      push(firstX, firstY, Math.max(firstX + 2, lastX), firstY + firstHeight);
+      return rects;
+    }
+    push(firstX, firstY, bounds.right, firstY + firstHeight);
+    const middleTop = firstY + firstHeight;
+    if (lastY > middleTop) push(bounds.left, middleTop, bounds.right, lastY);
+    push(bounds.left, lastY, Math.max(bounds.left + 2, lastX), lastY + lastHeight);
+    return rects;
+  }
+
   function editorScreenPosition(index) {
     if (editorKind === "codemirror") return codeMirrorScreenPosition(index);
     const session = editor?.getSession?.();
@@ -320,8 +505,13 @@
   }
 
   function updateOverlayBounds(layer, bounds) {
-    layer.style.left = `${Math.round(bounds.left)}px`;
-    layer.style.top = `${Math.round(bounds.top)}px`;
+    const localToEditor = (layer === structureHighlightLayer || layer === commentHighlightLayer) &&
+      layer.parentElement === editorRootElement();
+    const hostRect = localToEditor
+      ? layer.parentElement.getBoundingClientRect()
+      : { left: 0, top: 0 };
+    layer.style.left = `${Math.round(bounds.left - hostRect.left)}px`;
+    layer.style.top = `${Math.round(bounds.top - hostRect.top)}px`;
     layer.style.width = `${Math.max(0, Math.round(bounds.right - bounds.left))}px`;
     layer.style.height = `${Math.max(0, Math.round(bounds.bottom - bounds.top))}px`;
   }
@@ -354,19 +544,54 @@
     return "rgb(255, 255, 255)";
   }
 
+  function effectiveOverlaySurface(element) {
+    if (!(element instanceof Element)) return null;
+    // SmartTeX figure media contains class names such as "figure-popup-media".
+    // Those transformed descendants are not independent occluding surfaces:
+    // only the outer tooltip/list/dialog window covers editor highlights.
+    const semanticSurface = element.closest?.(
+      "[role='listbox'], [role='menu'], [role='dialog'], [role='tooltip']"
+    );
+    if (semanticSurface) return semanticSurface;
+    return element;
+  }
+
   function nativeEditorOverlayRects(bounds) {
     const root = editorRootElement();
     if (!root) return [];
-    const selectors = [
+    const editorSelectors = [
       ".ace_search",
       ".cm-panel.cm-search",
       ".cm-search",
       "[class*='search-panel']",
       "[class*='searchPanel']"
     ];
+    const pageOverlaySelectors = [
+      "[role='listbox']",
+      "[role='menu']",
+      "[role='dialog']",
+      "[role='tooltip']",
+      "[class*='popover']",
+      "[class*='popup']",
+      "[class*='tooltip']",
+      "[class*='spellcheck']",
+      "[class*='suggestion']"
+    ];
     const overlays = new Set();
-    for (const selector of selectors) {
+    for (const selector of editorSelectors) {
       for (const element of root.querySelectorAll(selector)) overlays.add(element);
+    }
+    // Host-editor popovers, spelling suggestions, and browser-integrated menus
+    // can be mounted outside the editor subtree. Treat every visible floating
+    // UI element that intersects the editor as an exclusion region so the
+    // source highlight remains a true background layer.
+    for (const selector of pageOverlaySelectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (element === root || root.contains(element)) continue;
+        const surface = effectiveOverlaySurface(element);
+        if (!surface || surface === root || root.contains(surface)) continue;
+        overlays.add(surface);
+      }
     }
     const result = [];
     for (const element of overlays) {
@@ -439,20 +664,22 @@
   function renderSourceNumberBadges(state = lastEditorState) {
     const layer = ensureNumberBadgeLayer();
     const highlightLayer = ensureStructureHighlightLayer();
-    layer.replaceChildren();
-    highlightLayer.replaceChildren();
-    if (!state || !editor) return;
+    if (!state || !editor || !highlightLayer) return;
+    const badgeFragment = document.createDocumentFragment();
+    const highlightFragment = document.createDocumentFragment();
     const bounds = editorViewportBounds();
     if (!bounds || !Number.isFinite(bounds.right)) return;
     updateOverlayBounds(layer, bounds);
     updateOverlayBounds(highlightLayer, bounds);
     const nativeOverlayRects = nativeEditorOverlayRects(bounds);
+    const cursorIndex = Math.max(0, Number(state.cursorIndex) || 0);
 
-    for (const highlight of cachedStructures.highlights) {
-      const enabledKey = `${highlight.kind}Enabled`;
-      const environmentCategory = highlight.kind === "environment" || highlight.kind === "section";
-      if (environmentCategory && structureHighlightSettings.environmentEnabled === false) continue;
-      if (!environmentCategory && enabledKey in structureHighlightSettings && structureHighlightSettings[enabledKey] === false) continue;
+    for (let highlightIndex = 0; highlightIndex < cachedStructures.highlights.length; highlightIndex += 1) {
+      taskCheckpoint(highlightIndex, 16);
+      const highlight = cachedStructures.highlights[highlightIndex];
+      const active = structureHighlightSettings.activeEnabled !== false &&
+        cursorIndex >= Number(highlight.start || 0) &&
+        cursorIndex < Number(highlight.end || highlight.start || 0);
       const start = editorScreenPosition(highlight.start);
       const end = editorScreenPosition(highlight.end);
       const firstLineEnd = editorScreenPosition(highlight.firstLineEnd ?? highlight.start);
@@ -462,38 +689,40 @@
       const top = Math.max(bounds.top, rawTop);
       const bottom = Math.min(bounds.bottom, rawBottom);
       if (bottom <= top) continue;
-      const relativeTop = top - bounds.top;
-      const baseColor = structureHighlightSettings[`${highlight.kind}Color`] || structureHighlightSettings.environmentColor;
 
-      if (highlight.inline) {
-        const lineHeight = start.lineHeight || 16;
-        const sameLine = Math.abs(start.pageY - end.pageY) < lineHeight * 0.5;
-        const left = Math.max(bounds.left, start.pageX - window.scrollX);
-        const right = Math.min(bounds.right, sameLine ? end.pageX - window.scrollX : bounds.right);
-        appendHighlightRect(
-          highlightLayer,
-          bounds,
-          {
-            left,
-            top,
-            right,
-            bottom: Math.min(bottom, top + lineHeight)
-          },
-          colorWithAlpha(baseColor, 0.34),
-          "2px",
-          nativeOverlayRects
+      if (highlight.kind === "environment") {
+        const bodyEnabled = structureHighlightSettings.environmentEnabled !== false;
+        const firstLineEnabled = structureHighlightSettings.environmentFirstLineEnabled !== false;
+        if (!bodyEnabled && !firstLineEnabled && !active) continue;
+        const firstLineBottom = Math.min(
+          bounds.bottom,
+          firstLineEnd.pageY - window.scrollY +
+            (firstLineEnd.lineHeight || start.lineHeight || 16)
         );
-        if (!sameLine && bottom > top + lineHeight) {
+
+        if (firstLineBottom < bottom && (bodyEnabled || active)) {
+          const bodyColor = bodyEnabled
+            ? structureHighlightSettings.environmentColor
+            : "#8b949e";
           appendHighlightRect(
-            highlightLayer,
+            highlightFragment,
             bounds,
-            {
-              left: bounds.left,
-              top: top + lineHeight,
-              right: bounds.right,
-              bottom
-            },
-            colorWithAlpha(baseColor, 0.24),
+            { left: bounds.left, top: Math.max(top, firstLineBottom), right: bounds.right, bottom },
+            colorWithAlpha(bodyColor, activeAlpha(0.18, 0.52, active, bodyEnabled, 3)),
+            "2px",
+            nativeOverlayRects
+          );
+        }
+
+        if (firstLineBottom > top && (firstLineEnabled || active)) {
+          const firstLineColor = firstLineEnabled
+            ? structureHighlightSettings.environmentFirstLineColor
+            : "#8b949e";
+          appendHighlightRect(
+            highlightFragment,
+            bounds,
+            { left: bounds.left, top, right: bounds.right, bottom: firstLineBottom },
+            colorWithAlpha(firstLineColor, activeAlpha(0.34, 0.72, active, firstLineEnabled, 3)),
             "2px",
             nativeOverlayRects
           );
@@ -501,23 +730,97 @@
         continue;
       }
 
-      if (highlight.kind === "environment") {
+      if (highlight.kind === "section") {
+        const categoryEnabled = structureHighlightSettings.sectionEnabled !== false;
+        if (!categoryEnabled && !active) continue;
+        const baseColor = categoryEnabled
+          ? structureHighlightSettings.sectionColor
+          : "#8b949e";
         appendHighlightRect(
-          highlightLayer,
+          highlightFragment,
           bounds,
           { left: bounds.left, top, right: bounds.right, bottom },
-          colorWithAlpha(structureHighlightSettings.environmentColor, 0.18),
+          colorWithAlpha(baseColor, activeAlpha(0.34, 0.72, active, categoryEnabled)),
           "2px",
           nativeOverlayRects
         );
+        continue;
       }
-      const firstLineBottom = Math.min(bounds.bottom, firstLineEnd.pageY - window.scrollY + (firstLineEnd.lineHeight || start.lineHeight || 16));
-      if (firstLineBottom > top) {
+
+      const enabledKey = `${highlight.kind}Enabled`;
+      const categoryEnabled = !(enabledKey in structureHighlightSettings) ||
+        structureHighlightSettings[enabledKey] !== false;
+      if (!categoryEnabled && !active) continue;
+      const baseColor = categoryEnabled
+        ? (structureHighlightSettings[`${highlight.kind}Color`] || structureHighlightSettings.environmentColor)
+        : "#8b949e";
+
+      if (highlight.inline) {
+        const startLineHeight = start.lineHeight || 16;
+        const endLineHeight = end.lineHeight || startLineHeight;
+        const sameLine = Math.abs(start.pageY - end.pageY) < startLineHeight * 0.5;
+        const startLeft = Math.max(bounds.left, start.pageX - window.scrollX);
+        const endRight = Math.min(bounds.right, end.pageX - window.scrollX);
+
+        if (sameLine) {
+          appendHighlightRect(
+            highlightFragment,
+            bounds,
+            {
+              left: startLeft,
+              top,
+              right: endRight,
+              bottom: Math.min(bottom, top + startLineHeight)
+            },
+            colorWithAlpha(baseColor, activeAlpha(0.34, 0.74, active, categoryEnabled)),
+            "2px",
+            nativeOverlayRects
+          );
+          continue;
+        }
+
+        const endLineTop = Math.max(bounds.top, end.pageY - window.scrollY);
         appendHighlightRect(
-          highlightLayer,
+          highlightFragment,
           bounds,
-          { left: bounds.left, top, right: bounds.right, bottom: firstLineBottom },
-          colorWithAlpha(structureHighlightSettings.environmentColor, 0.34),
+          {
+            left: startLeft,
+            top,
+            right: bounds.right,
+            bottom: Math.min(bounds.bottom, top + startLineHeight)
+          },
+          colorWithAlpha(baseColor, activeAlpha(0.34, 0.74, active, categoryEnabled)),
+          "2px",
+          nativeOverlayRects
+        );
+
+        const middleTop = top + startLineHeight;
+        if (endLineTop > middleTop) {
+          appendHighlightRect(
+            highlightFragment,
+            bounds,
+            {
+              left: bounds.left,
+              top: middleTop,
+              right: bounds.right,
+              bottom: Math.min(bounds.bottom, endLineTop)
+            },
+            colorWithAlpha(baseColor, activeAlpha(0.24, 0.60, active, categoryEnabled)),
+            "2px",
+            nativeOverlayRects
+          );
+        }
+
+        appendHighlightRect(
+          highlightFragment,
+          bounds,
+          {
+            left: bounds.left,
+            top: endLineTop,
+            right: endRight,
+            bottom: Math.min(bounds.bottom, endLineTop + endLineHeight)
+          },
+          colorWithAlpha(baseColor, activeAlpha(0.34, 0.74, active, categoryEnabled)),
           "2px",
           nativeOverlayRects
         );
@@ -528,7 +831,9 @@
     // panels. The host panel keeps its own appearance and no covering mask or
     // forced background is needed.
 
-    for (const badge of cachedStructures.badges) {
+    for (let badgeIndex = 0; badgeIndex < cachedStructures.badges.length; badgeIndex += 1) {
+      taskCheckpoint(badgeIndex, 16);
+      const badge = cachedStructures.badges[badgeIndex];
       const screen = editorScreenPosition(badge.index);
       if (!screen || !Number.isFinite(screen.pageY)) continue;
       const top = screen.pageY - window.scrollY;
@@ -543,16 +848,351 @@
       if (nativeOverlayRects.some((rect) => rectsOverlap(rect, badgeRect))) continue;
       const element = document.createElement("span");
       element.textContent = badge.label;
-      element.style.cssText = ["position:absolute", "right:8px", `top:${Math.round(top - bounds.top + 2)}px`, "padding:1px 4px", "border-radius:3px", "background:rgba(255,255,255,.72)", "color:#7b8493", "white-space:nowrap", "font-variant-numeric:tabular-nums"].join(";");
-      layer.appendChild(element);
+      // Keep source badges just inside the editor edge while aligning them with
+      // the text row rather than slightly below its visual center.
+      element.style.cssText = ["position:absolute", "right:16px", `top:${Math.round(top - bounds.top - 1)}px`, "padding:1px 4px", "border-radius:3px", "background:rgba(255,255,255,.72)", "color:#7b8493", "white-space:nowrap", "font-variant-numeric:tabular-nums"].join(";");
+      badgeFragment.appendChild(element);
     }
+    taskCheckpoint(0, 1);
+    highlightLayer.replaceChildren(highlightFragment);
+    layer.replaceChildren(badgeFragment);
+    renderCommentOverlays();
+  }
+
+  function commentIconMarkup() {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h14a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3h-8l-5 3v-3H5a3 3 0 0 1-3-3v-7a3 3 0 0 1 3-3Z"/></svg>';
+  }
+
+  function markerIconMarkup() {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 18 8.8-12.2 5.4 3.9L9.4 22H4v-4Z"/><path d="m13.8 4.4 1.8-2.5 5.4 3.9-1.8 2.5"/><path d="M2 22h20"/></svg>';
+  }
+
+  function appendCommentRange(fragment, bounds, anchor, nativeOverlayRects) {
+    const start = editorScreenPosition(anchor.start);
+    const end = editorScreenPosition(anchor.end);
+    if (!start || !end) return null;
+    const color = normalizedHighlightColor(anchor.color || "#268bd2");
+    if (!commentMarksVisible) return end;
+    const rawTop = start.pageY - window.scrollY;
+    const rawBottom = end.pageY - window.scrollY + (end.lineHeight || start.lineHeight || 16);
+    const top = Math.max(bounds.top, rawTop);
+    const bottom = Math.min(bounds.bottom, rawBottom);
+    if (bottom <= top) return end;
+    const startLineHeight = start.lineHeight || 16;
+    const endLineHeight = end.lineHeight || startLineHeight;
+    const sameLine = Math.abs(start.pageY - end.pageY) < startLineHeight * 0.5;
+    const startLeft = Math.max(bounds.left, start.pageX - window.scrollX);
+    const endRight = Math.min(bounds.right, end.pageX - window.scrollX);
+    const background = colorWithAlpha(color, commentMarkOpacity);
+    if (sameLine) {
+      appendHighlightRect(fragment, bounds, {
+        left: startLeft, top, right: Math.max(startLeft + 2, endRight),
+        bottom: Math.min(bottom, top + startLineHeight)
+      }, background, "2px", nativeOverlayRects);
+      return end;
+    }
+    const endLineTop = Math.max(bounds.top, end.pageY - window.scrollY);
+    appendHighlightRect(fragment, bounds, {
+      left: startLeft, top, right: bounds.right,
+      bottom: Math.min(bounds.bottom, top + startLineHeight)
+    }, background, "2px", nativeOverlayRects);
+    const middleTop = top + startLineHeight;
+    if (endLineTop > middleTop) {
+      appendHighlightRect(fragment, bounds, {
+        left: bounds.left, top: middleTop, right: bounds.right,
+        bottom: Math.min(bounds.bottom, endLineTop)
+      }, colorWithAlpha(color, Math.max(0.02, commentMarkOpacity * 0.78)), "2px", nativeOverlayRects);
+    }
+    appendHighlightRect(fragment, bounds, {
+      left: bounds.left, top: endLineTop, right: Math.max(bounds.left + 2, endRight),
+      bottom: Math.min(bounds.bottom, endLineTop + endLineHeight)
+    }, background, "2px", nativeOverlayRects);
+    return end;
+  }
+
+  function commentAnchorScreenVisible(screen, bounds, margin = 0) {
+    if (!screen || !bounds) return false;
+    const x = Number(screen.pageX) - window.scrollX;
+    const y = Number(screen.pageY) - window.scrollY;
+    const lineHeight = Math.max(1, Number(screen.lineHeight) || 16);
+    return (
+      x >= bounds.left - margin &&
+      x <= bounds.right + margin &&
+      y + lineHeight >= bounds.top - margin &&
+      y <= bounds.bottom + margin
+    );
+  }
+
+  function moveCommentIconAwayFromCaret(x, y, width, height, bounds) {
+    const caretScreen = lastEditorState?.screen ||
+      (Number.isFinite(Number(lastEditorState?.cursorIndex)) ? editorScreenPosition(lastEditorState.cursorIndex) : null);
+    if (!caretScreen) return { x, y };
+    const caretX = Number(caretScreen.pageX) - window.scrollX;
+    const caretY = Number(caretScreen.pageY) - window.scrollY;
+    const caretHeight = Math.max(2, Number(caretScreen.lineHeight) || 16);
+    const near = (
+      caretX >= x - 7 && caretX <= x + width + 7 &&
+      caretY + caretHeight >= y - 5 && caretY <= y + height + 5
+    );
+    if (!near) return { x, y };
+
+    const gap = 7;
+    const left = x - width - gap;
+    if (left >= bounds.left + 2) return { x: left, y };
+    const right = x + width + gap;
+    if (right + width <= bounds.right - 2) return { x: right, y };
+    const above = y - height - gap;
+    if (above >= bounds.top + 1) return { x, y: above };
+    return { x, y: Math.min(bounds.bottom - height - 1, y + height + gap) };
+  }
+
+  function appendCommentIcon(fragment, bounds, nativeOverlayRects, anchor, screen, point = false, surfaceBackground = "rgb(255, 255, 255)") {
+    if (!commentIconsVisible || !anchor.threadId || !screen || !commentAnchorScreenVisible(screen, bounds, 1)) return;
+    const lineHeight = screen.lineHeight || 16;
+    let x = Math.max(bounds.left + 2, Math.min(bounds.right - 21, screen.pageX - window.scrollX + (point ? -8 : 3)));
+    let y = Math.max(bounds.top + 1, Math.min(bounds.bottom - 21, screen.pageY - window.scrollY - (point ? 20 : 15)));
+    ({ x, y } = moveCommentIconAwayFromCaret(x, y, 20, 20, bounds));
+    const rect = { left: x, top: y, right: x + 20, bottom: y + 20 };
+    if (nativeOverlayRects.some((overlay) => rectsOverlap(rect, overlay))) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "smarttex-comment-anchor-icon";
+    button.dataset.threadId = String(anchor.threadId);
+    button.title = "Open comment";
+    button.setAttribute("aria-label", "Open comment");
+    button.innerHTML = commentIconMarkup();
+    button.style.cssText = [
+      "position:fixed", `left:${Math.round(x)}px`, `top:${Math.round(y)}px`,
+      "width:20px", "height:20px", "padding:2px", "border:0", "border-radius:5px",
+      `color:${normalizedHighlightColor(anchor.color || "#268bd2")}`,
+      `background:${surfaceBackground}`, "box-shadow:0 1px 4px rgba(0,0,0,.18)",
+      `opacity:${commentIconOpacity}`, "pointer-events:auto", "cursor:pointer"
+    ].join(";");
+    button.querySelector("svg").style.cssText = "width:16px;height:16px;fill:currentColor;stroke:currentColor;stroke-width:1.2";
+    let handledAt = -Infinity;
+    const activate = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      window.dispatchEvent(new CustomEvent(COMMENT_ANCHOR_ACTIVATE_EVENT, {
+        detail: JSON.stringify({ threadId: String(anchor.threadId) })
+      }));
+    };
+    button.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      handledAt = performance.now();
+      activate(event);
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (performance.now() - handledAt < 750) return;
+      activate(event);
+    });
+    fragment.appendChild(button);
+  }
+
+  function appendMarkerIcon(fragment, bounds, nativeOverlayRects, anchor, screen, surfaceBackground = "rgb(255, 255, 255)") {
+    if (!commentIconsVisible || !anchor.markId || !screen || !commentAnchorScreenVisible(screen, bounds, 1)) return;
+    const x = Math.max(bounds.left + 2, Math.min(bounds.right - 43, screen.pageX - window.scrollX + 3));
+    const y = Math.max(bounds.top + 1, Math.min(bounds.bottom - 21, screen.pageY - window.scrollY - 15));
+    const rect = { left: x, top: y, right: x + 43, bottom: y + 20 };
+    if (nativeOverlayRects.some((overlay) => rectsOverlap(rect, overlay))) return;
+
+    const group = document.createElement("span");
+    group.className = "smarttex-marker-anchor-group";
+    group.style.cssText = [
+      "position:fixed", `left:${Math.round(x)}px`, `top:${Math.round(y)}px`,
+      "height:20px", "display:flex", "align-items:center", "gap:2px",
+      "pointer-events:auto"
+    ].join(";");
+
+    const makeButton = (className, title, markup, action) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = className;
+      button.title = title;
+      button.setAttribute("aria-label", title);
+      button.innerHTML = markup;
+      button.style.cssText = [
+        "width:20px", "height:20px", "padding:2px", "border:0", "border-radius:5px",
+        `color:${normalizedHighlightColor(anchor.color || "#268bd2")}`,
+        `background:${surfaceBackground}`, "box-shadow:0 1px 4px rgba(0,0,0,.18)",
+        "cursor:pointer"
+      ].join(";");
+      const svg = button.querySelector("svg");
+      if (svg) svg.style.cssText = "width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round";
+      let handledAt = -Infinity;
+      const dispatchAction = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.dispatchEvent(new CustomEvent(COMMENT_ANCHOR_ACTIVATE_EVENT, {
+          detail: JSON.stringify({ markId: String(anchor.markId), action })
+        }));
+      };
+      button.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        // Act on the first physical press. CollabTeX can otherwise consume the
+        // click while changing editor focus/caret state, which made removal seem
+        // to require a second click.
+        handledAt = performance.now();
+        dispatchAction(event);
+      });
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (performance.now() - handledAt < 750) return;
+        dispatchAction(event);
+      });
+      return button;
+    };
+
+    const marker = makeButton("smarttex-marker-anchor-icon", "Remove marking", markerIconMarkup(), "toggle-mark");
+    marker.style.opacity = String(commentIconOpacity);
+    const convert = makeButton("smarttex-marker-to-comment-icon", "Turn marking into comment", commentIconMarkup(), "convert-to-comment");
+    convert.style.transform = "translateX(-4px)";
+    convert.style.transition = "opacity 90ms ease, transform 90ms ease";
+    group.dataset.markId = String(anchor.markId);
+
+    let hideTimer = 0;
+    const markId = String(anchor.markId);
+    const pointerInside = (
+      lastPointerClientX >= x && lastPointerClientX <= x + 43 &&
+      lastPointerClientY >= y && lastPointerClientY <= y + 20
+    );
+    if (pointerInside) markerConvertHoverUntil.set(markId, Date.now() + 1000);
+    const setConvertVisible = (visible) => {
+      convert.style.opacity = visible ? String(commentIconOpacity) : "0";
+      convert.style.pointerEvents = visible ? "auto" : "none";
+      convert.style.transform = visible ? "translateX(0)" : "translateX(-4px)";
+    };
+    setConvertVisible(pointerInside || Number(markerConvertHoverUntil.get(markId) || 0) > Date.now());
+
+    const reveal = () => {
+      window.clearTimeout(hideTimer);
+      markerConvertHoverUntil.set(markId, Date.now() + 1000);
+      setConvertVisible(true);
+    };
+    const keepAlive = () => {
+      markerConvertHoverUntil.set(markId, Date.now() + 1000);
+      setConvertVisible(true);
+    };
+    const hideLater = () => {
+      markerConvertHoverUntil.set(markId, Date.now() + 1000);
+      window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => {
+        if (Number(markerConvertHoverUntil.get(markId) || 0) > Date.now()) return;
+        setConvertVisible(false);
+      }, 1010);
+    };
+    group.addEventListener("pointerenter", reveal);
+    group.addEventListener("pointermove", keepAlive, { passive: true });
+    group.addEventListener("pointerleave", hideLater);
+    group.append(marker, convert);
+    fragment.appendChild(group);
+  }
+
+  function renderCommentOverlays() {
+    const highlightLayer = ensureCommentHighlightLayer();
+    const iconLayer = ensureCommentIconLayer();
+    if (!highlightLayer || !iconLayer || !editor) return;
+    const bounds = editorViewportBounds();
+    if (!bounds) return;
+    updateOverlayBounds(highlightLayer, bounds);
+    const nativeOverlayRects = nativeEditorOverlayRects(bounds);
+    const highlights = document.createDocumentFragment();
+    const icons = document.createDocumentFragment();
+    const iconBackground = opaqueEditorBackground();
+    for (const anchor of commentOverlayAnchors) {
+      const startIndex = Math.max(0, Number(anchor?.start) || 0);
+      const endIndex = Math.max(startIndex, Number(anchor?.end) || startIndex);
+      const normalized = { ...anchor, start: startIndex, end: endIndex };
+      if (endIndex > startIndex) {
+        const endScreen = appendCommentRange(highlights, bounds, normalized, nativeOverlayRects);
+        if (normalized.kind === "mark") {
+          appendMarkerIcon(icons, bounds, nativeOverlayRects, normalized, endScreen, iconBackground);
+        } else {
+          appendCommentIcon(icons, bounds, nativeOverlayRects, normalized, endScreen, false, iconBackground);
+        }
+        continue;
+      }
+      if (!normalized.threadId) continue;
+      const screen = editorScreenPosition(startIndex);
+      if (!screen || !commentAnchorScreenVisible(screen, bounds, 1)) continue;
+      const x = Math.max(bounds.left, Math.min(bounds.right - 3, screen.pageX - window.scrollX));
+      const y = Math.max(bounds.top, screen.pageY - window.scrollY);
+      const bottom = Math.min(bounds.bottom, y + (screen.lineHeight || 16));
+      if (commentMarksVisible && bottom > y) {
+        appendHighlightRect(highlights, bounds, {
+          left: x, top: y, right: Math.min(bounds.right, x + 4), bottom
+        }, colorWithAlpha(normalizedHighlightColor(normalized.color || "#268bd2"), commentMarkOpacity), "2px", nativeOverlayRects);
+      }
+      appendCommentIcon(icons, bounds, nativeOverlayRects, normalized, screen, true, iconBackground);
+    }
+    highlightLayer.replaceChildren(highlights);
+    iconLayer.replaceChildren(icons);
   }
 
   function scheduleOverlayRender() {
     if (overlayFramePending) return;
     overlayFramePending = true;
-    window.requestAnimationFrame(() => { overlayFramePending = false; renderSourceNumberBadges(); });
+    overlayFrameId = window.requestAnimationFrame(() => {
+      overlayFramePending = false;
+      overlayFrameId = 0;
+      try {
+        if (interactionTasks?.runSync) {
+          interactionTasks.runSync("source-overlay-render", () => renderSourceNumberBadges());
+        } else {
+          renderSourceNumberBadges();
+        }
+        if (structureAnalysisActive) {
+          // Keep the global S-button spinner active through the paint in which
+          // the freshly computed badges/highlights first become visible.
+          window.requestAnimationFrame(() => setStructureAnalysisState(false));
+        }
+      } catch (error) {
+        if (interactionTasks?.isAbortError?.(error)) {
+          setStructureAnalysisState(false);
+          return;
+        }
+        setStructureAnalysisState(false);
+        console.warn("SmartTeX source overlay rendering failed:", error);
+      }
+    });
   }
+
+  function nodeContainsOccludingOverlay(node) {
+    if (!(node instanceof Element)) return false;
+    if (node.matches?.(OCCLUDING_OVERLAY_SELECTOR)) return true;
+    return Boolean(node.querySelector?.(OCCLUDING_OVERLAY_SELECTOR));
+  }
+
+  function occludingOverlayMutation(mutation) {
+    const target = mutation.target instanceof Element ? mutation.target : mutation.target?.parentElement;
+    if (target?.closest?.(
+      "#smarttex-source-structure-highlights, #smarttex-source-number-badges"
+    )) return false;
+    if (mutation.type === "attributes") {
+      if (!target?.matches?.(OCCLUDING_OVERLAY_SELECTOR)) return false;
+      // Ignore attribute churn inside an already-detected popup, such as zoom
+      // state or selected-row classes. Only the outer occluding surface changes
+      // whether source highlights need to be clipped or restored.
+      return !target.parentElement?.closest?.(OCCLUDING_OVERLAY_SELECTOR);
+    }
+    return [...mutation.addedNodes, ...mutation.removedNodes].some(nodeContainsOccludingOverlay);
+  }
+
+  // Highlight rectangles are clipped around visible menus and popups. Repaint
+  // the cached geometry whenever such an overlay opens or closes so the source
+  // colour is restored immediately after the overlay disappears.
+  const overlayOcclusionObserver = new MutationObserver((mutations) => {
+    if (mutations.some(occludingOverlayMutation)) scheduleOverlayRender();
+  });
+  overlayOcclusionObserver.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ["hidden", "class", "style", "open", "aria-hidden"]
+  });
 
   function refreshStructureCache(state, immediate = false) {
     lastEditorState = state || lastEditorState;
@@ -563,18 +1203,65 @@
     const update = () => {
       structureRefreshTimer = 0;
       if (!lastEditorState) return;
-      cachedStructureSource = lastEditorState.value;
+      const sourceAtStart = lastEditorState.value;
+      let readyForOverlayPaint = false;
+      setStructureAnalysisState(true);
       try {
-        cachedStructures = sourceNumberBadges(cachedStructureSource);
+        const nextStructures = interactionTasks?.runSync
+          ? interactionTasks.runSync(
+              "structure-highlight-analysis",
+              () => sourceNumberBadges(sourceAtStart)
+            )
+          : sourceNumberBadges(sourceAtStart);
+        if (lastEditorState?.value !== sourceAtStart) return;
+        cachedStructureSource = sourceAtStart;
+        cachedStructures = nextStructures;
+        readyForOverlayPaint = true;
+        scheduleOverlayRender();
       } catch (error) {
+        if (interactionTasks?.isAbortError?.(error)) {
+          structureRefreshTimer = window.setTimeout(
+            () => refreshStructureCache(lastEditorState, false),
+            180
+          );
+          return;
+        }
         console.warn("SmartTeX structure highlighting failed without disabling previews:", error);
-        cachedStructures = { badges: [], highlights: [] };
+      } finally {
+        // Successful analyses stay pending until scheduleOverlayRender() has
+        // painted their new badges/highlights. Aborted, stale, or failed runs
+        // must clear the spinner immediately so a retry cannot leave it latched.
+        if (!readyForOverlayPaint) setStructureAnalysisState(false);
       }
-      scheduleOverlayRender();
     };
     if (immediate || cachedStructureSource === null) update();
     else structureRefreshTimer = window.setTimeout(update, 140);
   }
+
+  interactionTasks?.subscribe?.(() => {
+    window.clearTimeout(structureRefreshTimer);
+    structureRefreshTimer = 0;
+    if (overlayFrameId) window.cancelAnimationFrame(overlayFrameId);
+    overlayFrameId = 0;
+    overlayFramePending = false;
+    if (lastEditorState && lastEditorState.value !== cachedStructureSource) {
+      structureRefreshTimer = window.setTimeout(
+        () => refreshStructureCache(lastEditorState, false),
+        180
+      );
+    } else if (structureAnalysisActive && lastEditorState) {
+      // If user activity cancelled the first paint after a completed analysis,
+      // the cache is already current. Repaint it instead of leaving the global
+      // loading indicator waiting for a source change that may never occur.
+      scheduleOverlayRender();
+    }
+  });
+
+  window.addEventListener("smarttex:editor-scroll-state", (event) => {
+    if (event?.detail?.active !== false) return;
+    scheduleOverlayRender();
+    scheduleState();
+  });
 
   window.addEventListener("smarttex:structure-highlight-settings", (event) => {
     const detail = event?.detail || {};
@@ -587,11 +1274,27 @@
           ? detail.enabled !== false
           : structureHighlightSettings.environmentEnabled),
       environmentColor: normalizedHighlightColor(detail.environmentColor || detail.color || structureHighlightSettings.environmentColor),
+      environmentFirstLineEnabled: detail.environmentFirstLineEnabled !== undefined
+        ? detail.environmentFirstLineEnabled !== false
+        : structureHighlightSettings.environmentFirstLineEnabled,
+      environmentFirstLineColor: normalizedHighlightColor(
+        detail.environmentFirstLineColor || structureHighlightSettings.environmentFirstLineColor
+      ),
+      sectionEnabled: detail.sectionEnabled !== undefined
+        ? detail.sectionEnabled !== false
+        : structureHighlightSettings.sectionEnabled,
+      sectionColor: normalizedHighlightColor(
+        detail.sectionColor || structureHighlightSettings.sectionColor
+      ),
       captionColor: normalizedHighlightColor(detail.captionColor || structureHighlightSettings.captionColor),
       labelColor: normalizedHighlightColor(detail.labelColor || structureHighlightSettings.labelColor),
       referenceColor: normalizedHighlightColor(detail.referenceColor || structureHighlightSettings.referenceColor),
       nonumberColor: normalizedHighlightColor(detail.nonumberColor || structureHighlightSettings.nonumberColor),
-      inlineMathColor: normalizedHighlightColor(detail.inlineMathColor || structureHighlightSettings.inlineMathColor)
+      inlineMathColor: normalizedHighlightColor(detail.inlineMathColor || structureHighlightSettings.inlineMathColor),
+      activeEnabled: detail.activeEnabled !== undefined
+        ? detail.activeEnabled !== false
+        : structureHighlightSettings.activeEnabled,
+      activeStrength: boundedPercent(detail.activeStrength, structureHighlightSettings.activeStrength)
     };
     scheduleOverlayRender();
   });
@@ -1033,6 +1736,449 @@
       text: reactEntity?.text || "",
       entityType: reactEntity?.entityType || ""
     };
+  }
+
+  function projectModelRoots() {
+    const roots = [
+      document.querySelector(".file-tree-list"),
+      document.querySelector("#ide-root"),
+      document.querySelector("[data-testid='ide-root']")
+    ].filter(Boolean);
+    for (const root of [...roots]) {
+      if (!(root instanceof Element)) continue;
+      for (const key of Object.getOwnPropertyNames(root).filter((name) => (
+        /^__(?:react|preact|vue)/i.test(name) || /fiber|props/i.test(name)
+      ))) {
+        try { roots.push(root[key]); } catch (_error) { /* optional framework internals */ }
+      }
+    }
+    for (const key of Object.getOwnPropertyNames(window).filter((name) => (
+      /^(?:project|ide|editor|fileTree|fileStore|rootFolder)$/i.test(name) || /^OLProject/i.test(name)
+    ))) {
+      try { roots.push(window[key]); } catch (_error) { /* guarded globals */ }
+    }
+    return roots;
+  }
+
+  function rootFolderIdFromProjectModel() {
+    const seen = new Set();
+    const budget = { remaining: 10000 };
+    const idFromCandidate = (candidate, depth = 0) => {
+      if (!candidate || depth > 3) return "";
+      if (Array.isArray(candidate)) {
+        for (const item of candidate) {
+          const id = idFromCandidate(item, depth + 1);
+          if (id) return id;
+        }
+        return "";
+      }
+      if (typeof candidate !== "object" && typeof candidate !== "function") return "";
+      let id = "";
+      try { id = likelyFileId(candidate._id || candidate.id || candidate.folderId || ""); } catch (_error) {}
+      let looksLikeFolder = false;
+      try {
+        looksLikeFolder = Boolean(
+          /root/i.test(String(candidate.name || candidate.type || candidate.kind || "")) ||
+          Array.isArray(candidate.docs) || Array.isArray(candidate.files) || Array.isArray(candidate.folders)
+        );
+      } catch (_error) {}
+      if (id && looksLikeFolder) return id;
+      for (const key of ["rootFolder", "folder", "data", "entity", "item"]) {
+        try {
+          const nested = idFromCandidate(candidate[key], depth + 1);
+          if (nested) return nested;
+        } catch (_error) {}
+      }
+      return "";
+    };
+    const visit = (value, depth = 0) => {
+      if (!value || depth > 9 || budget.remaining-- <= 0 ||
+          (typeof value !== "object" && typeof value !== "function") || seen.has(value)) return "";
+      seen.add(value);
+      try {
+        if (Object.prototype.hasOwnProperty.call(value, "rootFolder")) {
+          const id = idFromCandidate(value.rootFolder);
+          if (id) return id;
+        }
+        if (/root/i.test(String(value.name || ""))) {
+          const id = idFromCandidate(value);
+          if (id) return id;
+        }
+      } catch (_error) {}
+      let keys = [];
+      try { keys = Object.getOwnPropertyNames(value).slice(0, 140); } catch (_error) { return ""; }
+      keys.sort((a, b) => (a === "rootFolder" ? -1 : b === "rootFolder" ? 1 : 0));
+      for (const key of keys) {
+        if (["window", "document", "ownerDocument", "parentNode"].includes(key)) continue;
+        try {
+          const found = visit(value[key], depth + 1);
+          if (found) return found;
+        } catch (_error) {}
+      }
+      return "";
+    };
+    for (const root of projectModelRoots()) {
+      const id = visit(root);
+      if (id) return id;
+    }
+    return "";
+  }
+
+  function csrfToken() {
+    const selectors = [
+      'meta[name="ol-csrfToken"]', 'meta[name="csrf-token"]', 'meta[name="csrfToken"]',
+      'input[name="_csrf"]'
+    ];
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      const value = String(element?.content || element?.value || "").trim();
+      if (value) return value;
+    }
+    for (const candidate of [globalThis.csrfToken, globalThis._csrf, globalThis.OL?.csrfToken]) {
+      const value = String(candidate || "").trim();
+      if (value) return value;
+    }
+    return "";
+  }
+
+  function writeRequestHeaders(extra = {}) {
+    const token = csrfToken();
+    return token ? { ...extra, "X-CSRF-Token": token } : extra;
+  }
+
+  async function fetchProjectFileText(projectId, fileId) {
+    const response = await fetch(
+      `/project/${encodeURIComponent(projectId)}/file/${encodeURIComponent(fileId)}`,
+      { credentials: "include", cache: "no-store", headers: { Accept: "text/plain, application/json;q=0.9, */*;q=0.1" } }
+    );
+    if (!response.ok) throw new Error(`Could not read SmartTeX comment data (HTTP ${response.status}).`);
+    return response.text();
+  }
+
+  const projectMetadataEntityCache = new Map();
+
+  function projectMetadataCacheKey(pathValue) {
+    return `${projectIdFromLocation() || "project"}:${normalizedProjectPath(pathValue)}`;
+  }
+
+  function projectMetadataEntity(pathValue) {
+    const targetPath = normalizedProjectPath(pathValue);
+    const item = visibleProjectFile(targetPath);
+    const entity = reactProjectFile(targetPath, item);
+    let fileId = likelyFileId(
+      item?.getAttribute?.("data-file-id") || item?.getAttribute?.("data-entity-id") ||
+      item?.getAttribute?.("data-id") || item?.id || entity?.fileId || ""
+    );
+    let entityType = String(entity?.entityType || "").toLowerCase();
+    if (fileId) {
+      projectMetadataEntityCache.set(projectMetadataCacheKey(targetPath), { fileId, entityType });
+    } else {
+      const cached = projectMetadataEntityCache.get(projectMetadataCacheKey(targetPath));
+      fileId = likelyFileId(cached?.fileId || "");
+      entityType = entityType || String(cached?.entityType || "").toLowerCase();
+    }
+    return { targetPath, item, entity, fileId, entityType };
+  }
+
+  async function fetchMetadataEntityText(projectId, fileId, entityType) {
+    const preferred = String(entityType || "").includes("doc") ? ["doc", "file"] : ["file", "doc"];
+    let lastError = null;
+    for (const type of preferred) {
+      try {
+        const value = type === "doc"
+          ? await fetchProjectDocumentText(projectId, fileId)
+          : await fetchProjectFileText(projectId, fileId);
+        if (value || type === "file") return { value, entityType: type };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) throw lastError;
+    return { value: "", entityType: String(entityType || "") };
+  }
+
+  async function readProjectMetadataFile(pathValue) {
+    const targetPath = String(pathValue || "").trim();
+    if (!targetPath) throw new Error("No metadata-file path was supplied.");
+
+    // The editor can become usable before CollabTeX has populated the project
+    // tree/model. Do not interpret that short bootstrap window as proof that a
+    // hidden SmartTeX metadata file does not exist; that used to erase comments
+    // and marks from the first render after a page reload.
+    let resolved = projectMetadataEntity(targetPath);
+    for (let attempt = 0; attempt < 6 && !resolved.item && !resolved.entity && !resolved.fileId; attempt += 1) {
+      await delay(180);
+      resolved = projectMetadataEntity(targetPath);
+    }
+    const { item, entity, fileId } = resolved;
+    if (!item && !entity && !fileId) {
+      if (!rootFolderIdFromProjectModel()) {
+        throw new Error("Could not determine the CollabTeX project root folder.");
+      }
+      return { exists: false, value: "", fileName: targetPath };
+    }
+    if (typeof entity?.text === "string" && entity.text) {
+      return {
+        exists: true, value: entity.text, fileName: treeItemPath(item) || targetPath,
+        fileId, entityType: entity.entityType || resolved.entityType || ""
+      };
+    }
+    const projectId = projectIdFromLocation();
+    if (!projectId || !fileId) return { exists: false, value: "", fileName: targetPath };
+    try {
+      const fetched = await fetchMetadataEntityText(projectId, fileId, resolved.entityType);
+      projectMetadataEntityCache.set(projectMetadataCacheKey(targetPath), { fileId, entityType: fetched.entityType });
+      return {
+        exists: true, value: fetched.value, fileName: treeItemPath(item) || targetPath,
+        fileId, entityType: fetched.entityType
+      };
+    } catch (error) {
+      // A recent delete-and-reupload can leave our short-lived cache stale until
+      // the project tree refreshes. Drop it so the next poll resolves afresh.
+      projectMetadataEntityCache.delete(projectMetadataCacheKey(targetPath));
+      if (!item && !entity) return { exists: false, value: "", fileName: targetPath };
+      throw error;
+    }
+  }
+
+  function probeProjectMetadataFile(pathValue) {
+    const targetPath = String(pathValue || "").trim();
+    if (!targetPath) return { exists: false, token: "missing" };
+    const resolved = projectMetadataEntity(targetPath);
+    const { item, entity, fileId } = resolved;
+    const exists = Boolean(item || entity || fileId);
+    if (!exists) return { exists: false, token: "missing" };
+
+    // Build a cheap revision token from CollabTeX's already-loaded project
+    // model. SmartTeX's metadata writes replace the file, so the entity id is
+    // normally sufficient; common revision/mtime fields make the probe robust
+    // for deployments that update metadata files in place. No file body is
+    // fetched here.
+    const values = [String(fileId || ""), String(resolved.entityType || "")];
+    const addRevisionFields = (candidate) => {
+      if (!candidate || (typeof candidate !== "object" && typeof candidate !== "function")) return;
+      for (const key of ["version", "rev", "revision", "updatedAt", "updated_at", "lastModified", "last_modified", "mtime", "modified"]) {
+        try {
+          const value = candidate[key];
+          if (value !== undefined && value !== null && value !== "") values.push(`${key}:${String(value)}`);
+        } catch (_error) {}
+      }
+    };
+    addRevisionFields(entity);
+    addRevisionFields(item);
+    if (item instanceof Element) {
+      for (const name of ["data-file-id", "data-entity-id", "data-version", "data-revision", "data-updated-at"]) {
+        const value = item.getAttribute(name);
+        if (value) values.push(`${name}:${value}`);
+      }
+    }
+    return { exists: true, token: values.join("|") || `present:${targetPath}` };
+  }
+
+  let projectMetadataWriteQueue = Promise.resolve();
+
+  async function deleteProjectMetadataEntity(projectId, existingId, entityTypeHint) {
+    if (!existingId) return false;
+    const hint = String(entityTypeHint || "").toLowerCase();
+    const candidates = hint.includes("doc") ? ["doc", "file"] : hint.includes("file") ? ["file", "doc"] : ["file", "doc"];
+    let sawNotFound = false;
+    for (const entityType of candidates) {
+      const response = await fetch(
+        `/project/${encodeURIComponent(projectId)}/${entityType}/${encodeURIComponent(existingId)}`,
+        { method: "DELETE", credentials: "include", headers: writeRequestHeaders({ Accept: "application/json, */*;q=0.1" }) }
+      );
+      if (response.ok) return true;
+      if (response.status === 404) {
+        sawNotFound = true;
+        continue;
+      }
+      throw new Error(`Could not replace SmartTeX comment data (delete HTTP ${response.status}).`);
+    }
+    return !sawNotFound;
+  }
+
+  async function writeProjectMetadataFileNow(pathValue, textValue) {
+    const targetPath = normalizedProjectPath(pathValue);
+    if (!targetPath || targetPath.includes("/")) {
+      throw new Error("SmartTeX comment metadata must be stored in the project root.");
+    }
+    const projectId = projectIdFromLocation();
+    if (!projectId) throw new Error("Could not determine the current CollabTeX project.");
+    let rootFolderId = rootFolderIdFromProjectModel();
+    if (!rootFolderId) {
+      // The project tree/model can lag the editor by a short time after load or
+      // a remote file-tree update. Retry quietly before surfacing a failure.
+      for (let attempt = 0; attempt < 5 && !rootFolderId; attempt += 1) {
+        await delay(220);
+        rootFolderId = rootFolderIdFromProjectModel();
+      }
+    }
+    if (!rootFolderId) throw new Error("Could not determine the CollabTeX project root folder.");
+
+    const resolved = projectMetadataEntity(targetPath);
+    if (resolved.fileId) {
+      await deleteProjectMetadataEntity(projectId, resolved.fileId, resolved.entityType);
+      projectMetadataEntityCache.delete(projectMetadataCacheKey(targetPath));
+      await delay(80);
+    }
+
+    const text = String(textValue ?? "");
+    const form = new FormData();
+    form.append("name", targetPath);
+    form.append("qqfile", new File([text], targetPath, { type: "application/json;charset=utf-8" }));
+    const uploadResponse = await fetch(
+      `/Project/${encodeURIComponent(projectId)}/upload?folder_id=${encodeURIComponent(rootFolderId)}`,
+      { method: "POST", credentials: "include", headers: writeRequestHeaders({ Accept: "application/json" }), body: form }
+    );
+    let payload = null;
+    try { payload = await uploadResponse.json(); } catch (_error) {}
+    if (!uploadResponse.ok || payload?.success === false) {
+      const reason = payload?.error || `HTTP ${uploadResponse.status}`;
+      throw new Error(`Could not write SmartTeX comment data (${reason}).`);
+    }
+    const fileId = String(payload?.entity_id || "");
+    const entityType = String(payload?.entity_type || "file").toLowerCase();
+    if (fileId) projectMetadataEntityCache.set(projectMetadataCacheKey(targetPath), { fileId, entityType });
+    projectArchiveCache = null;
+    projectFigureListCache = null;
+    return { ok: true, fileId, entityType };
+  }
+
+  function writeProjectMetadataFile(pathValue, textValue) {
+    const operation = projectMetadataWriteQueue.then(
+      () => writeProjectMetadataFileNow(pathValue, textValue),
+      () => writeProjectMetadataFileNow(pathValue, textValue)
+    );
+    projectMetadataWriteQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  function collectProjectFigurePaths() {
+    const paths = new Set();
+    const add = (value) => {
+      const path = String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
+      if (path && FIGURE_FILE_PATTERN.test(path)) paths.add(path);
+    };
+    for (const item of document.querySelectorAll('.file-tree-list [role="treeitem"]')) {
+      add(treeItemPath(item));
+    }
+
+    const roots = [
+      document.querySelector(".file-tree-list"),
+      document.querySelector("#ide-root"),
+      document.querySelector("[data-testid='ide-root']")
+    ].filter(Boolean);
+    const globalNames = Object.getOwnPropertyNames(window).filter((key) => (
+      /^(?:project|ide|editor|fileTree|fileStore|rootFolder)$/i.test(key) ||
+      /^OLProject/i.test(key)
+    ));
+    for (const key of globalNames) {
+      try { roots.push(window[key]); } catch (_error) { /* Guarded page globals are optional. */ }
+    }
+
+    const seen = new Set();
+    const budget = { remaining: 12000 };
+    const visit = (value, depth = 0) => {
+      if (
+        !value || depth > 10 || budget.remaining-- <= 0 ||
+        (typeof value !== "object" && typeof value !== "function") ||
+        seen.has(value) || value === window || value === document
+      ) return;
+      seen.add(value);
+      try {
+        add(value.path);
+        add(value.filePath);
+        add(value.name);
+        add(value.fileName);
+      } catch (_error) {
+        // Continue through accessible child values.
+      }
+      let keys = [];
+      try { keys = Object.getOwnPropertyNames(value).slice(0, 160); } catch (_error) { return; }
+      for (const key of keys) {
+        if (["window", "document", "ownerDocument", "parentNode"].includes(key)) continue;
+        try { visit(value[key], depth + 1); } catch (_error) { /* Ignore guarded accessors. */ }
+      }
+    };
+    for (const root of roots) {
+      if (root instanceof Element) {
+        for (const key of Object.getOwnPropertyNames(root).filter((name) => (
+          /^__(?:react|preact|vue)/i.test(name) || /fiber|props/i.test(name)
+        ))) {
+          try { visit(root[key]); } catch (_error) { /* Ignore framework internals that reject access. */ }
+        }
+      } else {
+        visit(root);
+      }
+    }
+    return [...paths];
+  }
+
+  function listProjectZipPaths(buffer, pattern) {
+    const bytes = new Uint8Array(buffer);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const eocd = findZipEndOfCentralDirectory(bytes);
+    if (eocd < 0) throw new Error("The downloaded project archive is not a valid ZIP file.");
+    const entryCount = view.getUint16(eocd + 10, true);
+    let offset = view.getUint32(eocd + 16, true);
+    const paths = [];
+    for (let entry = 0; entry < entryCount; entry += 1) {
+      if (offset + 46 > bytes.length || view.getUint32(offset, true) !== 0x02014b50) {
+        throw new Error("The project ZIP central directory is malformed.");
+      }
+      const flags = view.getUint16(offset + 8, true);
+      const nameLength = view.getUint16(offset + 28, true);
+      const extraLength = view.getUint16(offset + 30, true);
+      const commentLength = view.getUint16(offset + 32, true);
+      const nameStart = offset + 46;
+      const nameEnd = nameStart + nameLength;
+      const name = decodeZipName(bytes.subarray(nameStart, nameEnd), Boolean(flags & 0x0800))
+        .replace(/\\/g, "/")
+        .replace(/^\.\//, "");
+      if (name && !name.endsWith("/") && pattern.test(name)) paths.push(name);
+      offset = nameEnd + extraLength + commentLength;
+    }
+    return paths;
+  }
+
+  let projectFigureListCache = null;
+
+  async function listProjectFigures({ full = false } = {}) {
+    const quickPaths = collectProjectFigurePaths();
+    if (!full) {
+      return {
+        figures: quickPaths.sort((left, right) => left.localeCompare(right, undefined, {
+          sensitivity: "base", numeric: true
+        })),
+        complete: false
+      };
+    }
+    const projectId = projectIdFromLocation();
+    const cacheKey = `${window.location.origin}:${projectId}`;
+    const now = Date.now();
+    if (
+      projectFigureListCache?.key === cacheKey &&
+      now - projectFigureListCache.createdAt < 30000
+    ) {
+      return projectFigureListCache.value;
+    }
+    const paths = new Set(quickPaths);
+    if (projectId) {
+      try {
+        const archive = await fetchProjectArchive(projectId);
+        for (const path of listProjectZipPaths(archive, FIGURE_FILE_PATTERN)) paths.add(path);
+      } catch (_error) {
+        // The visible/project-model list remains usable when archive download is unavailable.
+      }
+    }
+    const value = {
+      figures: [...paths].sort((left, right) => left.localeCompare(right, undefined, {
+        sensitivity: "base", numeric: true
+      })),
+      complete: true
+    };
+    projectFigureListCache = { key: cacheKey, createdAt: now, value };
+    return value;
   }
 
   function projectIdFromLocation() {
@@ -1622,10 +2768,29 @@
     return true;
   }
 
+  function matchingArgumentClose(source, openIndex) {
+    let depth = 0;
+    for (let index = Math.max(0, Number(openIndex) || 0); index < source.length; index += 1) {
+      const character = source[index];
+      if (character === "\\") {
+        index += 1;
+        continue;
+      }
+      if (character === "{") {
+        depth += 1;
+      } else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    return -1;
+  }
+
   function completionTokenAtCursor(pattern) {
     const state = getEditorState();
     if (!state) return null;
-    const beforeCursor = state.value.slice(0, state.cursorIndex);
+    const masked = globalThis.SmartTeXLatexContext?.maskIgnoredLatex?.(state.value) || state.value;
+    const beforeCursor = masked.slice(0, state.cursorIndex);
     const match = beforeCursor.match(pattern);
     if (!match) return null;
     const argument = match[1];
@@ -1633,7 +2798,12 @@
     const beforeFragment = argument.slice(lastComma + 1);
     const leadingWhitespace = beforeFragment.match(/^\s*/)?.[0] || "";
     const start = state.cursorIndex - beforeFragment.length + leadingWhitespace.length;
-    const afterFragment = state.value.slice(state.cursorIndex).match(/^[^,{}\s]*/)?.[0] || "";
+    const commandStart = beforeCursor.length - match[0].length;
+    const openIndex = commandStart + match[0].lastIndexOf("{");
+    const argumentIsClosed = matchingArgumentClose(state.value, openIndex) >= state.cursorIndex;
+    const afterFragment = argumentIsClosed
+      ? (state.value.slice(state.cursorIndex).match(/^[^,{}\s]*/)?.[0] || "")
+      : "";
     return {
       start,
       end: state.cursorIndex + afterFragment.length,
@@ -1647,8 +2817,36 @@
     return token;
   }
 
+  function figureCompletionTokenAtCursor() {
+    const state = getEditorState();
+    if (!state) return null;
+    const masked = globalThis.SmartTeXLatexContext?.maskIgnoredLatex?.(state.value) || state.value;
+    const beforeCursor = masked.slice(0, state.cursorIndex);
+    const match = beforeCursor.match(INCLUDEGRAPHICS_COMMAND);
+    if (!match) return null;
+    const argument = String(match[1] || "");
+    const start = state.cursorIndex - argument.length;
+    const commandStart = beforeCursor.length - match[0].length;
+    const openIndex = commandStart + match[0].lastIndexOf("{");
+    const argumentIsClosed = matchingArgumentClose(state.value, openIndex) >= state.cursorIndex;
+    const afterFragment = argumentIsClosed
+      ? (state.value.slice(state.cursorIndex).match(/^[^{}\s]*/)?.[0] || "")
+      : "";
+    return {
+      start,
+      end: state.cursorIndex + afterFragment.length,
+      fragment: argument + afterFragment
+    };
+  }
+
+  function replaceFigureToken(text) {
+    const token = figureCompletionTokenAtCursor();
+    if (!token || !replaceRange(token.start, token.end, text)) return null;
+    return token;
+  }
+
   function nativeAutocompleteSuppressed() {
-    return citationAutocompleteActive || referenceAutocompleteActive;
+    return citationAutocompleteActive || referenceAutocompleteActive || figureAutocompleteActive;
   }
 
   function hideNativeAutocomplete() {
@@ -1681,6 +2879,11 @@
 
   function setReferenceAutocompleteActive(value) {
     referenceAutocompleteActive = Boolean(value);
+    synchronizeAutocompleteSuppression();
+  }
+
+  function setFigureAutocompleteActive(value) {
+    figureAutocompleteActive = Boolean(value);
     synchronizeAutocompleteSuppression();
   }
 
@@ -1718,7 +2921,10 @@
   function scheduleState() {
     if (scheduledState) return;
     scheduledState = true;
-    window.requestAnimationFrame(emitState);
+    // Cursor and selection changes must reach the popup before the next paint.
+    // A microtask still coalesces duplicate editor callbacks from the same
+    // operation without imposing an additional animation-frame delay.
+    queueMicrotask(emitState);
   }
 
   function cleanupCodeMirrorBinding() {
@@ -1815,6 +3021,24 @@
     scheduleState();
   }
 
+  window.addEventListener(COMMENT_OVERLAY_STATE_EVENT, (event) => {
+    try {
+      const detail = JSON.parse(String(event.detail || "{}"));
+      commentOverlayAnchors = Array.isArray(detail?.anchors) ? detail.anchors : [];
+      commentIconsVisible = detail?.icons?.visible !== false;
+      commentIconOpacity = Math.max(0.15, Math.min(1, Number(detail?.icons?.opacity) || 1));
+      commentMarksVisible = detail?.marks?.visible !== false;
+      commentMarkOpacity = Math.max(0.05, Math.min(1, Number(detail?.marks?.opacity) || 0.30));
+    } catch (_error) {
+      commentOverlayAnchors = [];
+      commentIconsVisible = true;
+      commentIconOpacity = 1;
+      commentMarksVisible = true;
+      commentMarkOpacity = 0.30;
+    }
+    scheduleOverlayRender();
+  });
+
   window.addEventListener(CITATION_REQUEST_EVENT, async (event) => {
     let request = {};
     try {
@@ -1828,6 +3052,18 @@
       if (request.type === "getState") {
         const state = getEditorState();
         citationResponse(requestId, Boolean(state), { state });
+        return;
+      }
+      if (request.type === "getRangeRects") {
+        const rects = editorRangeRects(request.start, request.end);
+        const anchor = editorScreenPosition(Math.max(0, Number(request.start) || 0));
+        const lineHeight = Math.max(2, Number(anchor?.lineHeight) || 16);
+        citationResponse(requestId, Boolean(editor), { rects, lineHeight });
+        return;
+      }
+      if (request.type === "getEditorBounds") {
+        const bounds = editorViewportBounds();
+        citationResponse(requestId, Boolean(bounds), bounds ? { bounds } : {});
         return;
       }
       if (request.type === "getCoordinates") {
@@ -1859,6 +3095,11 @@
         citationResponse(requestId, Boolean(token), token ? { token } : {});
         return;
       }
+      if (request.type === "replaceFigureToken") {
+        const token = replaceFigureToken(String(request.text ?? ""));
+        citationResponse(requestId, Boolean(token), token ? { token } : {});
+        return;
+      }
       if (request.type === "setCitationAutocompleteActive") {
         setCitationAutocompleteActive(request.active);
         citationResponse(requestId, Boolean(editor), { active: citationAutocompleteActive });
@@ -1869,9 +3110,31 @@
         citationResponse(requestId, Boolean(editor), { active: referenceAutocompleteActive });
         return;
       }
+      if (request.type === "setFigureAutocompleteActive") {
+        setFigureAutocompleteActive(request.active);
+        citationResponse(requestId, Boolean(editor), { active: figureAutocompleteActive });
+        return;
+      }
       if (request.type === "focus") {
         editor?.focus?.();
         citationResponse(requestId, Boolean(editor));
+        return;
+      }
+      if (request.type === "resizeEditor") {
+        let resized = false;
+        try {
+          if (editorKind === "ace") {
+            editor?.resize?.(true);
+            resized = Boolean(editor);
+          } else if (editorKind === "codemirror") {
+            editor?.requestMeasure?.();
+            resized = Boolean(editor);
+          }
+        } catch (_error) {
+          resized = false;
+        }
+        scheduleOverlayRender();
+        citationResponse(requestId, resized);
         return;
       }
       if (request.type === "setCursor") {
@@ -1888,11 +3151,44 @@
         });
         return;
       }
+      if (request.type === "openProjectFile") {
+        const item = await revealProjectFile(request.path);
+        if (!item) {
+          citationResponse(requestId, false, { error: `Project file not found: ${String(request.path || "")}` });
+          return;
+        }
+        const target = item.querySelector(
+          "button.item-name-button, button[aria-label], [role='button'], .item-name-button"
+        ) || item;
+        target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+        citationResponse(requestId, true, { path: treeItemPath(item) || String(request.path || "") });
+        return;
+      }
+      if (request.type === "listProjectFigures") {
+        const result = await listProjectFigures({ full: request.full === true });
+        citationResponse(requestId, true, result);
+        return;
+      }
       if (request.type === "readProjectTextFile") {
         const file = await readProjectTextFile(request.path);
         citationResponse(requestId, Boolean(file), file ? { file } : {
           error: `Project text file not found: ${String(request.path || "")}`
         });
+        return;
+      }
+      if (request.type === "readProjectMetadataFile") {
+        const file = await readProjectMetadataFile(request.path);
+        citationResponse(requestId, true, { file });
+        return;
+      }
+      if (request.type === "probeProjectMetadataFile") {
+        const probe = probeProjectMetadataFile(request.path);
+        citationResponse(requestId, true, { probe });
+        return;
+      }
+      if (request.type === "writeProjectMetadataFile") {
+        const result = await writeProjectMetadataFile(request.path, request.text);
+        citationResponse(requestId, true, { result });
         return;
       }
       if (request.type === "moveCursorVertical") {
@@ -1962,6 +3258,10 @@
     observer.disconnect();
     numberBadgeLayer?.remove();
     numberBadgeLayer = null;
+    commentHighlightLayer?.remove();
+    commentHighlightLayer = null;
+    commentIconLayer?.remove();
+    commentIconLayer = null;
     setCitationAutocompleteActive(false);
     setReferenceAutocompleteActive(false);
   }, { once: true });

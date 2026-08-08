@@ -1,0 +1,29 @@
+Smart Citations
+Copyright (c) 2026 Thomas Kluge
+
+Except where otherwise noted, the first-party source code in this repository
+is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike
+4.0 International Public License (CC BY-NC-SA 4.0).
+
+SPDX-License-Identifier: CC-BY-NC-SA-4.0
+
+You may share and adapt the licensed material for non-commercial purposes,
+provided that you give appropriate attribution, indicate changes, link to the
+license, and distribute adaptations under the same license.
+
+License deed:
+https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+Full legal code:
+https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.en
+
+The name "Smart Citations" and its associated branding are excluded from the
+licensed material. They belong exclusively to the owner identified in the
+Impressum:
+https://www.smartioz.com/smartcitations/impressum.php
+
+Bundled third-party components are excluded from this license and remain
+subject to their respective license notices. In particular, see:
+
+- pdfjs/LICENSE
+- pdf-lib/LICENSE.md

@@ -5,6 +5,38 @@
 
   if (globalThis.SmartTeXPopupGate) return;
 
+  // This file is registered origin-wide. The CollabTeX project overview is a
+  // highly dynamic React page; observing its entire DOM solely to hide editor
+  // popups is unnecessary and can make that page stall while project cards are
+  // populated. Only install the popup observer when an actual editor exists.
+  const hasEditorSurface = Boolean(document.querySelector(
+    "#ide-redesign-panel-source-editor .cm-editor, " +
+    "#ide-redesign-panel-source-editor .CodeMirror, " +
+    "#ide-redesign-panel-source-editor .ace_editor, " +
+    "#ide-redesign-panel-source-editor [contenteditable='true'], " +
+    "#ide-redesign-panel-editor .cm-editor, " +
+    "#ide-redesign-panel-editor .CodeMirror, " +
+    "#ide-redesign-panel-editor .ace_editor, " +
+    "#ide-redesign-panel-editor [contenteditable='true'], " +
+    ".ide-redesign-editor-container .cm-editor, " +
+    ".ide-redesign-editor-container .ace_editor, " +
+    "[data-testid*='source-editor' i] .cm-editor, " +
+    "[data-testid*='source-editor' i] .ace_editor, " +
+    ".editor-pane .cm-editor, .editor-pane .ace_editor, " +
+    "#editor.ace_editor, #editor .ace_editor"
+  ));
+  if (!hasEditorSurface) {
+    globalThis.SmartTeXPopupGate = Object.freeze({
+      isReady: () => true,
+      onReady(listener) {
+        if (typeof listener === "function") listener();
+        return () => {};
+      },
+      hideInitialPopups() {}
+    });
+    return;
+  }
+
   let ready = false;
   const listeners = new Set();
   const popupSelector = [

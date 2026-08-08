@@ -3,6 +3,56 @@
 (() => {
   "use strict";
 
+  function isSmartTeXDocumentPage() {
+    // Do not classify a page from /project/<id> alone: CollabTeX uses project
+    // URLs for views that do not contain an editor. Require either an actual
+    // editing surface or the editor-specific source/PDF shell/format toolbar.
+    const sourcePanel = document.querySelector(
+      "#ide-redesign-panel-source-editor, #ide-redesign-panel-editor, " +
+      "[data-testid='source-editor'], [data-testid*='source-editor' i]"
+    );
+    const pdfPanel = document.querySelector(
+      "#ide-redesign-panel-pdf, [data-testid='pdf-preview'], [data-testid*='pdf-preview' i]"
+    );
+    const editorSurface = document.querySelector(
+      "#ide-redesign-panel-source-editor .cm-editor, " +
+      "#ide-redesign-panel-source-editor .CodeMirror, " +
+      "#ide-redesign-panel-source-editor .ace_editor, " +
+      "#ide-redesign-panel-source-editor [contenteditable='true'], " +
+      "#ide-redesign-panel-editor .cm-editor, " +
+      "#ide-redesign-panel-editor .CodeMirror, " +
+      "#ide-redesign-panel-editor .ace_editor, " +
+      "#ide-redesign-panel-editor [contenteditable='true'], " +
+      ".ide-redesign-editor-container .cm-editor, " +
+      ".ide-redesign-editor-container .ace_editor, " +
+      "[data-testid*='source-editor' i] .cm-editor, " +
+      "[data-testid*='source-editor' i] .ace_editor, " +
+      ".editor-pane .cm-editor, .editor-pane .ace_editor, " +
+      "#editor.ace_editor, #editor .ace_editor"
+    );
+    const editorToolbar = document.querySelector(
+      ".toolbar.toolbar-editor, .ol-cm-toolbar, [data-testid*='editor-toolbar' i]"
+    );
+    return Boolean(editorSurface || editorToolbar || (sourcePanel && pdfPanel));
+  }
+
+  // Keep page-type detection available to the other isolated-world modules.
+  // CollabTeX's project overview also contains toolbar/action elements that
+  // resemble the document toolbar, so toolbar controls must be gated explicitly.
+  globalThis.SmartTeXPageContext = Object.freeze({
+    isDocumentPage: isSmartTeXDocumentPage
+  });
+  document.documentElement.classList.toggle(
+    "smarttex-document-page",
+    isSmartTeXDocumentPage()
+  );
+
+  // The extension is registered for the whole CollabTeX origin, including the
+  // project overview. Do not start editor parsing, observers, popups, or cache
+  // work there. Detection is based on the editor DOM/shell, never on the
+  // /project/<id> route alone, because that route is also used by overviews.
+  if (!isSmartTeXDocumentPage()) return;
+
   const existingPreview = document.getElementById("smarttex-equation-preview");
   if (globalThis.__smartTeXPreviewLoaded && existingPreview) return;
   if (globalThis.__smartTeXPreviewLoaded && !existingPreview) {
@@ -46,11 +96,15 @@
   const FEATURES_KEY = "smarttex:features:v1";
   const REFERENCE_POPUPS_KEY = "smarttex:reference-popups:v1";
   const STRUCTURE_HIGHLIGHT_KEY = "smarttex:structure-highlight:v1";
-  const RENDER_DELAY_MS = 24;
+  const RUNTIME_SETTINGS_EVENT = "smarttex:runtime-settings";
+  const STRUCTURE_ANALYSIS_STATE_EVENT = "smarttex:structure-analysis-state";
+  const COMMENTS_INITIALIZATION_STATE_EVENT = "smarttex:comments-initialization-state";
+  const SOURCE_RENDER_DELAY_MS = 24;
   const POPUP_SELECTION_HIGHLIGHT = "smarttex-popup-selection";
   const LATEX_FILE = /\.(?:tex|ltx|sty|cls)$/i;
   const extensionApi = globalThis.browser ?? globalThis.chrome;
   const contextTools = globalThis.SmartTeXLatexContext;
+  const interactionTasks = globalThis.SmartTeXInteractionTasks;
   const popupInteractionReady = () => globalThis.SmartTeXPopupGate?.isReady?.() !== false;
   const tableRenderer = globalThis.SmartTeXTableRenderer;
   const katex = globalThis.katex;
@@ -62,6 +116,11 @@
     tables: true,
     figures: true
   };
+  let runtimeSettingsOverrideActive = false;
+
+  function taskCheckpoint(iteration = 0, interval = 128, token = undefined) {
+    interactionTasks?.checkpoint?.(iteration, interval, token);
+  }
   const featureSettingsReady = (
     typeof extensionApi?.storage?.local?.get === "function"
       ? extensionApi.storage.local.get(FEATURES_KEY).then((stored) => {
@@ -72,7 +131,7 @@
       })
       : Promise.resolve()
   ).catch(() => {});
-  let referencePopupTrigger = "hover";
+  let referencePopupTrigger = "cursor";
   let environmentPopupTrigger = "cursor";
   const popupSettingsReady = (
     typeof extensionApi?.storage?.local?.get === "function"
@@ -85,7 +144,7 @@
       })
       : Promise.resolve()
   ).catch(() => {
-    referencePopupTrigger = "hover";
+    referencePopupTrigger = "cursor";
     environmentPopupTrigger = "cursor";
   });
 
@@ -99,17 +158,40 @@
         environmentEnabled: settings.environmentEnabled !== undefined
           ? settings.environmentEnabled !== false
           : settings.enabled !== false,
-        environmentColor: validColor(settings.environmentColor || settings.color, "#8ec5ff"),
-        captionEnabled: settings.captionEnabled !== false,
+        environmentColor: validColor(settings.environmentColor || settings.color, "#dfedfb"),
+        environmentFirstLineEnabled: settings.environmentFirstLineEnabled !== undefined
+          ? settings.environmentFirstLineEnabled !== false
+          : (settings.environmentEnabled !== undefined ? settings.environmentEnabled !== false : settings.enabled !== false),
+        environmentFirstLineColor: validColor(
+          settings.environmentFirstLineColor,
+          settings.color !== undefined
+            ? validColor(settings.environmentColor || settings.color, "#c7e4ff")
+            : "#c7e4ff"
+        ),
+        sectionEnabled: settings.sectionEnabled !== undefined
+          ? settings.sectionEnabled !== false
+          : (settings.environmentEnabled !== undefined ? settings.environmentEnabled !== false : settings.enabled !== false),
+        sectionColor: validColor(
+          settings.sectionColor,
+          settings.color !== undefined
+            ? validColor(settings.environmentColor || settings.color, "#c4a7ff")
+            : "#c4a7ff"
+        ),
+        captionEnabled: settings.captionEnabled === true,
         captionColor: validColor(settings.captionColor, "#70afea"),
-        labelEnabled: settings.labelEnabled !== false,
+        labelEnabled: settings.labelEnabled === true,
         labelColor: validColor(settings.labelColor, "#8fd19e"),
         referenceEnabled: settings.referenceEnabled !== false,
-        referenceColor: validColor(settings.referenceColor, "#8fd19e"),
-        nonumberEnabled: settings.nonumberEnabled !== false,
+        referenceColor: validColor(settings.referenceColor, "#bcf0c8"),
+        nonumberEnabled: settings.nonumberEnabled === true,
         nonumberColor: validColor(settings.nonumberColor, "#ffe69a"),
         inlineMathEnabled: settings.inlineMathEnabled !== false,
-        inlineMathColor: validColor(settings.inlineMathColor, "#8ec5ff")
+        inlineMathColor: validColor(settings.inlineMathColor, "#cce5ff"),
+        activeEnabled: settings.activeEnabled !== false,
+        activeStrength: Math.max(
+          0,
+          Math.min(100, Number.isFinite(Number(settings.activeStrength)) ? Number(settings.activeStrength) : 55)
+        )
       }
     }));
   }
@@ -123,6 +205,29 @@
   ).catch(() => dispatchStructureHighlightSettings(null));
 
 
+  const graphicAutocompletePreview = document.createElement("aside");
+  graphicAutocompletePreview.id = "smarttex-graphic-autocomplete-preview";
+  graphicAutocompletePreview.hidden = true;
+  graphicAutocompletePreview.setAttribute("role", "tooltip");
+  graphicAutocompletePreview.setAttribute("aria-label", "Selected figure preview");
+  graphicAutocompletePreview.innerHTML = `
+    <div class="smarttex-preview-heading">
+      <span class="smarttex-preview-title">Figure file preview</span>
+      <span class="smarttex-preview-meta"></span>
+      <span class="smarttex-inline-loading-spinner smarttex-graphic-preview-spinner" hidden aria-hidden="true"></span>
+    </div>
+    <div class="smarttex-graphic-autocomplete-output"></div>`;
+  document.documentElement.appendChild(graphicAutocompletePreview);
+  const graphicAutocompleteOutput = graphicAutocompletePreview.querySelector(
+    ".smarttex-graphic-autocomplete-output"
+  );
+  const graphicAutocompleteMeta = graphicAutocompletePreview.querySelector(
+    ".smarttex-preview-meta"
+  );
+  const graphicAutocompleteSpinner = graphicAutocompletePreview.querySelector(
+    ".smarttex-graphic-preview-spinner"
+  );
+
   const preview = document.createElement("aside");
   preview.id = "smarttex-equation-preview";
   preview.hidden = true;
@@ -132,6 +237,7 @@
     <div class="smarttex-preview-heading">
       <span class="smarttex-preview-title">Equation preview</span>
       <span class="smarttex-preview-heading-actions">
+        <span class="smarttex-inline-loading-spinner smarttex-preview-loading-indicator" hidden aria-hidden="true"></span>
         <span class="smarttex-preview-meta" hidden></span>
         <button class="smarttex-preview-close" type="button" title="Close preview (Esc)" aria-label="Close preview">&times;</button>
       </span>
@@ -145,6 +251,7 @@
   const status = preview.querySelector(".smarttex-preview-status");
   const previewTitle = preview.querySelector(".smarttex-preview-title");
   const previewMeta = preview.querySelector(".smarttex-preview-meta");
+  const previewLoadingIndicator = preview.querySelector(".smarttex-preview-loading-indicator");
   const closeButton = preview.querySelector(".smarttex-preview-close");
   const optionsButton = document.createElement("button");
   optionsButton.id = "smarttex-options-button";
@@ -153,12 +260,61 @@
     <span class="smarttex-options-mark" aria-hidden="true">S</span>
     <span class="smarttex-options-menu-icon" aria-hidden="true">
       <span></span><span></span><span></span>
-    </span>`;
+    </span>
+    <span class="smarttex-toolbar-loading-spinner" aria-hidden="true"></span>`;
+  const STRUCTURE_SPINNER_MIN_VISIBLE_MS = 140;
+  let structureAnalysisActive =
+    document.documentElement.dataset.smarttexStructureAnalysis !== "ready";
+  // comments.js is loaded after content.js. Keep the global loading indicator
+  // active until its initial collaborative metadata hydration has completed,
+  // so the S button accurately covers the period in which comment/mark overlays
+  // are still absent after a page reload.
+  let commentsInitializationActive =
+    globalThis.__smartTeXCommentsInitializationActive !== false;
+  let structureSpinnerShownAt = (structureAnalysisActive || commentsInitializationActive) ? performance.now() : 0;
+  let structureSpinnerHideTimer = 0;
+  let commentsInitializationFailSafe = window.setTimeout(() => {
+    commentsInitializationActive = false;
+    updateToolbarLoadingSpinner();
+  }, 15000);
+
+  function updateToolbarLoadingSpinner() {
+    const next = Boolean(structureAnalysisActive || commentsInitializationActive);
+    window.clearTimeout(structureSpinnerHideTimer);
+    structureSpinnerHideTimer = 0;
+    if (next) {
+      if (!structureSpinnerShownAt) structureSpinnerShownAt = performance.now();
+      optionsButton.classList.add("smarttex-initializing");
+      return;
+    }
+    const elapsed = structureSpinnerShownAt ? performance.now() - structureSpinnerShownAt : STRUCTURE_SPINNER_MIN_VISIBLE_MS;
+    const hide = () => {
+      structureSpinnerShownAt = 0;
+      optionsButton.classList.remove("smarttex-initializing");
+    };
+    const remaining = Math.max(0, STRUCTURE_SPINNER_MIN_VISIBLE_MS - elapsed);
+    if (remaining > 0) structureSpinnerHideTimer = window.setTimeout(hide, remaining);
+    else hide();
+  }
+
+  function setStructureSpinnerActive(active) {
+    structureAnalysisActive = Boolean(active);
+    updateToolbarLoadingSpinner();
+  }
+
   optionsButton.title = "Open SmartTeX options";
   optionsButton.setAttribute("aria-label", "Open SmartTeX options");
   let optionsButtonSlot = null;
 
   function attachOptionsButton() {
+    const documentPage = isSmartTeXDocumentPage();
+    document.documentElement.classList.toggle("smarttex-document-page", documentPage);
+    if (!documentPage) {
+      optionsButtonSlot?.remove();
+      optionsButton.remove();
+      return;
+    }
+
     const shareButton = [...document.querySelectorAll("button, a")].find((candidate) => {
       const style = globalThis.getComputedStyle?.(candidate);
       if (
@@ -197,6 +353,10 @@
       optionsButtonSlot.className = "ide-redesign-toolbar-button-container";
     }
     optionsButton.className = "d-inline-grid btn btn-sm smarttex-toolbar-button";
+    optionsButton.classList.toggle(
+      "smarttex-initializing",
+      structureAnalysisActive || commentsInitializationActive
+    );
     if (optionsButton.parentElement !== optionsButtonSlot) {
       optionsButtonSlot.insertBefore(optionsButton, optionsButtonSlot.firstChild);
     } else if (optionsButtonSlot.firstElementChild !== optionsButton) {
@@ -254,6 +414,12 @@
   let lastSuccessfulMarkup = "";
   let previewPositioned = false;
   let activePreviewContext = null;
+  let documentAnalysisCache = {
+    fileName: "",
+    source: null,
+    equations: null,
+    equationRenderData: new Map()
+  };
   let previewPositionGeneration = 0;
   let lastPointerScreen = null;
   let verticalScrollRepositionPending = false;
@@ -272,12 +438,20 @@
   let editorReferenceHoverTimer = null;
   let editorReferenceHoverGeneration = 0;
   let referenceAutocompleteActive = false;
+  let graphicAutocompleteActive = false;
+  let graphicAutocompletePath = "";
+  let graphicAutocompleteGeneration = 0;
+  let graphicAutocompleteUpdateFrame = null;
+  let graphicAutocompleteHoveredOwner = null;
+  let graphicAutocompleteHoveredEntry = null;
   let activeEditorReferenceKey = "";
   let activeEditorReferenceType = "";
   let activeSecondaryEditorReferenceKey = "";
   let captionInnerReferenceActive = false;
   let popupLoadingSpinner = null;
   let popupLoadingSpinnerGeneration = 0;
+  let previewLoadingGeneration = 0;
+  let previewLoadingGlobalGeneration = null;
   let referencePopupInteractionUntil = 0;
   let referencePopupPointerDown = false;
   let citationRecords = new Map();
@@ -286,6 +460,27 @@
   let citationRefreshCounter = 0;
   const pendingCitationRefreshes = new Map();
   const pendingRequests = new Map();
+  let popupsSuppressedAfterEditorScroll = false;
+
+  interactionTasks?.subscribe?.(() => {
+    if (renderTimer !== null) window.clearTimeout(renderTimer);
+    renderTimer = null;
+    renderGeneration += 1;
+    if (environmentHoverTimer !== null) window.clearTimeout(environmentHoverTimer);
+    environmentHoverTimer = null;
+    environmentHoverGeneration += 1;
+    if (editorReferenceHoverTimer !== null) window.clearTimeout(editorReferenceHoverTimer);
+    editorReferenceHoverTimer = null;
+    editorReferenceHoverGeneration += 1;
+    if (captionReferencePopupTimer !== null) window.clearTimeout(captionReferencePopupTimer);
+    captionReferencePopupTimer = null;
+    if (graphicAutocompleteUpdateFrame !== null) {
+      window.cancelAnimationFrame(graphicAutocompleteUpdateFrame);
+      graphicAutocompleteUpdateFrame = null;
+    }
+    graphicAutocompleteGeneration += 1;
+    previewPositionGeneration += 1;
+  });
 
   preview.addEventListener("pointerenter", () => {
     previewPointerInside = true;
@@ -313,12 +508,6 @@
     return environmentPopupTrigger === "hover";
   }
 
-  function previewStateForRender() {
-    return environmentPopupUsesHover() && hoverPreviewState
-      ? hoverPreviewState
-      : currentState;
-  }
-
   function announceNavigationOrigin(destinationIndex = null) {
     if (!currentState) return;
     const cursorIndex = Math.max(0, Number(currentState.cursorIndex) || 0);
@@ -343,6 +532,13 @@
     }));
   }
 
+  function previewStateForRender() {
+    return environmentPopupUsesHover() && hoverPreviewState
+      ? hoverPreviewState
+      : currentState;
+  }
+
+
   function ensurePopupLoadingSpinner() {
     if (popupLoadingSpinner?.isConnected) return popupLoadingSpinner;
     popupLoadingSpinner = document.createElement("span");
@@ -354,26 +550,32 @@
     return popupLoadingSpinner;
   }
 
-  function popupPointerPosition(event, anchor = null) {
-    const clientX = Number(event?.clientX);
-    const clientY = Number(event?.clientY);
-    if (Number.isFinite(clientX) && Number.isFinite(clientY) && (clientX || clientY)) {
-      return { clientX, clientY };
+  function popupSpinnerButtonPosition() {
+    const rect = optionsButton?.getBoundingClientRect?.();
+    if (
+      rect &&
+      rect.width > 0 &&
+      rect.height > 0 &&
+      rect.bottom >= 0 &&
+      rect.right >= 0 &&
+      rect.top <= window.innerHeight &&
+      rect.left <= window.innerWidth
+    ) {
+      return {
+        left: rect.left + rect.width / 2 - 9,
+        top: rect.top + rect.height / 2 - 9
+      };
     }
-    const rect = anchor?.getBoundingClientRect?.() || anchor;
-    return {
-      clientX: Number(rect?.left ?? 0) + Math.min(18, Number(rect?.width ?? 0) / 2),
-      clientY: Number(rect?.top ?? 0) + Math.min(18, Number(rect?.height ?? 0) / 2)
-    };
+    return { left: Math.max(8, window.innerWidth - 42), top: 17 };
   }
 
-  function showPopupLoadingSpinner(event, anchor = null) {
+  function showPopupLoadingSpinner(_event, _anchor = null) {
     if (!popupInteractionReady()) return null;
     const spinner = ensurePopupLoadingSpinner();
-    const position = popupPointerPosition(event, anchor);
+    const position = popupSpinnerButtonPosition();
     const generation = ++popupLoadingSpinnerGeneration;
-    spinner.style.left = `${Math.round(position.clientX)}px`;
-    spinner.style.top = `${Math.round(position.clientY)}px`;
+    spinner.style.left = `${Math.round(position.left)}px`;
+    spinner.style.top = `${Math.round(position.top)}px`;
     spinner.hidden = false;
     return generation;
   }
@@ -386,6 +588,33 @@
     ) return;
     popupLoadingSpinnerGeneration += 1;
     if (popupLoadingSpinner) popupLoadingSpinner.hidden = true;
+  }
+
+  function showPreviewLoading() {
+    const generation = ++previewLoadingGeneration;
+    preview.setAttribute("aria-busy", "true");
+    if (!preview.hidden) {
+      previewLoadingIndicator.hidden = false;
+      previewLoadingGlobalGeneration = null;
+    } else {
+      previewLoadingIndicator.hidden = true;
+      previewLoadingGlobalGeneration = showPopupLoadingSpinner(
+        null,
+        editorCursorAnchorRect(currentState)
+      );
+    }
+    return generation;
+  }
+
+  function hidePreviewLoading(generation = null) {
+    if (generation !== null && generation !== previewLoadingGeneration) return;
+    previewLoadingGeneration += 1;
+    preview.removeAttribute("aria-busy");
+    previewLoadingIndicator.hidden = true;
+    if (previewLoadingGlobalGeneration !== null) {
+      hidePopupLoadingSpinner(previewLoadingGlobalGeneration);
+      previewLoadingGlobalGeneration = null;
+    }
   }
 
   function contextRangeContainsState(range, state) {
@@ -412,6 +641,7 @@
 
 
   function hidePreview({ clearDismissal = true } = {}) {
+    hidePreviewLoading();
     if (renderTimer !== null) {
       window.clearTimeout(renderTimer);
       renderTimer = null;
@@ -458,7 +688,7 @@
   }
 
   function stateCanShowPreview(state) {
-    if (!popupInteractionReady()) return false;
+    if (!popupInteractionReady() || graphicAutocompleteActive) return false;
     const popupInteraction = (
       previewPointerInside ||
       Date.now() < previewInteractionUntil ||
@@ -500,6 +730,94 @@
       context.kind,
       context.environment || context.delimiter || ""
     ].join(":");
+  }
+
+  function documentAnalysisForState(state) {
+    const source = String(state?.value || "");
+    const fileName = String(state?.fileName || "");
+    if (
+      documentAnalysisCache.source !== source ||
+      documentAnalysisCache.fileName !== fileName
+    ) {
+      documentAnalysisCache = {
+        fileName,
+        source,
+        equations: null,
+        equationRenderData: new Map()
+      };
+    }
+    return documentAnalysisCache;
+  }
+
+  function activeEquationContextForState(state) {
+    const context = activePreviewContext;
+    const previousState = activePreviewState;
+    if (
+      !state ||
+      !context ||
+      !previousState ||
+      context.kind === "table" ||
+      context.kind === "figure" ||
+      String(previousState.fileName || "") !== String(state.fileName || "") ||
+      String(previousState.value || "") !== String(state.value || "")
+    ) {
+      return null;
+    }
+    const cursor = Number(state.cursorIndex);
+    const contentStart = Number(context.contentStart);
+    const contentEnd = Number(context.contentEnd);
+    if (
+      !Number.isInteger(cursor) ||
+      !Number.isFinite(contentStart) ||
+      !Number.isFinite(contentEnd) ||
+      cursor < contentStart ||
+      cursor > contentEnd
+    ) {
+      return null;
+    }
+    return {
+      ...context,
+      cursorOffset: cursor - contentStart
+    };
+  }
+
+  function cachedEquationContextForState(state) {
+    if (!state || !enabledFeatures.equations) return null;
+    const cache = documentAnalysisForState(state);
+    if (!cache.equations) {
+      cache.equations = typeof contextTools.analyzeEquations === "function"
+        ? contextTools.analyzeEquations(cache.source)
+        : contextTools.equationContexts(cache.source);
+    }
+    if (typeof contextTools.findEquationContextFromAnalysis === "function") {
+      return contextTools.findEquationContextFromAnalysis(
+        cache.source,
+        state.cursorIndex,
+        cache.equations
+      );
+    }
+    return contextTools.findEquationContext(cache.source, state.cursorIndex);
+  }
+
+  function equationRenderDataForState(state, context) {
+    const cache = documentAnalysisForState(state);
+    const key = Number(context?.openStart);
+    if (cache.equationRenderData.has(key)) {
+      return cache.equationRenderData.get(key);
+    }
+    if (!cache.equations) {
+      cache.equations = typeof contextTools.analyzeEquations === "function"
+        ? contextTools.analyzeEquations(cache.source)
+        : contextTools.equationContexts(cache.source);
+    }
+    const numbering = cache.equations?.numberingByOpenStart?.get?.(key) ||
+      contextTools.equationPreviewNumbering(cache.source, context);
+    const commandContext = typeof contextTools.prepareDocumentCommandContext === "function"
+      ? contextTools.prepareDocumentCommandContext(cache.source, context.openStart)
+      : null;
+    const data = { numbering, commandContext };
+    cache.equationRenderData.set(key, data);
+    return data;
   }
 
   function captionContainerAtIndex(state, indexValue = state?.cursorIndex) {
@@ -556,19 +874,20 @@
   function findPreviewContext(state) {
     if (!state) return null;
     const equation = enabledFeatures.equations
-      ? contextTools.findEquationContext(state.value, state.cursorIndex)
+      ? (activeEquationContextForState(state) || cachedEquationContextForState(state))
       : null;
+
+    // Equation cursor motion is the latency-critical path. Return immediately
+    // instead of scanning tables and figures that cannot be the more specific
+    // context while the cursor is already inside an equation.
+    if (equation) return equation;
 
     // A reference popup or autocomplete list inside a caption is the inner
     // interaction. Hide the enclosing figure/table preview until the cursor or
-    // hover position leaves that reference. Inline equations remain eligible
-    // and therefore replace the outer caption preview with their own rendering.
-    if (!equation && captionReferenceSuppressesEnvironmentPreview(state)) {
-      return null;
-    }
+    // hover position leaves that reference.
+    if (captionReferenceSuppressesEnvironmentPreview(state)) return null;
 
     return [
-      equation,
       enabledFeatures.tables
         ? (
           contextTools.findTableContext(state.value, state.cursorIndex) ||
@@ -729,6 +1048,302 @@
       placeholder.textContent = path;
       placeholder.title = "The figure file could not be resolved from the CollabTeX project.";
     });
+  }
+
+
+  function includeGraphicsArgumentAtCursor(state) {
+    if (!state || !Number.isInteger(state.cursorIndex)) return null;
+    const source = String(state.value || "");
+    const cursor = Math.max(0, Math.min(state.cursorIndex, source.length));
+
+    // Autocomplete detection runs on editor-state updates. Restrict the regex
+    // to the current logical line instead of scanning the complete document
+    // prefix after every keystroke. An includegraphics argument cannot legally
+    // cross an unescaped line break in this completion context.
+    const scanStart = Math.max(
+      0,
+      source.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1,
+      cursor - 2048
+    );
+    const masked = contextTools.maskIgnoredLatex(source);
+    const before = masked.slice(scanStart, cursor);
+    const command = before.match(/\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^{}]*)$/i);
+    if (!command) return null;
+    const argumentStart = cursor - String(command[1] || "").length;
+    const closingBrace = source.indexOf("}", cursor);
+    if (closingBrace >= 0 && /[\r\n]/.test(source.slice(cursor, closingBrace))) return null;
+    return {
+      fragment: String(command[1] || ""),
+      start: argumentStart,
+      end: closingBrace >= 0 ? closingBrace : cursor
+    };
+  }
+
+  function visibleNativeGraphicAutocomplete() {
+    const candidates = [
+      ...document.querySelectorAll(
+        ".ace_autocomplete, .ace_autocomplete_popup, [role='listbox']"
+      )
+    ];
+    return candidates.find((candidate) => {
+      if (candidate.id === "smarttex-reference-autocomplete-popup" ||
+          candidate.id === "smarttex-citation-autocomplete-popup") return false;
+      const style = getComputedStyle(candidate);
+      const rect = candidate.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        Number(style.opacity) !== 0 && rect.width > 40 && rect.height > 20 &&
+        Boolean(candidate.querySelector(
+          ".ace_selected, [aria-selected='true'], .selected, [class*='selected']"
+        ));
+    }) || null;
+  }
+
+  function nativeGraphicAutocompleteOwnerFromNode(node) {
+    const owner = node?.closest?.(
+      ".ace_autocomplete, .ace_autocomplete_popup, [role='listbox']"
+    ) || null;
+    if (!owner || owner.id === "smarttex-reference-autocomplete-popup" ||
+        owner.id === "smarttex-citation-autocomplete-popup") return null;
+    const style = getComputedStyle(owner);
+    const rect = owner.getBoundingClientRect();
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      Number(style.opacity) === 0 ||
+      rect.width <= 40 ||
+      rect.height <= 20
+    ) return null;
+    return owner;
+  }
+
+  function hoveredNativeGraphicEntry(node, owner) {
+    if (!owner || !node) return null;
+    const entry = node.closest?.(
+      ".ace_line, [role='option'], .autocomplete-entry, " +
+      "[class*='completion'][class*='item'], [class*='option']"
+    ) || null;
+    return entry && entry !== owner && owner.contains(entry) ? entry : null;
+  }
+
+  function selectedNativeGraphicEntry(owner) {
+    if (!owner) return null;
+    return owner.querySelector(
+      ".ace_line.ace_selected, .ace_selected, [role='option'][aria-selected='true'], " +
+      ".selected[role='option'], [class*='option'][class*='selected']"
+    );
+  }
+
+  function graphicPathFromSuggestion(entry) {
+    const explicitPath = String(entry?.dataset?.smarttexFigurePath || "").trim();
+    if (explicitPath) return explicitPath;
+    const text = String(entry?.textContent || "").replace(/\u00a0/g, " ").trim();
+    if (!text) return "";
+    const command = text.match(/\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^{}]+)\}/i);
+    if (command) return String(command[1] || "").trim();
+    const path = text.match(/(?:^|\s)((?:[^\s{}]+\/)*[^\s{}]+?\.(?:png|jpe?g|gif|svg|pdf|eps|webp))(?:\s|$)/i);
+    if (path) return String(path[1] || "").trim();
+    return "";
+  }
+
+  function positionGraphicAutocompletePreview(owner) {
+    if (!owner || graphicAutocompletePreview.hidden) return;
+    const ownerRect = owner.getBoundingClientRect();
+    const popupRect = graphicAutocompletePreview.getBoundingClientRect();
+    const margin = 10;
+    const gap = 10;
+    const rightSpace = window.innerWidth - ownerRect.right - gap - margin;
+    const leftSpace = ownerRect.left - gap - margin;
+    let left;
+    if (rightSpace >= Math.min(popupRect.width, 260) || rightSpace >= leftSpace) {
+      left = Math.min(window.innerWidth - popupRect.width - margin, ownerRect.right + gap);
+    } else {
+      left = Math.max(margin, ownerRect.left - popupRect.width - gap);
+    }
+    const top = Math.max(
+      margin,
+      Math.min(ownerRect.top, window.innerHeight - popupRect.height - margin)
+    );
+    graphicAutocompletePreview.style.left = `${Math.round(left)}px`;
+    graphicAutocompletePreview.style.top = `${Math.round(top)}px`;
+  }
+
+  function hideGraphicAutocompletePreview() {
+    graphicAutocompleteGeneration += 1;
+    graphicAutocompleteActive = false;
+    graphicAutocompletePath = "";
+    graphicAutocompleteSpinner.hidden = true;
+    graphicAutocompletePreview.removeAttribute("aria-busy");
+    graphicAutocompletePreview.hidden = true;
+    graphicAutocompletePreview.classList.remove("smarttex-preview-visible");
+    graphicAutocompleteOutput.replaceChildren();
+  }
+
+  function graphicAutocompleteMediaAspect(media) {
+    if (!media) return null;
+    const width = Number(media.naturalWidth) ||
+      Number(media.dataset?.smarttexPdfPreviewWidth) ||
+      Number(media.width) || 0;
+    const height = Number(media.naturalHeight) ||
+      Number(media.dataset?.smarttexPdfPreviewHeight) ||
+      Number(media.height) || 0;
+    if (!(width > 0 && height > 0)) return null;
+    const aspect = width / height;
+    return Number.isFinite(aspect) && aspect > 0 ? aspect : null;
+  }
+
+  function fitGraphicAutocompletePreviewToMedia(media) {
+    const aspect = graphicAutocompleteMediaAspect(media);
+    if (!aspect || !graphicAutocompletePreview || !graphicAutocompleteOutput) return;
+
+    // Size the preview's media box to the actual figure aspect ratio instead
+    // of keeping a fixed, nearly-square preview area.  The heading remains
+    // outside this box, while the figure itself receives no unused letterbox
+    // space except for the normal 12 px preview padding.
+    const viewportMargin = 12;
+    const outputPadding = 24;
+    const maxPopupWidth = Math.max(120, Math.min(520, window.innerWidth - viewportMargin * 2));
+    const maxPopupHeight = Math.max(
+      150,
+      Math.min(560, window.innerHeight - viewportMargin * 2, window.innerHeight * 0.68)
+    );
+    const heading = graphicAutocompletePreview.querySelector(".smarttex-preview-heading");
+    const headingHeight = Math.max(0, heading?.getBoundingClientRect?.().height || 0);
+    const maxMediaWidth = Math.max(40, maxPopupWidth - outputPadding);
+    const maxMediaHeight = Math.max(40, maxPopupHeight - headingHeight - outputPadding);
+
+    let mediaWidth = maxMediaWidth;
+    let mediaHeight = mediaWidth / aspect;
+    if (mediaHeight > maxMediaHeight) {
+      mediaHeight = maxMediaHeight;
+      mediaWidth = mediaHeight * aspect;
+    }
+
+    const popupWidth = Math.max(80, Math.ceil(mediaWidth + outputPadding));
+    const outputHeight = Math.max(80, Math.ceil(mediaHeight + outputPadding));
+    graphicAutocompletePreview.style.width = `${popupWidth}px`;
+    graphicAutocompletePreview.style.maxHeight = `${Math.ceil(maxPopupHeight)}px`;
+    graphicAutocompleteOutput.style.height = `${outputHeight}px`;
+  }
+
+  function renderGraphicAutocompletePreview(path, owner) {
+    const normalizedPath = String(path || "").trim();
+    if (!normalizedPath || normalizedPath === graphicAutocompletePath && !graphicAutocompletePreview.hidden) {
+      positionGraphicAutocompletePreview(owner);
+      return;
+    }
+    const generation = ++graphicAutocompleteGeneration;
+    graphicAutocompletePath = normalizedPath;
+    // Reset sizing while a different file is resolving; the final dimensions
+    // are set from the resolved media's intrinsic aspect ratio below.
+    graphicAutocompletePreview.style.width = "";
+    graphicAutocompletePreview.style.maxHeight = "";
+    graphicAutocompleteOutput.style.height = "";
+    graphicAutocompleteMeta.textContent = normalizedPath;
+    graphicAutocompleteMeta.title = normalizedPath;
+
+    const figure = document.createElement("figure");
+    figure.className = "smarttex-figure-popup smarttex-graphic-autocomplete-figure";
+    const viewport = document.createElement("div");
+    viewport.className = "smarttex-figure-popup-viewport smarttex-graphic-autocomplete-viewport";
+    const media = document.createElement("div");
+    media.className = "smarttex-figure-popup-media smarttex-graphic-autocomplete-media";
+    const placeholder = figurePopupPlaceholder(normalizedPath, true);
+    media.appendChild(placeholder);
+    viewport.appendChild(media);
+    figure.appendChild(viewport);
+    graphicAutocompleteOutput.replaceChildren(figure);
+    graphicAutocompleteSpinner.hidden = false;
+    graphicAutocompletePreview.setAttribute("aria-busy", "true");
+    graphicAutocompletePreview.hidden = false;
+    graphicAutocompletePreview.classList.add("smarttex-preview-visible");
+    positionGraphicAutocompletePreview(owner);
+
+    const direct = directFigureFile(normalizedPath);
+    const resolution = direct?.url
+      ? Promise.resolve(direct)
+      : bridgeRequest("resolveProjectFile", { path: normalizedPath }).then((response) => response?.file);
+    resolution.then(async (file) => {
+      if (generation !== graphicAutocompleteGeneration || !file?.url || !placeholder.isConnected) return;
+      const renderer = globalThis.SmartTeXFigureRenderer;
+      const resolvedMedia = await renderer?.createMedia?.(file.path || normalizedPath, file.url, {
+        imageClass: "smarttex-graphic-autocomplete-image",
+        pdfClass: "smarttex-graphic-autocomplete-image smarttex-figure-popup-pdf"
+      });
+      if (generation !== graphicAutocompleteGeneration || !resolvedMedia || !placeholder.isConnected) return;
+      try {
+        await resolvedMedia.decode?.();
+      } catch (_error) {
+        // Some browsers reject decode() for an already available/cached image;
+        // natural dimensions are still usable in that case.
+      }
+      if (generation !== graphicAutocompleteGeneration || !placeholder.isConnected) return;
+      placeholder.replaceWith(resolvedMedia);
+      fitGraphicAutocompletePreviewToMedia(resolvedMedia);
+      graphicAutocompleteSpinner.hidden = true;
+      graphicAutocompletePreview.removeAttribute("aria-busy");
+      window.requestAnimationFrame(() => {
+        const baseWidth = Math.max(1, resolvedMedia.getBoundingClientRect?.().width || resolvedMedia.clientWidth || 1);
+        resolvedMedia.dataset.smarttexBaseWidthPx = String(baseWidth);
+        resolvedMedia.style.width = `${baseWidth}px`;
+        renderer?.ensurePopupZoom?.(figure)?.refresh?.();
+        positionGraphicAutocompletePreview(owner);
+      });
+    }).catch(() => {
+      if (generation !== graphicAutocompleteGeneration || !placeholder.isConnected) return;
+      graphicAutocompleteSpinner.hidden = true;
+      graphicAutocompletePreview.removeAttribute("aria-busy");
+      placeholder.classList.remove("smarttex-figure-popup-resolving");
+      placeholder.textContent = normalizedPath;
+      placeholder.title = "The selected figure could not be previewed.";
+    });
+  }
+
+  function updateGraphicAutocompletePreview() {
+    graphicAutocompleteUpdateFrame = null;
+    if (popupsSuppressedAfterEditorScroll) {
+      hideGraphicAutocompletePreview();
+      return;
+    }
+    if (!enabledFeatures.figures) {
+      hideGraphicAutocompletePreview();
+      return;
+    }
+    const argument = includeGraphicsArgumentAtCursor(currentState);
+    const hoveredOwner = argument && graphicAutocompleteHoveredOwner?.isConnected
+      ? nativeGraphicAutocompleteOwnerFromNode(graphicAutocompleteHoveredOwner)
+      : null;
+    const customOwner = argument
+      ? document.querySelector(
+        "#smarttex-figure-autocomplete-popup:not([hidden]) " +
+        ".smarttex-figure-autocomplete-list"
+      )
+      : null;
+    const owner = hoveredOwner || customOwner || (argument ? visibleNativeGraphicAutocomplete() : null);
+    const hoveredEntry = owner && owner === hoveredOwner &&
+      graphicAutocompleteHoveredEntry?.isConnected &&
+      owner.contains(graphicAutocompleteHoveredEntry)
+      ? graphicAutocompleteHoveredEntry
+      : null;
+    const entry = hoveredEntry || (owner ? selectedNativeGraphicEntry(owner) : null);
+    const path = graphicPathFromSuggestion(entry);
+    if (!argument || !owner || !entry || !path) {
+      const wasActive = graphicAutocompleteActive;
+      hideGraphicAutocompletePreview();
+      if (wasActive && stateCanShowPreview(currentState)) scheduleRender();
+      return;
+    }
+    graphicAutocompleteActive = true;
+    hidePreview();
+    hideCaptionReferencePopup();
+    renderGraphicAutocompletePreview(path, owner);
+  }
+
+  function scheduleGraphicAutocompletePreviewUpdate() {
+    if (popupsSuppressedAfterEditorScroll) return;
+    if (graphicAutocompleteUpdateFrame !== null) return;
+    graphicAutocompleteUpdateFrame = window.requestAnimationFrame(
+      updateGraphicAutocompletePreview
+    );
   }
 
   function appendPopupCaption(
@@ -1017,6 +1632,10 @@
       state.anchorRect = null;
       if (state.popup) {
         state.popup.hidden = true;
+        state.popup.classList.remove("smarttex-reference-popup-compact");
+        state.popup.style.removeProperty("width");
+        state.popup.style.removeProperty("max-width");
+        state.popup.removeAttribute("data-smarttex-content-kind");
         state.popup.__smarttexTargetKeys = new Set();
       }
     }
@@ -1042,7 +1661,13 @@
     hideNestedReferencePopupsFromDepth(1);
     if (captionReferencePopup) {
       captionReferencePopup.hidden = true;
-      captionReferencePopup.classList.remove("smarttex-editor-reference-popup");
+      captionReferencePopup.classList.remove(
+        "smarttex-editor-reference-popup",
+        "smarttex-reference-popup-compact"
+      );
+      captionReferencePopup.style.removeProperty("width");
+      captionReferencePopup.style.removeProperty("max-width");
+      captionReferencePopup.removeAttribute("data-smarttex-content-kind");
       captionReferencePopup.__smarttexTargetKeys = new Set();
     }
     if (restoreCaptionPreview) {
@@ -1310,12 +1935,14 @@
         window.innerWidth - popupRect.width - margin
       )
     );
-    const below = captionReferencePopupAnchorRect.bottom + 8;
+    const anchorLineHeight = Math.max(16, captionReferencePopupAnchorRect.bottom - captionReferencePopupAnchorRect.top);
+    const verticalGap = anchorLineHeight * 2;
+    const below = captionReferencePopupAnchorRect.bottom + verticalGap;
     const top = below + popupRect.height <= window.innerHeight - margin
       ? below
       : Math.max(
         margin,
-        captionReferencePopupAnchorRect.top - popupRect.height - 8
+        captionReferencePopupAnchorRect.top - popupRect.height - verticalGap
       );
     captionReferencePopup.style.left = `${Math.round(left)}px`;
     captionReferencePopup.style.top = `${Math.round(top)}px`;
@@ -1398,7 +2025,16 @@
     return null;
   }
 
+  function referenceTargetPreviewEnabled(target) {
+    if (!target) return false;
+    if (target.type === "equation") return enabledFeatures.equations;
+    if (target.type === "table") return enabledFeatures.tables;
+    if (target.type === "figure") return enabledFeatures.figures;
+    return true;
+  }
+
   function appendReferenceTargetPreview(container, target, source) {
+    if (!referenceTargetPreviewEnabled(target)) return false;
     if (target.type === "equation" && target.context) {
       const body = contextTools.previewBody(
         target.context,
@@ -1433,7 +2069,7 @@
         equation.textContent = `Equation ${target.number || target.label}`;
       }
       container.appendChild(equation);
-      return;
+      return true;
     }
 
     if (target.type === "figure" && target.context) {
@@ -1450,7 +2086,10 @@
       );
       figure.classList.add("smarttex-reference-popup-target");
       container.appendChild(figure);
-      return;
+      globalThis.SmartTeXFigureRenderer?.observePopupLayout?.(
+        figure.querySelector(".smarttex-figure-layout")
+      );
+      return true;
     }
 
     if (target.type === "table") {
@@ -1496,7 +2135,7 @@
         caption.macros
       );
       container.appendChild(card);
-      return;
+      return true;
     }
 
     const card = document.createElement("div");
@@ -1504,6 +2143,7 @@
     if (target.title) card.textContent = target.title;
     else card.textContent = referencePopupTitle(target, target.label);
     container.appendChild(card);
+    return true;
   }
 
   function renderCaptionReferencePopup(anchor, target) {
@@ -1511,6 +2151,11 @@
     const parentDepth = popupDepthForElement(anchor);
     const depth = parentDepth + 1;
     if (!target || !currentState) return depth;
+    if (!referenceTargetPreviewEnabled(target)) {
+      if (depth <= 0) hideCaptionReferencePopup();
+      else hideNestedReferencePopupsFromDepth(depth);
+      return depth;
+    }
     const targetKey = referenceTargetKey(target, target.label);
     const targetKeys = new Set([targetKey]);
     const parentPopup = parentDepth < 0
@@ -1560,8 +2205,14 @@
     appendReferencePopupHeading(entry, target, target.label);
     appendReferenceTargetPreview(entry, target, String(currentState.value || ""));
     popup.appendChild(entry);
+    globalThis.SmartTeXFigureRenderer?.observePopupLayout?.(
+      entry.querySelector(".smarttex-figure-layout")
+    );
     popup.__smarttexKey = popupKey;
     popup.__smarttexTargetKeys = targetKeys;
+    popup.dataset.smarttexContentKind = target.type === "figure"
+      ? "figure"
+      : target.type || "reference";
     popup.hidden = false;
     restorePopupScrollState(popup, scrollState);
 
@@ -1598,6 +2249,34 @@
       state.value,
       state.cursorIndex
     )?.type === "citation";
+  }
+
+  function autocompleteOwnerAtCursor(state = currentState) {
+    if (!state || !Number.isInteger(state.cursorIndex)) return "";
+    const source = String(state.value || "");
+    const index = Math.max(0, Math.min(state.cursorIndex, source.length));
+    const masked = contextTools.maskIgnoredLatex(source);
+    const beforeCursor = masked.slice(0, index);
+    const match = beforeCursor.match(
+      /\\(eqref|ref|pageref|autoref|cref|Cref|vref|Vref|nameref|cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{[^{}]*$/i
+    );
+    if (!match) return "";
+    return /^(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)$/i.test(match[1])
+      ? "citation"
+      : "reference";
+  }
+
+  function autocompleteListAvailableAtCursor(state = currentState) {
+    const owner = autocompleteOwnerAtCursor(state);
+    if (owner === "reference") {
+      return Boolean(document.getElementById("smarttex-reference-autocomplete-popup"));
+    }
+    if (owner === "citation") {
+      return Boolean(document.querySelector(
+        "#smarttex-citation-popup, #ctca-popup, #ctca-bib-manager"
+      ));
+    }
+    return false;
   }
 
   function editorReferenceKey(interaction, state = currentState) {
@@ -1637,6 +2316,7 @@
   }
 
   function editorReferenceEntry(popup, target, label, source, record = null) {
+    if (target && !referenceTargetPreviewEnabled(target)) return false;
     const entry = document.createElement("section");
     entry.className = "smarttex-reference-popup-entry";
     appendReferencePopupHeading(entry, target, label);
@@ -1646,6 +2326,17 @@
       appendReferenceTargetPreview(entry, target, source);
     }
     popup.appendChild(entry);
+    globalThis.SmartTeXFigureRenderer?.observePopupLayout?.(
+      entry.querySelector(".smarttex-figure-layout")
+    );
+    return true;
+  }
+
+  function updateReferencePopupContentKind(popup) {
+    const targets = [...popup.querySelectorAll(".smarttex-reference-popup-target")];
+    const figureOnly = targets.length === 1 &&
+      targets[0].classList.contains("smarttex-figure-popup");
+    popup.dataset.smarttexContentKind = figureOnly ? "figure" : "mixed";
   }
 
   function renderEditorReferencePopup(
@@ -1724,8 +2415,13 @@
       }
     }
 
+    if (!popup.children.length) {
+      hideCaptionReferencePopup();
+      return;
+    }
     popup.__smarttexKey = key;
     popup.__smarttexTargetKeys = interactionTargetKeys(interaction, source);
+    updateReferencePopupContentKind(popup);
     popup.hidden = false;
     restorePopupScrollState(popup, scrollState);
     positionCaptionReferencePopup(anchorRect);
@@ -1815,8 +2511,14 @@
       }
     }
 
+    if (!popup.children.length) {
+      hideNestedReferencePopupsFromDepth(1);
+      activeSecondaryEditorReferenceKey = "";
+      return;
+    }
     popup.__smarttexKey = key;
     popup.__smarttexTargetKeys = interactionTargetKeys(interaction, source);
+    updateReferencePopupContentKind(popup);
     popup.hidden = false;
     activeSecondaryEditorReferenceKey = key;
     restorePopupScrollState(popup, scrollState);
@@ -1862,6 +2564,10 @@
     ) {
       hideCaptionReferencePopup();
       return false;
+    }
+    if (autocompleteListAvailableAtCursor(state)) {
+      hideCaptionReferencePopup();
+      return true;
     }
     const interaction = editorReferenceInteractionAtIndex(
       state.value,
@@ -1910,7 +2616,7 @@
 
   function autocompleteSurface(element) {
     return element?.closest?.(
-      "#smarttex-reference-autocomplete-popup, #smarttex-citation-autocomplete-popup"
+      "#smarttex-reference-autocomplete-popup, #smarttex-citation-popup, #smarttex-citation-autocomplete-popup"
     ) || null;
   }
 
@@ -2077,6 +2783,7 @@
       event.stopPropagation();
       hideCaptionReferencePopup();
       if (target?.sourceIndex === undefined) return;
+      announceNavigationOrigin(target.sourceIndex);
       bridgeRequest("setCursor", {
         index: target.sourceIndex,
         focus: true
@@ -2086,7 +2793,7 @@
     });
     let hoverPopupDepth = null;
     const show = (event) => {
-      if (!referencePopupUsesHover()) return;
+      if (!referencePopupUsesHover() || !referenceTargetPreviewEnabled(target)) return;
       const spinnerGeneration = showPopupLoadingSpinner(event, link);
       window.requestAnimationFrame(() => {
         try {
@@ -2153,6 +2860,9 @@
       captionReferencePopup.classList.add("smarttex-reference-popup-compact");
       captionReferencePopup.style.width = `${Math.round(compactWidth)}px`;
       captionReferencePopup.style.maxWidth = `${Math.round(compactWidth)}px`;
+      globalThis.SmartTeXFigureRenderer?.fitPopupLayout?.(
+        captionReferencePopup.querySelector(".smarttex-figure-layout")
+      );
       popupRect = captionReferencePopup.getBoundingClientRect();
       left = useRight
         ? Math.min(window.innerWidth - margin - popupRect.width, owner.right + gap)
@@ -2184,7 +2894,7 @@
     const ownerRect = normalizedPopupRect(detail?.ownerRect);
     if (!currentState || !label || !anchorRect || !ownerRect) return;
     const target = contextTools.referenceTarget?.(currentState.value, label);
-    if (!target) {
+    if (!target || !referenceTargetPreviewEnabled(target)) {
       autocompleteReferenceTargetKey = "";
       hideCaptionReferencePopup();
       return;
@@ -2254,7 +2964,7 @@
     const figure = document.createElement("figure");
     figure.className = "smarttex-figure-popup";
     const renderer = globalThis.SmartTeXFigureRenderer;
-    const layoutModel = renderer?.parseFigureLayout?.(context.source || "") || {
+    const layoutModel = renderer?.parseFigureLayout?.(context.source || "", { environment: context.environment }) || {
       desiredWidthPx: 520,
       rows: []
     };
@@ -2268,13 +2978,32 @@
     for (const rowModel of layoutModel.rows || []) {
       const row = document.createElement("div");
       row.className = "smarttex-figure-layout-row";
-      for (const panelModel of rowModel.items || []) {
+      const rowItems = rowModel.items || [];
+      const relativeTotal = Math.max(
+        0,
+        Number(rowModel.relativeWidthRatio) || rowItems.reduce(
+          (sum, item) => sum + (
+            item.fixedWidthPx ? 0 : Math.max(0, Number(item.widthRatio) || 1)
+          ),
+          0
+        )
+      );
+      const normalizeRelativeWidths = Boolean(
+        rowModel.normalizeRelativeWidths ?? (
+          !rowItems.some((item) => Number(item.fixedWidthPx) > 0) &&
+          relativeTotal > 0
+        )
+      );
+      for (const panelModel of rowItems) {
         const panel = document.createElement("div");
         panel.className = "smarttex-figure-layout-panel";
         const widthRatio = Math.max(0.05, Number(panelModel.widthRatio) || 1);
         panel.dataset.smarttexWidthRatio = String(widthRatio);
         panel.style.setProperty("--smarttex-panel-width-ratio", String(widthRatio));
-        panel.style.flexBasis = `${Math.min(135, widthRatio * 100)}%`;
+        const rowFraction = normalizeRelativeWidths
+          ? widthRatio / relativeTotal
+          : widthRatio;
+        panel.style.flexBasis = `${Math.min(135, rowFraction * 100)}%`;
         const fixedPanelWidth = Number(panelModel.fixedWidthPx);
         if (Number.isFinite(fixedPanelWidth) && fixedPanelWidth > 0) {
           panel.dataset.smarttexFixedPanelWidthPx = String(fixedPanelWidth);
@@ -2438,7 +3167,7 @@
     const cursorLeft = Number(anchor.pageX) - window.scrollX;
     const cursorTop = Number(anchor.pageY) - window.scrollY;
     const lineHeight = Math.max(14, Number(anchor.lineHeight) || 16);
-    const gap = Math.max(24, Math.round(lineHeight * 1.6));
+    const gap = lineHeight * 2;
     const cursorRect = {
       left: cursorLeft - 1,
       right: cursorLeft + 3,
@@ -2658,9 +3387,12 @@
     window.requestAnimationFrame(() => positionPreview());
   }
 
-  async function renderPreview(generation) {
+  async function renderPreview(generation, loadingGeneration = null) {
+    const taskToken = interactionTasks?.begin?.("popup-preview-render") || null;
+    try {
     renderTimer = null;
     await Promise.all([katexFontsReady, featureSettingsReady, popupSettingsReady]);
+    taskCheckpoint(0, 1, taskToken);
     const state = previewStateForRender();
     if (generation !== renderGeneration || !stateCanShowPreview(state)) {
       hidePreview();
@@ -2668,6 +3400,7 @@
     }
 
     const context = findPreviewContext(state);
+    taskCheckpoint(0, 1, taskToken);
     if (!context) {
       hidePreview();
       return;
@@ -2709,11 +3442,15 @@
           ? "Live table preview"
           : "Live equation preview"
     );
+    const equationRenderData = !isFigure && !isTable
+      ? equationRenderDataForState(state, context)
+      : null;
+    taskCheckpoint(0, 1, taskToken);
     const numbering = isFigure
       ? { figureNumber: contextTools.figurePreviewNumber(state.value, context) }
       : isTable
         ? { tableNumber: contextTools.tablePreviewNumber(state.value, context) }
-        : contextTools.equationPreviewNumbering(state.value, context);
+        : equationRenderData.numbering;
     const floatCaption = isFigure || isTable
       ? contextTools.floatCaption(
         state.value,
@@ -2780,12 +3517,21 @@
       );
     let documentCommands;
     try {
-      documentCommands = contextTools.prepareDocumentCommands(
-        state.value,
-        context.openStart,
-        unpreparedBody
-      );
+      documentCommands = (
+        equationRenderData?.commandContext &&
+        typeof contextTools.applyPreparedDocumentCommands === "function"
+      )
+        ? contextTools.applyPreparedDocumentCommands(
+          equationRenderData.commandContext,
+          unpreparedBody
+        )
+        : contextTools.prepareDocumentCommands(
+          state.value,
+          context.openStart,
+          unpreparedBody
+        );
     } catch (error) {
+      if (interactionTasks?.isAbortError?.(error)) throw error;
       console.warn(
         "SmartTeX could not prepare all document commands; rendering with the compatible subset:",
         error
@@ -2797,6 +3543,7 @@
       };
     }
     const staging = document.createElement("div");
+    taskCheckpoint(0, 1, taskToken);
     const cursorInsideOperator = Boolean(
       !isFigure &&
       !hasSelection &&
@@ -2868,10 +3615,66 @@
         });
       }
     } catch (error) {
-      showRenderError(contextId, context, error);
-      return;
+      if (interactionTasks?.isAbortError?.(error)) throw error;
+
+      // The rendered caret is represented by an injected KaTeX macro. Most
+      // syntax-sensitive regions are relocated to a safe boundary by
+      // SmartTeXLatexContext, but a document-specific macro may still reject a
+      // marker inside one of its arguments. The source equation itself must
+      // never become unrenderable merely because of the cursor position, so
+      // retry the unchanged equation without the visual caret before showing
+      // an error.
+      if (!isFigure && !isTable && !hasSelection) {
+        try {
+          const fallbackBody = contextTools.previewBody(
+            equationRenderContext,
+            null,
+            numbering,
+            false
+          );
+          const fallbackCommands = (
+            equationRenderData?.commandContext &&
+            typeof contextTools.applyPreparedDocumentCommands === "function"
+          )
+            ? contextTools.applyPreparedDocumentCommands(
+              equationRenderData.commandContext,
+              fallbackBody
+            )
+            : contextTools.prepareDocumentCommands(
+              state.value,
+              context.openStart,
+              fallbackBody
+            );
+          const fallbackMacros = {
+            ...fallbackCommands.macros,
+            "\\label": { tokens: [], numArgs: 1 },
+            "\\nonumber": "",
+            "\\notag": "",
+            "\\SmartTeXCaret": macros["\\SmartTeXCaret"],
+            "\\SmartTeXOperatorCaret": macros["\\SmartTeXOperatorCaret"]
+          };
+          staging.replaceChildren();
+          katex.render(fallbackCommands.body, staging, {
+            displayMode: Boolean(context.display),
+            throwOnError: true,
+            strict: "ignore",
+            trust: trustedKatexCommand,
+            maxExpand: 1000,
+            maxSize: 25,
+            macros: fallbackMacros
+          });
+        } catch (fallbackError) {
+          if (interactionTasks?.isAbortError?.(fallbackError)) throw fallbackError;
+          showRenderError(contextId, context, fallbackError);
+          return;
+        }
+      } else {
+        showRenderError(contextId, context, error);
+        return;
+      }
     }
 
+    taskCheckpoint(0, 1, taskToken);
     if (generation !== renderGeneration || contextId !== activeContextId) return;
     lastSuccessfulMarkup = staging.innerHTML;
     output.replaceChildren(...staging.childNodes);
@@ -2886,35 +3689,65 @@
     preview.hidden = false;
     preview.classList.add("smarttex-preview-visible");
     window.requestAnimationFrame(() => positionPreview());
+    } finally {
+      hidePreviewLoading(loadingGeneration);
+      if (taskToken) interactionTasks?.end?.(taskToken);
+    }
   }
 
-  function scheduleRender() {
-    if (renderTimer !== null) window.clearTimeout(renderTimer);
+  function runScheduledRender(generation, loadingGeneration = null) {
+    Promise.resolve(renderPreview(generation, loadingGeneration)).catch((error) => {
+      if (interactionTasks?.isAbortError?.(error)) return;
+      console.error("SmartTeX editor popup rendering failed:", error);
+      const state = previewStateForRender();
+      if (generation !== renderGeneration || !stateCanShowPreview(state)) {
+        return;
+      }
+      let context = null;
+      try {
+        context = findPreviewContext(state);
+      } catch (_contextError) {
+        // Without a context there is no meaningful source fallback to display.
+      }
+      if (!context) {
+        hidePreview();
+        return;
+      }
+      const contextId = previewContextId(state, context);
+      activeContextId = contextId;
+      showRenderError(contextId, context, error);
+    });
+  }
+
+  function scheduleRender({ immediate = false } = {}) {
+    if (renderTimer !== null) {
+      window.clearTimeout(renderTimer);
+      renderTimer = null;
+    }
+    hidePreviewLoading();
     renderGeneration += 1;
     const generation = renderGeneration;
-    renderTimer = window.setTimeout(() => {
-      Promise.resolve(renderPreview(generation)).catch((error) => {
-        console.error("SmartTeX editor popup rendering failed:", error);
-        const state = previewStateForRender();
-        if (generation !== renderGeneration || !stateCanShowPreview(state)) {
-          return;
+    const loadingGeneration = stateCanShowPreview(previewStateForRender())
+      ? showPreviewLoading()
+      : null;
+    if (immediate) {
+      // The page bridge already coalesces duplicate cursor callbacks in a
+      // microtask. Do not add a timeout before moving the rendered caret.
+      queueMicrotask(() => {
+        if (generation === renderGeneration) {
+          runScheduledRender(generation, loadingGeneration);
+        } else {
+          hidePreviewLoading(loadingGeneration);
         }
-        let context = null;
-        try {
-          context = findPreviewContext(state);
-        } catch (_contextError) {
-          // Without a context there is no meaningful source fallback to display.
-        }
-        if (!context) {
-          hidePreview();
-          return;
-        }
-        const contextId = previewContextId(state, context);
-        activeContextId = contextId;
-        showRenderError(contextId, context, error);
       });
-    }, RENDER_DELAY_MS);
+      return;
+    }
+    renderTimer = window.setTimeout(
+      () => runScheduledRender(generation, loadingGeneration),
+      SOURCE_RENDER_DELAY_MS
+    );
   }
+
 
 
   function clearEnvironmentHoverPreview({ hide = true } = {}) {
@@ -3056,13 +3889,19 @@
       activeSecondaryEditorReferenceKey = "";
       hideNestedReferencePopupsFromDepth(1);
     }
+    if (popupsSuppressedAfterEditorScroll) {
+      hidePreview();
+      return;
+    }
     const previewState = previewStateForRender();
     if (stateCanShowPreview(previewState)) scheduleRender();
     else hidePreview();
   });
 
   window.addEventListener(STATE_EVENT, (event) => {
-    const previousSource = String(currentState?.value || "");
+    const previousState = currentState;
+    const previousSource = String(previousState?.value || "");
+    const previousFileName = String(previousState?.fileName || "");
     try {
       currentState = JSON.parse(String(event.detail || "null"));
     } catch (_error) {
@@ -3079,11 +3918,37 @@
       return;
     }
 
+    const currentSource = String(currentState?.value || "");
+    const currentFileName = String(currentState?.fileName || "");
+    const sourceChanged = (
+      previousSource !== currentSource ||
+      previousFileName !== currentFileName
+    );
+    const cursorChanged = (
+      Number(previousState?.cursorIndex) !== Number(currentState?.cursorIndex) ||
+      Number(previousState?.selectionFrom) !== Number(currentState?.selectionFrom) ||
+      Number(previousState?.selectionTo) !== Number(currentState?.selectionTo)
+    );
+    const focusChanged = Boolean(previousState?.focused) !== Boolean(currentState?.focused);
+
+    if (popupsSuppressedAfterEditorScroll) {
+      if (sourceChanged || cursorChanged || focusChanged) {
+        popupsSuppressedAfterEditorScroll = false;
+      } else {
+        // A screen-coordinate-only state update is the normal consequence of
+        // scrolling. Keep every popup closed instead of restoring it at the new
+        // location. Source highlights and badges are handled independently.
+        return;
+      }
+    }
+
+    scheduleGraphicAutocompletePreviewUpdate();
+
     if (referencePopupUsesHover()) {
       if (
         activeEditorReferenceKey &&
         (
-          previousSource !== String(currentState?.value || "") ||
+          sourceChanged ||
           (
             activeEditorReferenceType === "citation" &&
             cursorIsInsideCitationCommand(currentState)
@@ -3104,8 +3969,11 @@
           fileName: currentState.fileName,
           focused: true
         };
-        if (stateCanShowPreview(hoverPreviewState)) scheduleRender();
-        else clearEnvironmentHoverPreview();
+        if (stateCanShowPreview(hoverPreviewState)) {
+          scheduleRender({ immediate: !sourceChanged });
+        } else {
+          clearEnvironmentHoverPreview();
+        }
       } else {
         hidePreview();
       }
@@ -3117,7 +3985,23 @@
       hidePreview();
       return;
     }
-    scheduleRender();
+
+    // A scroll/layout update can emit a new screen position without changing
+    // source, cursor, or selection. Re-anchor the existing popup only; do not
+    // invoke KaTeX or any document analysis for that event.
+    if (
+      !sourceChanged &&
+      !cursorChanged &&
+      !focusChanged &&
+      activePreviewContext &&
+      activePreviewState
+    ) {
+      activePreviewState = currentState;
+      window.requestAnimationFrame(() => positionPreview());
+      return;
+    }
+
+    scheduleRender({ immediate: !sourceChanged });
   });
 
   closeButton.addEventListener("pointerdown", (event) => {
@@ -3126,6 +4010,7 @@
   closeButton.addEventListener("click", dismissPreview);
 
   document.addEventListener("keydown", (event) => {
+    popupsSuppressedAfterEditorScroll = false;
     if (event.key !== "Escape") return;
     if (!preview.hidden) dismissPreview();
     if (captionReferencePopup && !captionReferencePopup.hidden) {
@@ -3133,6 +4018,7 @@
     }
   }, true);
   document.addEventListener("pointermove", (event) => {
+    popupsSuppressedAfterEditorScroll = false;
     const clientX = Number(event.clientX);
     const clientY = Number(event.clientY);
     if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
@@ -3146,6 +4032,7 @@
     scheduleEnvironmentPreviewHover(event);
   }, true);
   document.addEventListener("pointerdown", (event) => {
+    popupsSuppressedAfterEditorScroll = false;
     if (
       referencePopupContains(event.target) ||
       autocompleteSurface(event.target) ||
@@ -3167,6 +4054,40 @@
     referencePopupPointerDown = false;
   });
 
+  window.addEventListener(COMMENTS_INITIALIZATION_STATE_EVENT, (event) => {
+    const detail = event?.detail && typeof event.detail === "object" ? event.detail : {};
+    commentsInitializationActive = detail.active === true;
+    if (!commentsInitializationActive) {
+      window.clearTimeout(commentsInitializationFailSafe);
+      commentsInitializationFailSafe = 0;
+    }
+    updateToolbarLoadingSpinner();
+  });
+
+  window.addEventListener(STRUCTURE_ANALYSIS_STATE_EVENT, (event) => {
+    let detail = {};
+    try {
+      detail = typeof event?.detail === "string"
+        ? JSON.parse(event.detail)
+        : (event?.detail || {});
+    } catch (_error) {
+      detail = {};
+    }
+    setStructureSpinnerActive(detail.active === true);
+  });
+
+  const structureAnalysisStateObserver = new MutationObserver(() => {
+    setStructureSpinnerActive(
+      document.documentElement.dataset.smarttexStructureAnalysis === "pending"
+    );
+  });
+  structureAnalysisStateObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-smarttex-structure-analysis"]
+  });
+
+  updateToolbarLoadingSpinner();
+
   optionsButton.addEventListener("click", () => {
     if (typeof extensionApi?.runtime?.sendMessage === "function") {
       Promise.resolve(
@@ -3177,6 +4098,7 @@
     extensionApi?.runtime?.openOptionsPage?.();
   });
   popupSettingsReady.then(() => {
+    if (popupsSuppressedAfterEditorScroll) return;
     if (!referencePopupUsesHover()) updateCursorTriggeredReferencePopup(currentState);
     if (!environmentPopupUsesHover() && stateCanShowPreview(currentState)) {
       scheduleRender();
@@ -3188,19 +4110,81 @@
     childList: true,
     subtree: true
   });
+  // Observe only insertion/removal of autocomplete DOM. Watching class and
+  // style attributes across the complete application causes the callback to
+  // run for every caret repaint and editor layout update. The resulting global
+  // query plus computed-style/layout reads blocked ordinary typing. Keyboard
+  // and pointer selection changes are already handled by the listeners below.
+  const graphicAutocompleteObserver = new MutationObserver((mutations) => {
+    if (mutations.some((mutation) => mutation.type === "childList")) {
+      scheduleGraphicAutocompletePreviewUpdate();
+    }
+  });
+  graphicAutocompleteObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true
+  });
+  document.addEventListener("keyup", scheduleGraphicAutocompletePreviewUpdate, true);
+  window.addEventListener(
+    "smarttex:graphic-autocomplete-selection-change",
+    scheduleGraphicAutocompletePreviewUpdate
+  );
+  document.addEventListener("pointermove", (event) => {
+    const owner = nativeGraphicAutocompleteOwnerFromNode(event.target);
+    const entry = hoveredNativeGraphicEntry(event.target, owner);
+    const changed = (
+      graphicAutocompleteHoveredOwner !== owner ||
+      graphicAutocompleteHoveredEntry !== entry
+    );
+    graphicAutocompleteHoveredOwner = owner;
+    graphicAutocompleteHoveredEntry = entry;
+    if (owner || changed) scheduleGraphicAutocompletePreviewUpdate();
+  }, { capture: true, passive: true });
+
+  window.addEventListener(RUNTIME_SETTINGS_EVENT, (event) => {
+    const detail = event?.detail || {};
+    runtimeSettingsOverrideActive = detail.usingPresets === false;
+    const features = detail.features || {};
+    enabledFeatures.equations = features.equations !== false;
+    enabledFeatures.tables = features.tables !== false;
+    enabledFeatures.figures = features.figures !== false;
+
+    const popupSettings = detail.referencePopups || {};
+    referencePopupTrigger = popupSettings.trigger === "hover" ? "hover" : "cursor";
+    environmentPopupTrigger = popupSettings.environmentTrigger === "hover" ? "hover" : "cursor";
+    dispatchStructureHighlightSettings(detail.highlights || {});
+
+    hidePreview();
+    hideCaptionReferencePopup();
+    hideNestedReferencePopupsFromDepth(1);
+    if (!enabledFeatures.figures) hideGraphicAutocompletePreview();
+    window.clearTimeout(editorReferenceHoverTimer);
+    editorReferenceHoverGeneration += 1;
+    window.clearTimeout(environmentHoverTimer);
+    environmentHoverTimer = null;
+    environmentHoverGeneration += 1;
+    hoverPreviewState = null;
+
+    if (!referencePopupUsesHover()) updateCursorTriggeredReferencePopup(currentState);
+    const previewState = previewStateForRender();
+    if (!environmentPopupUsesHover() && stateCanShowPreview(previewState)) scheduleRender();
+  });
 
   extensionApi?.storage?.onChanged?.addListener((changes, areaName) => {
     if (areaName !== "local") return;
-    if (changes?.[FEATURES_KEY]) {
+    if (!runtimeSettingsOverrideActive && changes?.[FEATURES_KEY]) {
       const features = changes[FEATURES_KEY].newValue;
       enabledFeatures.equations = features?.equations !== false;
       enabledFeatures.tables = features?.tables !== false;
       enabledFeatures.figures = features?.figures !== false;
       hidePreview();
+      hideCaptionReferencePopup();
+      hideNestedReferencePopupsFromDepth(1);
+      if (!enabledFeatures.figures) hideGraphicAutocompletePreview();
       const previewState = previewStateForRender();
       if (stateCanShowPreview(previewState)) scheduleRender();
     }
-    if (changes?.[REFERENCE_POPUPS_KEY]) {
+    if (!runtimeSettingsOverrideActive && changes?.[REFERENCE_POPUPS_KEY]) {
       const settings = changes[REFERENCE_POPUPS_KEY].newValue || {};
       referencePopupTrigger = settings.trigger === "hover" ? "hover" : "cursor";
       environmentPopupTrigger = settings.environmentTrigger === "hover"
@@ -3221,7 +4205,7 @@
         scheduleRender();
       }
     }
-    if (changes?.[STRUCTURE_HIGHLIGHT_KEY]) {
+    if (!runtimeSettingsOverrideActive && changes?.[STRUCTURE_HIGHLIGHT_KEY]) {
       dispatchStructureHighlightSettings(changes[STRUCTURE_HIGHLIGHT_KEY].newValue);
     }
   });
@@ -3229,7 +4213,27 @@
   window.addEventListener("resize", () => {
     positionPreview();
     repositionReferencePopups();
+    scheduleGraphicAutocompletePreviewUpdate();
   }, { passive: true });
+  window.addEventListener("smarttex:editor-scroll-state", (event) => {
+    if (event?.detail?.active === true) {
+      popupsSuppressedAfterEditorScroll = true;
+      window.clearTimeout(editorReferenceHoverTimer);
+      editorReferenceHoverGeneration += 1;
+      window.clearTimeout(environmentHoverTimer);
+      environmentHoverTimer = null;
+      environmentHoverGeneration += 1;
+      hoverPreviewState = null;
+      hidePreview();
+      hideCaptionReferencePopup();
+      hideNestedReferencePopupsFromDepth(1);
+      hideGraphicAutocompletePreview();
+      return;
+    }
+    // Highlights and source-number badges are repositioned by page-bridge.js.
+    // Popups are intentionally not restored after scrolling. They may open again
+    // only after a subsequent cursor, keyboard, pointer or hover interaction.
+  });
   window.addEventListener("scroll", (event) => {
     if (referencePopupContains(event.target)) {
       keepReferencePopupOpen(event);
@@ -3290,9 +4294,16 @@
     }
     pendingRequests.clear();
   }, { once: true });
-  window.addEventListener("pagehide", () => optionsButtonObserver.disconnect(), {
-    once: true
-  });
+  window.addEventListener("pagehide", () => {
+    optionsButtonObserver.disconnect();
+    graphicAutocompleteObserver.disconnect();
+    structureAnalysisStateObserver.disconnect();
+    window.clearTimeout(structureSpinnerHideTimer);
+    if (graphicAutocompleteUpdateFrame !== null) {
+      window.cancelAnimationFrame(graphicAutocompleteUpdateFrame);
+    }
+    hideGraphicAutocompletePreview();
+  }, { once: true });
   };
 
   initializeWhenDependenciesAreReady().catch((error) => {

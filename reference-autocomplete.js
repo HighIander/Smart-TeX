@@ -3,6 +3,8 @@
 (() => {
   "use strict";
 
+  if (globalThis.SmartTeXPageContext?.isDocumentPage?.() === false) return;
+
   if (window.top !== window) return;
   const existingReferenceAutocomplete = document.getElementById("smarttex-reference-autocomplete-popup");
   if (globalThis.__smartTeXReferenceAutocompleteLoaded && existingReferenceAutocomplete) return;
@@ -41,11 +43,31 @@
   const PREVIEW_HIDE_EVENT = "smarttex:reference-autocomplete-preview-hide";
   const ACTIVE_EVENT = "smarttex:reference-autocomplete-active";
   const SETTINGS_KEY = "smarttex:autocomplete:v1";
+  const RUNTIME_SETTINGS_EVENT = "smarttex:runtime-settings";
   const OPEN_DELAY_MS = 70;
   const MAX_RESULTS = 14;
   const REFERENCE_COMMAND = /\\(eqref|ref|pageref|autoref|cref|Cref|vref|Vref|nameref)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/;
+
+  function matchingArgumentClose(source, openIndex) {
+    let depth = 0;
+    for (let index = Math.max(0, Number(openIndex) || 0); index < source.length; index += 1) {
+      const character = source[index];
+      if (character === "\\") {
+        index += 1;
+        continue;
+      }
+      if (character === "{") {
+        depth += 1;
+      } else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    return -1;
+  }
   const extensionApi = globalThis.browser ?? globalThis.chrome;
   const contextTools = globalThis.SmartTeXLatexContext;
+  const interactionTasks = globalThis.SmartTeXInteractionTasks;
   const popupInteractionReady = () => globalThis.SmartTeXPopupGate?.isReady?.() !== false;
 
 
@@ -56,6 +78,7 @@
   let selectedIndex = 0;
   let lastPopupPosition = null;
   let popupTimer = null;
+  let immediateOpenUntil = 0;
   let dismissedContextId = "";
   let requestCounter = 0;
   let sourceCache = null;
@@ -63,6 +86,9 @@
   let configuredOrderMode = "document";
   let orderMode = "document";
   let previewGeneration = 0;
+  let listRenderGeneration = 0;
+  let scrollSuppressed = false;
+  let runtimeSettingsOverrideActive = false;
   const pendingRequests = new Map();
 
   const popup = document.createElement("aside");
@@ -92,6 +118,9 @@
     try {
       const stored = await extensionApi?.storage?.local?.get?.(SETTINGS_KEY);
       configuredOrderMode = normalizeOrder(stored?.[SETTINGS_KEY]?.referenceOrder);
+      const runtimeOrder = globalThis.SmartTeXRuntimeSettings?.autocomplete?.referenceOrder;
+      runtimeSettingsOverrideActive = globalThis.SmartTeXRuntimeSettings?.usingPresets === false;
+      if (runtimeOrder) configuredOrderMode = normalizeOrder(runtimeOrder);
       orderMode = configuredOrderMode;
     } catch (_error) {
       configuredOrderMode = "document";
@@ -166,6 +195,8 @@
   }
 
   function hidePopup({ dismiss = false } = {}) {
+    listRenderGeneration += 1;
+    popup.removeAttribute("aria-busy");
     clearPopupTimer();
     if (dismiss && currentContext) dismissedContextId = contextId();
     popup.hidden = true;
@@ -192,7 +223,10 @@
     ) {
       return null;
     }
-    const beforeCursor = state.value.slice(0, state.cursorIndex);
+    const masked = (typeof contextTools !== "undefined" && contextTools?.maskIgnoredLatex)
+      ? contextTools.maskIgnoredLatex(state.value)
+      : state.value;
+    const beforeCursor = masked.slice(0, state.cursorIndex);
     const match = beforeCursor.match(REFERENCE_COMMAND);
     if (!match) return null;
     const completeMatch = match[0];
@@ -202,10 +236,14 @@
     const beforeFragment = argument.slice(lastComma + 1);
     const leadingWhitespace = beforeFragment.match(/^\s*/)?.[0] || "";
     const fragmentStart = state.cursorIndex - beforeFragment.length + leadingWhitespace.length;
-    const afterFragment = state.value
-      .slice(state.cursorIndex)
-      .match(/^[^,{}\s]*/)?.[0] || "";
     const commandStart = beforeCursor.length - completeMatch.length;
+    const anchorIndex = commandStart + completeMatch.lastIndexOf("{");
+    const argumentIsClosed = matchingArgumentClose(state.value, anchorIndex) >= state.cursorIndex;
+    // Text to the right of the cursor only belongs to the active completion
+    // token when the command argument has a matching closing brace.
+    const afterFragment = argumentIsClosed
+      ? (state.value.slice(state.cursorIndex).match(/^[^,{}\s]*/)?.[0] || "")
+      : "";
     return {
       command,
       fragment: beforeFragment.slice(leadingWhitespace.length) + afterFragment,
@@ -215,48 +253,60 @@
       fragmentStart,
       fragmentEnd: state.cursorIndex + afterFragment.length,
       commandStart,
-      anchorIndex: commandStart + completeMatch.lastIndexOf("{")
+      anchorIndex
     };
   }
 
   function rebuildRecords(sourceValue) {
     const source = String(sourceValue || "");
-    if (source === sourceCache) return;
-    sourceCache = source;
-    targetCache = new Map();
-    records = [];
-    const masked = contextTools.maskIgnoredLatex(source);
-    const equationRanges = (contextTools.equationContexts?.(source)?.contexts || [])
-      .map((context) => ({
-        start: Number(context.openStart) || 0,
-        end: Number(context.closeEnd) || 0
-      }))
-      .sort((left, right) => left.start - right.start);
-    let equationRangeIndex = 0;
-    const seen = new Set();
-    const pattern = /\\label\s*\{([^{}]+)\}/g;
-    let match;
-    while ((match = pattern.exec(masked))) {
-      const label = String(match[1] || "").trim();
-      if (!label || seen.has(label)) continue;
-      while (
-        equationRangeIndex < equationRanges.length &&
-        equationRanges[equationRangeIndex].end < match.index
-      ) {
-        equationRangeIndex += 1;
+    if (source === sourceCache) return true;
+    const calculate = () => {
+      const masked = contextTools.maskIgnoredLatex(source);
+      const equationRanges = (contextTools.equationContexts?.(source)?.contexts || [])
+        .map((context) => ({
+          start: Number(context.openStart) || 0,
+          end: Number(context.closeEnd) || 0
+        }))
+        .sort((left, right) => left.start - right.start);
+      let equationRangeIndex = 0;
+      const seen = new Set();
+      const nextRecords = [];
+      const pattern = /\\label\s*\{([^{}]+)\}/g;
+      let match;
+      while ((match = pattern.exec(masked))) {
+        interactionTasks?.checkpoint?.(pattern.lastIndex, 64);
+        const label = String(match[1] || "").trim();
+        if (!label || seen.has(label)) continue;
+        while (
+          equationRangeIndex < equationRanges.length &&
+          equationRanges[equationRangeIndex].end < match.index
+        ) equationRangeIndex += 1;
+        const equationRange = equationRanges[equationRangeIndex];
+        seen.add(label);
+        nextRecords.push({
+          label,
+          sourceIndex: match.index,
+          documentOrder: nextRecords.length,
+          equation: Boolean(
+            equationRange &&
+            match.index >= equationRange.start &&
+            match.index <= equationRange.end
+          )
+        });
       }
-      const equationRange = equationRanges[equationRangeIndex];
-      seen.add(label);
-      records.push({
-        label,
-        sourceIndex: match.index,
-        documentOrder: records.length,
-        equation: Boolean(
-          equationRange &&
-          match.index >= equationRange.start &&
-          match.index <= equationRange.end
-        )
-      });
+      return nextRecords;
+    };
+    try {
+      const nextRecords = interactionTasks?.runSync
+        ? interactionTasks.runSync("reference-target-index", calculate)
+        : calculate();
+      sourceCache = source;
+      targetCache = new Map();
+      records = nextRecords;
+      return true;
+    } catch (error) {
+      if (interactionTasks?.isAbortError?.(error)) return false;
+      throw error;
     }
   }
 
@@ -265,8 +315,14 @@
     if (targetCache.has(record.label)) return targetCache.get(record.label);
     let target = null;
     try {
-      target = contextTools.referenceTarget(sourceCache || "", record.label);
-    } catch (_error) {
+      target = interactionTasks?.runSync
+        ? interactionTasks.runSync(
+            "reference-target-preview",
+            () => contextTools.referenceTarget(sourceCache || "", record.label)
+          )
+        : contextTools.referenceTarget(sourceCache || "", record.label);
+    } catch (error) {
+      if (interactionTasks?.isAbortError?.(error)) throw error;
       target = null;
     }
     targetCache.set(record.label, target);
@@ -309,10 +365,18 @@
   function matchingRecords(context) {
     const command = context?.command || "ref";
     const fragment = context?.fragment || "";
-    return records.filter((record) => (
-      command !== "eqref" || record.equation
-    )).filter((record) => Number.isFinite(matchRank(record, fragment)))
-      .sort((left, right) => {
+    const calculate = () => {
+      const matches = [];
+      for (let index = 0; index < records.length; index += 1) {
+        interactionTasks?.checkpoint?.(index, 32);
+        const record = records[index];
+        if (command === "eqref" && !record.equation) continue;
+        if (!Number.isFinite(matchRank(record, fragment))) continue;
+        matches.push(record);
+      }
+      let comparisonCount = 0;
+      matches.sort((left, right) => {
+        interactionTasks?.checkpoint?.(comparisonCount++, 32);
         if (orderMode === "alphabetical") {
           return left.label.localeCompare(right.label, undefined, {
             sensitivity: "base",
@@ -320,12 +384,20 @@
           });
         }
         return left.documentOrder - right.documentOrder;
-      })
-      .slice(0, MAX_RESULTS)
-      .map((record) => ({
-        record,
-        target: targetFor(record)
-      }));
+      });
+      return matches.slice(0, MAX_RESULTS).map((record, index) => {
+        interactionTasks?.checkpoint?.(index, 8);
+        return { record, target: targetFor(record) };
+      });
+    };
+    try {
+      return interactionTasks?.runSync
+        ? interactionTasks.runSync("reference-list-filter", calculate)
+        : calculate();
+    } catch (error) {
+      if (interactionTasks?.isAbortError?.(error)) return null;
+      throw error;
+    }
   }
 
   function selectedItemElement() {
@@ -379,7 +451,7 @@
     if (preview) previewSelected();
   }
 
-  function renderPopup() {
+  function renderPopupNow() {
     queryLabel.textContent = currentContext?.fragment
       ? `${currentContext.command} matching “${currentContext.fragment}”`
       : `Select a ${currentContext?.command || "ref"} target`;
@@ -393,26 +465,31 @@
     orderLabel.title = alphabetical
       ? "Alphabetical sorting is enabled for this completion list"
       : "Sort this completion list alphabetically";
-    list.replaceChildren();
-    renderedRecords = matchingRecords(currentContext);
-    const exactIndex = renderedRecords.findIndex(
+    const nextRecords = matchingRecords(currentContext);
+    if (!nextRecords) return;
+    const exactIndex = nextRecords.findIndex(
       (entry) => entry.record.label === currentContext?.currentLabel
     );
     if (exactIndex >= 0) selectedIndex = exactIndex;
-    if (selectedIndex >= renderedRecords.length) selectedIndex = 0;
+    if (selectedIndex >= nextRecords.length) selectedIndex = 0;
 
-    if (!renderedRecords.length) {
+    const fragment = document.createDocumentFragment();
+
+    if (!nextRecords.length) {
       const empty = document.createElement("p");
       empty.className = "smarttex-reference-autocomplete-empty";
       empty.textContent = currentContext?.command === "eqref"
         ? "No matching equation label was found."
         : "No matching reference label was found.";
-      list.appendChild(empty);
+      fragment.appendChild(empty);
+      renderedRecords = nextRecords;
+      list.replaceChildren(fragment);
       dispatchPreviewHide({ force: true });
       return;
     }
 
-    renderedRecords.forEach((entry, index) => {
+    nextRecords.forEach((entry, index) => {
+      interactionTasks?.checkpoint?.(index, 8);
       const item = document.createElement("button");
       item.type = "button";
       item.className = "smarttex-reference-autocomplete-item";
@@ -443,9 +520,42 @@
       });
       item.addEventListener("mousedown", (event) => event.preventDefault());
       item.addEventListener("click", () => insertRecord(entry.record));
-      list.appendChild(item);
+      fragment.appendChild(item);
     });
+    renderedRecords = nextRecords;
+    list.replaceChildren(fragment);
     previewSelected();
+  }
+
+  function loadingListContent() {
+    const row = document.createElement("p");
+    row.className = "smarttex-reference-autocomplete-empty smarttex-list-loading";
+    const spinner = document.createElement("span");
+    spinner.className = "smarttex-inline-loading-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    text.textContent = "Gathering reference targets…";
+    row.append(spinner, text);
+    return row;
+  }
+
+  function renderPopup() {
+    if (!currentContext || !currentState) return;
+    const generation = ++listRenderGeneration;
+    popup.setAttribute("aria-busy", "true");
+    list.replaceChildren(loadingListContent());
+    window.requestAnimationFrame(() => {
+      if (generation !== listRenderGeneration || !currentContext || !currentState) return;
+      try {
+        if (!rebuildRecords(currentState.value)) return;
+        renderPopupNow();
+      } finally {
+        if (generation === listRenderGeneration) {
+          popup.removeAttribute("aria-busy");
+          positionPopup();
+        }
+      }
+    });
   }
 
   async function insertRecord(record) {
@@ -468,14 +578,21 @@
     const screen = currentState?.screen;
     if (!screen) return;
     const margin = 9;
-    const gap = 9;
     const width = Math.min(500, window.innerWidth - margin * 2);
     popup.style.width = `${Math.max(300, width)}px`;
-    popup.style.maxHeight = `${Math.max(190, window.innerHeight - margin * 2)}px`;
-    const rect = popup.getBoundingClientRect();
     const cursorLeft = Number(screen.pageX) - window.scrollX;
     const cursorTop = Number(screen.pageY) - window.scrollY;
     const lineHeight = Math.max(14, Number(screen.lineHeight) || 18);
+    const gap = lineHeight * 2;
+    const belowSpace = window.innerHeight - margin - (cursorTop + lineHeight + gap);
+    const aboveSpace = cursorTop - gap - margin;
+    const availableSideSpace = Math.max(belowSpace, aboveSpace);
+    const popupMaxHeight = Math.max(
+      130,
+      Math.min(430, window.innerHeight - margin * 2, availableSideSpace)
+    );
+    popup.style.maxHeight = `${Math.round(popupMaxHeight)}px`;
+    const rect = popup.getBoundingClientRect();
     const cursorRect = {
       left: cursorLeft - 3,
       right: cursorLeft + 3,
@@ -551,7 +668,6 @@
       hidePopup();
       return;
     }
-    rebuildRecords(currentState.value);
     const previousId = contextId();
     currentContext = nextContext;
     const nextId = contextId();
@@ -572,13 +688,37 @@
       positionPopup();
       return;
     }
+    if (Date.now() <= immediateOpenUntil) {
+      immediateOpenUntil = 0;
+      openForCurrentContext();
+      return;
+    }
     popupTimer = window.setTimeout(openForCurrentContext, OPEN_DELAY_MS);
   }
+
+  interactionTasks?.subscribe?.(() => {
+    clearPopupTimer();
+    previewGeneration += 1;
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    scrollSuppressed = false;
+    if (event.target?.closest?.(
+      ".cm-content, .cm-line, .cm-scroller, .cm-editor, " +
+      ".ace_content, .ace_text-layer, .ace_scroller, .ace_editor"
+    )) {
+      immediateOpenUntil = Date.now() + 500;
+    }
+  }, true);
 
   window.addEventListener(STATE_EVENT, (event) => {
     try {
       currentState = JSON.parse(String(event.detail || "null"));
     } catch (_error) {
+      hidePopup();
+      return;
+    }
+    if (scrollSuppressed) {
       hidePopup();
       return;
     }
@@ -610,6 +750,7 @@
   });
 
   document.addEventListener("keydown", (event) => {
+    scrollSuppressed = false;
     if (popup.hidden) return;
     if (event.key === "Escape") {
       event.preventDefault();
@@ -648,20 +789,37 @@
     }
   }, true);
 
+  document.addEventListener("beforeinput", () => { scrollSuppressed = false; }, true);
+  document.addEventListener("input", () => { scrollSuppressed = false; }, true);
+
   document.addEventListener("mousedown", (event) => {
     if (popup.hidden || popup.contains(event.target)) return;
     if (event.target?.closest?.(".smarttex-document-reference-popup")) return;
-    hidePopup({ dismiss: true });
+    hidePopup();
   }, true);
 
   window.addEventListener("resize", positionPopup, { passive: true });
+  window.addEventListener("smarttex:editor-scroll-state", (event) => {
+    if (event?.detail?.active !== true) return;
+    // Keep the list closed for coordinate-only state updates after scrolling.
+    // The next explicit keyboard or pointer interaction may open it again.
+    scrollSuppressed = true;
+    hidePopup();
+  });
   window.addEventListener("scroll", (event) => {
     if (event.target instanceof Node && popup.contains(event.target)) return;
     positionPopup();
   }, true);
 
+  window.addEventListener(RUNTIME_SETTINGS_EVENT, (event) => {
+    const detail = event?.detail || {};
+    runtimeSettingsOverrideActive = detail.usingPresets === false;
+    configuredOrderMode = normalizeOrder(detail.autocomplete?.referenceOrder);
+    if (popup.hidden) orderMode = configuredOrderMode;
+  });
+
   extensionApi?.storage?.onChanged?.addListener((changes, areaName) => {
-    if (areaName !== "local" || !changes?.[SETTINGS_KEY]) return;
+    if (areaName !== "local" || !changes?.[SETTINGS_KEY] || runtimeSettingsOverrideActive) return;
     configuredOrderMode = normalizeOrder(
       changes[SETTINGS_KEY].newValue?.referenceOrder
     );

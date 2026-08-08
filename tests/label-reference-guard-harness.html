@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; min-height: 900px; }
+    #ide-redesign-panel-file-tree { position: fixed; left: 0; top: 0; width: 360px; height: 820px; }
+  </style>
+</head>
+<body>
+  <div id="ide-redesign-panel-file-tree"></div>
+  <output id="label-guard-test-result">pending</output>
+  <script>
+    (() => {
+      const listeners = new Map();
+      window.browser = {
+        storage: {
+          local: {
+            get: async () => ({ "smarttex:label-reference-guard:v1": { enabled: true } })
+          },
+          onChanged: { addListener() {} }
+        }
+      };
+      let state = null;
+      window.addEventListener("smarttex:citation-editor-request", (event) => {
+        const request = JSON.parse(event.detail || "{}");
+        const response = { requestId: request.requestId, ok: true };
+        if (request.type === "getState") response.state = state;
+        queueMicrotask(() => window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+          detail: JSON.stringify(response)
+        })));
+      });
+      window.__setGuardState = (next) => {
+        state = next;
+        window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+          detail: JSON.stringify(next)
+        }));
+      };
+    })();
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../label-reference-guard.js"></script>
+  <script>
+    (async () => {
+      const output = document.querySelector("#label-guard-test-result");
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      try {
+        const before = String.raw`\begin{document}
+DOCUMENT-BEGIN-SENTINEL. Prefix one. Prefix two. Prefix three. Prefix four. Prefix five.
+First sentence. Second sentence before. See $E=mc^2$ and \ref{sec:other}. Then see \ref{sec:old} here. First sentence after. Second sentence after.
+\section{Other}\label{sec:other}
+\section{Changed}\label{sec:old}
+\end{document}`;
+        const after = before.replace(String.raw`\label{sec:old}`, String.raw`\label{sec:new}`);
+        const inside = after.indexOf("sec:new") + 3;
+        window.__setGuardState({ fileName: "main.tex", value: before, cursorIndex: 0 });
+        await sleep(40);
+        window.__setGuardState({ fileName: "main.tex", value: after, cursorIndex: inside });
+        await sleep(650);
+        if (document.querySelector(".smarttex-label-guard-dialog")) {
+          throw new Error("Dialog opened while cursor was still inside the label field");
+        }
+        window.__setGuardState({ fileName: "main.tex", value: after, cursorIndex: after.indexOf("First sentence") });
+        await sleep(120);
+        const dialog = document.querySelector(".smarttex-label-guard-dialog");
+        if (!dialog) throw new Error("Dialog did not open after leaving the label field");
+        const update = dialog.querySelector(".smarttex-label-guard-change");
+        if (update?.textContent !== "Update") throw new Error("Per-reference button was not renamed to Update");
+        const link = dialog.querySelector(".smarttex-label-guard-link");
+        if (link.hasAttribute("title")) throw new Error("Native title tooltip still exists");
+        link.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
+        await sleep(78);
+        let preview = document.querySelector(".smarttex-label-guard-preview");
+        if (!preview) throw new Error("Context preview did not open");
+        if (!preview.querySelector(".smarttex-label-guard-preview-loading .smarttex-inline-loading-spinner")) {
+          throw new Error("Context preview did not show a loading spinner before rendering");
+        }
+        await sleep(90);
+        preview = document.querySelector(".smarttex-label-guard-preview");
+        if (!preview || preview.hasAttribute("aria-busy")) {
+          throw new Error("Context preview did not finish rendering");
+        }
+        if (/DOCUMENT-BEGIN-SENTINEL/.test(preview.textContent)) {
+          throw new Error("Context preview expanded to the beginning of the document");
+        }
+        if (!/Then see/.test(preview.textContent)) {
+          throw new Error("Context preview did not render the local reference context");
+        }
+        if (/\\ttfamily/.test(preview.textContent)) throw new Error("ttfamily leaked into context preview");
+        if (!preview.querySelector(".katex")) throw new Error("Equation context was not rendered with KaTeX");
+        if (!preview.querySelectorAll(".smarttex-label-guard-preview-link").length) {
+          throw new Error("References in the context were not rendered as links");
+        }
+        output.textContent = "passed";
+        document.documentElement.dataset.labelGuardTest = "passed";
+      } catch (error) {
+        output.textContent = error.stack || error.message || String(error);
+        document.documentElement.dataset.labelGuardTest = "failed";
+      }
+    })();
+  </script>
+</body>
+</html>

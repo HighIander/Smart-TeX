@@ -3,6 +3,8 @@
 (() => {
   "use strict";
 
+  if (globalThis.SmartTeXPageContext?.isDocumentPage?.() === false) return;
+
   if (globalThis.__smartTeXCitationAutocompleteLoaded || window.top !== window) return;
   globalThis.__smartTeXCitationAutocompleteLoaded = true;
 
@@ -16,9 +18,29 @@
   const OPEN_DELAY_MS = 220;
   const MAX_RESULTS = 8;
   const CITE_COMMAND = /\\(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/i;
+
+  function matchingArgumentClose(source, openIndex) {
+    let depth = 0;
+    for (let index = Math.max(0, Number(openIndex) || 0); index < source.length; index += 1) {
+      const character = source[index];
+      if (character === "\\") {
+        index += 1;
+        continue;
+      }
+      if (character === "{") {
+        depth += 1;
+      } else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    return -1;
+  }
   const SMART_CITATIONS_SELECTOR = "#ctca-popup, #ctca-bib-manager";
   const extensionApi = globalThis.browser ?? globalThis.chrome;
   const parser = globalThis.SmartTeXBibTeX;
+  const contextTools = globalThis.SmartTeXLatexContext;
+  const interactionTasks = globalThis.SmartTeXInteractionTasks;
   const popupInteractionReady = () => globalThis.SmartTeXPopupGate?.isReady?.() !== false;
 
   if (!parser?.parseBibTeX) {
@@ -39,6 +61,7 @@
   let cacheGeneration = 0;
   let parsing = false;
   let popupTimer = null;
+  let immediateOpenUntil = 0;
   let dismissedContextId = "";
   let requestCounter = 0;
   let smartCitationsPresent = false;
@@ -46,6 +69,7 @@
   let backgroundLoadParseAttemptedKey = "";
   let lastOpenedFileName = "";
   let backgroundParseTimer = null;
+  let scrollSuppressed = false;
   const pendingRequests = new Map();
 
   const popup = document.createElement("aside");
@@ -164,7 +188,10 @@
     ) {
       return null;
     }
-    const beforeCursor = state.value.slice(0, state.cursorIndex);
+    const masked = (typeof contextTools !== "undefined" && contextTools?.maskIgnoredLatex)
+      ? contextTools.maskIgnoredLatex(state.value)
+      : state.value;
+    const beforeCursor = masked.slice(0, state.cursorIndex);
     const match = beforeCursor.match(CITE_COMMAND);
     if (!match) return null;
     const completeMatch = match[0];
@@ -174,14 +201,18 @@
     const leadingWhitespace = beforeFragment.match(/^\s*/)?.[0] || "";
     const fragmentStart =
       state.cursorIndex - beforeFragment.length + leadingWhitespace.length;
-    const afterFragment = state.value
-      .slice(state.cursorIndex)
-      .match(/^[^,{}\s]*/)?.[0] || "";
+    const anchorIndex =
+      beforeCursor.length - completeMatch.length + completeMatch.lastIndexOf("{");
+    const argumentIsClosed = matchingArgumentClose(state.value, anchorIndex) >= state.cursorIndex;
+    // Ignore text after the cursor while the citation argument is still open.
+    const afterFragment = argumentIsClosed
+      ? (state.value.slice(state.cursorIndex).match(/^[^,{}\s]*/)?.[0] || "")
+      : "";
     return {
       fragment: beforeFragment.slice(leadingWhitespace.length) + afterFragment,
       fragmentStart,
       fragmentEnd: state.cursorIndex + afterFragment.length,
-      anchorIndex: beforeCursor.length - completeMatch.length + completeMatch.lastIndexOf("{")
+      anchorIndex
     };
   }
 
@@ -270,33 +301,49 @@
 
   function matchingRecords(fragment) {
     const terms = String(fragment || "").trim().split(/\s+/).filter(Boolean);
-    return records.map((record) => {
-      let score = terms.length ? 0 : 100;
-      for (const term of terms) {
-        const termResult = Math.min(
-          termScore(record.key, term),
-          termScore(record.title, term) + 30,
-          termScore((record.authors || []).join("; "), term) + 60,
-          termScore(record.journal, term) + 90,
-          termScore(record.year, term) + 100,
-          termScore(recordSearchText(record), term) + 120
-        );
-        if (!Number.isFinite(termResult)) {
-          score = Number.POSITIVE_INFINITY;
-          break;
+    const calculate = () => {
+      const scored = [];
+      for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
+        interactionTasks?.checkpoint?.(recordIndex, 32);
+        const record = records[recordIndex];
+        let score = terms.length ? 0 : 100;
+        for (let termIndex = 0; termIndex < terms.length; termIndex += 1) {
+          interactionTasks?.checkpoint?.(termIndex, 8);
+          const term = terms[termIndex];
+          const termResult = Math.min(
+            termScore(record.key, term),
+            termScore(record.title, term) + 30,
+            termScore((record.authors || []).join("; "), term) + 60,
+            termScore(record.journal, term) + 90,
+            termScore(record.year, term) + 100,
+            termScore(recordSearchText(record), term) + 120
+          );
+          if (!Number.isFinite(termResult)) {
+            score = Number.POSITIVE_INFINITY;
+            break;
+          }
+          score += termResult;
         }
-        score += termResult;
+        if (Number.isFinite(score)) scored.push({ record, score });
       }
-      return { record, score };
-    }).filter((item) => Number.isFinite(item.score))
-      .sort((left, right) => (
-        left.score - right.score ||
-        left.record.key.localeCompare(right.record.key, undefined, {
-          sensitivity: "base"
-        })
-      ))
-      .slice(0, MAX_RESULTS)
-      .map((item) => item.record);
+      let comparisons = 0;
+      scored.sort((left, right) => {
+        interactionTasks?.checkpoint?.(comparisons++, 32);
+        return left.score - right.score ||
+          left.record.key.localeCompare(right.record.key, undefined, {
+            sensitivity: "base"
+          });
+      });
+      return scored.slice(0, MAX_RESULTS).map((item) => item.record);
+    };
+    try {
+      return interactionTasks?.runSync
+        ? interactionTasks.runSync("citation-list-filter", calculate)
+        : calculate();
+    } catch (error) {
+      if (interactionTasks?.isAbortError?.(error)) return null;
+      throw error;
+    }
   }
 
   function abbreviatedAuthors(record) {
@@ -367,29 +414,34 @@
     queryLabel.textContent = query
       ? `Citations matching “${query}”`
       : "Select a citation";
-    list.replaceChildren();
     setStatus(parsing ? "" : parseMessage, false);
-    renderedRecords = [];
 
     if (parseState !== "ready") {
+      list.replaceChildren();
+      renderedRecords = [];
       if (!parsing) createParsePrompt();
       if (parsing) prependParsingIndicator();
       return;
     }
 
-    renderedRecords = matchingRecords(query);
-    if (selectedIndex >= renderedRecords.length) selectedIndex = 0;
-    if (!renderedRecords.length) {
+    const nextRecords = matchingRecords(query);
+    if (!nextRecords) return;
+    if (selectedIndex >= nextRecords.length) selectedIndex = 0;
+    const fragment = document.createDocumentFragment();
+    if (!nextRecords.length) {
       const empty = document.createElement("p");
       empty.className = "smarttex-citation-empty";
       empty.textContent = "No citation matches the current text.";
-      list.appendChild(empty);
+      fragment.appendChild(empty);
+      renderedRecords = nextRecords;
+      list.replaceChildren(fragment);
       if (parsing) prependParsingIndicator();
       return;
     }
 
     const exactKey = query.trim();
-    renderedRecords.forEach((record, index) => {
+    nextRecords.forEach((record, index) => {
+      interactionTasks?.checkpoint?.(index, 8);
       const item = document.createElement("button");
       item.type = "button";
       item.className = "smarttex-citation-item";
@@ -418,8 +470,10 @@
       });
       item.addEventListener("mousedown", (event) => event.preventDefault());
       item.addEventListener("click", () => insertRecord(record));
-      list.appendChild(item);
+      fragment.appendChild(item);
     });
+    renderedRecords = nextRecords;
+    list.replaceChildren(fragment);
     if (parsing) prependParsingIndicator();
   }
 
@@ -453,15 +507,22 @@
     const screen = currentState?.screen;
     if (!screen) return;
     const margin = 9;
-    const gap = 10;
     const width = Math.min(540, window.innerWidth - margin * 2);
     popup.style.width = `${Math.max(280, width)}px`;
-    popup.style.maxHeight = `${Math.max(180, window.innerHeight - margin * 2)}px`;
-
-    const rect = popup.getBoundingClientRect();
     const cursorLeft = Number(screen.pageX) - window.scrollX;
     const cursorTop = Number(screen.pageY) - window.scrollY;
     const lineHeight = Math.max(14, Number(screen.lineHeight) || 18);
+    const gap = lineHeight * 2;
+    const belowSpace = window.innerHeight - margin - (cursorTop + lineHeight + gap);
+    const aboveSpace = cursorTop - gap - margin;
+    const availableSideSpace = Math.max(belowSpace, aboveSpace);
+    const popupMaxHeight = Math.max(
+      130,
+      Math.min(460, window.innerHeight - margin * 2, availableSideSpace)
+    );
+    popup.style.maxHeight = `${Math.round(popupMaxHeight)}px`;
+
+    const rect = popup.getBoundingClientRect();
     const cursorRect = {
       left: cursorLeft - 3,
       right: cursorLeft + 3,
@@ -575,10 +636,25 @@
       maybeStartInitialParse();
       return;
     }
+    if (Date.now() <= immediateOpenUntil) {
+      immediateOpenUntil = 0;
+      openForCurrentContext();
+      return;
+    }
     popupTimer = window.setTimeout(openForCurrentContext, OPEN_DELAY_MS);
   }
 
+  document.addEventListener("pointerdown", (event) => {
+    if (event.target?.closest?.(
+      ".cm-content, .cm-line, .cm-scroller, .cm-editor, " +
+      ".ace_content, .ace_text-layer, .ace_scroller, .ace_editor"
+    )) {
+      immediateOpenUntil = Date.now() + 500;
+    }
+  }, true);
+
   function bibliographyFiles(tex, cursorIndex = 0) {
+    const searchable = contextTools?.maskIgnoredLatex?.(tex) || String(tex || "");
     const found = [];
     const add = (value, position) => {
       let name = String(value || "").trim().replace(/^['"]|['"]$/g, "");
@@ -588,11 +664,11 @@
     };
     let match;
     const traditional = /\\bibliography\s*\{([^{}]+)\}/gi;
-    while ((match = traditional.exec(tex)) !== null) {
+    while ((match = traditional.exec(searchable)) !== null) {
       match[1].split(",").forEach((name) => add(name, match.index));
     }
     const biblatex = /\\(?:addbibresource|addglobalbib|addsectionbib)\s*(?:\[[^\]]*\]\s*)?\{([^{}]+)\}/gi;
-    while ((match = biblatex.exec(tex)) !== null) add(match[1], match.index);
+    while ((match = biblatex.exec(searchable)) !== null) add(match[1], match.index);
     const unique = new Map();
     found.sort((left, right) => (
       Number(left.position < cursorIndex) - Number(right.position < cursorIndex) ||
@@ -666,6 +742,8 @@
     const previousParseState = parseState;
     const previousRecords = records;
     const previousFiles = cachedFiles;
+    const interactionGeneration = interactionTasks?.generation?.() ?? 0;
+    let cancelledByEditorActivity = false;
     parsing = true;
     parseMessage = "";
     if (!records.length) parseState = "loading";
@@ -680,6 +758,7 @@
     let succeeded = false;
     try {
       const liveState = (await bridgeRequest("getState", {}, 2500)).state;
+      interactionTasks?.throwIfGenerationChanged?.(interactionGeneration);
       let files = bibliographyFiles(liveState.value, liveState.cursorIndex);
       const activeBibFile = /\.bib$/i.test(String(liveState.fileName || ""))
         ? String(liveState.fileName)
@@ -710,21 +789,28 @@
           let bibState = useLiveEditorValue
             ? { value: liveState.value, fileName: liveState.fileName }
             : await fetchBibliographyFile(fileName);
-          let fileRecords = parser.parseBibTeX(
-            bibState.value,
-            bibState.fileName || fileName
-          );
+          interactionTasks?.throwIfGenerationChanged?.(interactionGeneration);
+          let fileRecords = interactionTasks?.runSync
+            ? interactionTasks.runSync(
+                "bibtex-parse",
+                () => parser.parseBibTeX(bibState.value, bibState.fileName || fileName)
+              )
+            : parser.parseBibTeX(bibState.value, bibState.fileName || fileName);
 
           // CollabTeX can briefly expose the old editor session after changing
           // files. Retry a zero-result project read once before reporting a
           // valid bibliography as empty.
           if (!fileRecords.length && !useLiveEditorValue) {
             await new Promise((resolve) => window.setTimeout(resolve, 140));
+            interactionTasks?.throwIfGenerationChanged?.(interactionGeneration);
             const retryState = await fetchBibliographyFile(fileName);
-            const retryRecords = parser.parseBibTeX(
-              retryState.value,
-              retryState.fileName || fileName
-            );
+            interactionTasks?.throwIfGenerationChanged?.(interactionGeneration);
+            const retryRecords = interactionTasks?.runSync
+              ? interactionTasks.runSync(
+                  "bibtex-parse-retry",
+                  () => parser.parseBibTeX(retryState.value, retryState.fileName || fileName)
+                )
+              : parser.parseBibTeX(retryState.value, retryState.fileName || fileName);
             if (
               retryRecords.length ||
               String(retryState.value || "") !== String(bibState.value || "")
@@ -743,10 +829,12 @@
             )
           });
         } catch (error) {
+          if (interactionTasks?.isAbortError?.(error)) throw error;
           failures.push(`${bibliographyDisplayName(fileName)}: ${error.message || String(error)}`);
         }
         // Yield between files so large projects never monopolize the editor UI.
         await new Promise((resolve) => window.setTimeout(resolve, 0));
+        interactionTasks?.throwIfGenerationChanged?.(interactionGeneration);
       }
 
       const unique = new Map();
@@ -779,10 +867,11 @@
       await saveProjectCache();
       succeeded = true;
     } catch (error) {
+      cancelledByEditorActivity = interactionTasks?.isAbortError?.(error) === true;
       records = previousRecords;
       cachedFiles = previousFiles;
       parseState = records.length ? "ready" : (previousParseState === "empty" ? "empty" : "unparsed");
-      parseMessage = error.message || String(error);
+      parseMessage = cancelledByEditorActivity ? "" : (error.message || String(error));
     } finally {
       parsing = false;
       try {
@@ -793,7 +882,7 @@
       currentContext = findCitationContext(currentState);
       if (smartCitationsIsPresent()) {
         updateSmartCitationsPresence();
-      } else if (keepAutocompleteVisible && currentContext) {
+      } else if (!cancelledByEditorActivity && keepAutocompleteVisible && currentContext) {
         renderPopup();
         showPopup();
         if (parseMessage) setStatus(parseMessage, !succeeded);
@@ -802,6 +891,7 @@
 
     return {
       ok: succeeded,
+      cancelled: cancelledByEditorActivity,
       message: parseMessage || (
         succeeded
           ? `Parsed ${records.length} citation entr${records.length === 1 ? "y" : "ies"}.`
@@ -832,6 +922,14 @@
       });
     }, reason === "bib-opened" ? 450 : 900);
   }
+
+  interactionTasks?.subscribe?.(() => {
+    clearPopupTimer();
+    window.clearTimeout(backgroundParseTimer);
+    backgroundParseTimer = null;
+    initialParseAttemptedKey = "";
+    backgroundLoadParseAttemptedKey = "";
+  });
 
   function maybeStartInitialParse() {
     if (
@@ -870,6 +968,10 @@
     try {
       currentState = JSON.parse(String(event.detail || "null"));
     } catch (_error) {
+      return;
+    }
+    if (scrollSuppressed) {
+      hidePopup();
       return;
     }
     updateSmartCitationsPresence();
@@ -929,6 +1031,7 @@
   closeButton.addEventListener("click", () => hidePopup({ dismiss: true }));
 
   document.addEventListener("keydown", (event) => {
+    scrollSuppressed = false;
     if (smartCitationsPresent || popup.hidden || parsing) return;
     if (event.key === "Escape") {
       event.preventDefault();
@@ -972,13 +1075,22 @@
     }
   }, true);
 
+  document.addEventListener("beforeinput", () => { scrollSuppressed = false; }, true);
+  document.addEventListener("input", () => { scrollSuppressed = false; }, true);
+
   document.addEventListener("mousedown", (event) => {
+    scrollSuppressed = false;
     if (!popup.hidden && !popup.contains(event.target)) {
-      hidePopup({ dismiss: true });
+      hidePopup();
     }
   }, true);
 
   window.addEventListener("resize", positionPopup, { passive: true });
+  window.addEventListener("smarttex:editor-scroll-state", (event) => {
+    if (event?.detail?.active !== true) return;
+    scrollSuppressed = true;
+    hidePopup();
+  });
   window.addEventListener("scroll", (event) => {
     if (event.target instanceof Node && popup.contains(event.target)) return;
     positionPopup();

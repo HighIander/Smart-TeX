@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX includegraphics hover preview harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; padding: 80px; font: 14px system-ui, sans-serif; }
+    #native-graphics-list {
+      position: fixed;
+      left: 260px;
+      top: 180px;
+      width: 320px;
+      height: 110px;
+      overflow: auto;
+      border: 1px solid #888;
+      background: white;
+    }
+    #native-graphics-list [role="option"] { padding: 12px; }
+    #includegraphics-hover-test-result {
+      position: fixed; right: 12px; bottom: 12px; z-index: 2147483647;
+      padding: 7px 11px; border-radius: 999px; color: white;
+      background: #9a6700; font: 700 12px/1.2 system-ui, sans-serif;
+    }
+    #includegraphics-hover-test-result[data-result="passed"] { background: #16803b; }
+    #includegraphics-hover-test-result[data-result="failed"] { background: #cf222e; }
+  </style>
+</head>
+<body>
+  <div class="file-tree-list" hidden>
+    <div role="treeitem" data-path="figures/first.png"
+      data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='120'%3E%3Crect width='240' height='120' fill='%233158b8'/%3E%3C/svg%3E"></div>
+    <div role="treeitem" data-path="figures/second.png"
+      data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='120'%3E%3Crect width='240' height='120' fill='%235b3da5'/%3E%3C/svg%3E"></div>
+  </div>
+  <div id="native-graphics-list" role="listbox" aria-label="Native figure suggestions">
+    <div id="first-option" role="option" aria-selected="true">figures/first.png</div>
+    <div id="second-option" role="option" aria-selected="false">figures/second.png</div>
+  </div>
+  <output id="includegraphics-hover-test-result">Includegraphics hover test running</output>
+  <script>
+    const featureKey = "smarttex:features:v1";
+    const popupKey = "smarttex:reference-popups:v1";
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get() {
+            return {
+              [featureKey]: { equations: true, tables: true, figures: true },
+              [popupKey]: { trigger: "cursor", environmentTrigger: "cursor" }
+            };
+          }
+        },
+        onChanged: { addListener() {} }
+      },
+      runtime: { async sendMessage() { return { ok: true }; } }
+    };
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+    function sendState() {
+      const value = String.raw`\includegraphics{figures/f}`;
+      const cursorIndex = value.length - 1;
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          screen: { pageX: 240, pageY: 180, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "codemirror"
+        })
+      }));
+    }
+
+    async function waitForPath(path) {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const preview = document.querySelector("#smarttex-graphic-autocomplete-preview:not([hidden])");
+        const meta = preview?.querySelector(".smarttex-preview-meta")?.textContent;
+        if (meta === path) return preview;
+        await delay(20);
+      }
+      return null;
+    }
+
+    async function runTest() {
+      const checks = {};
+      sendState();
+      const initial = await waitForPath("figures/first.png");
+      checks.selectedPreview = Boolean(initial);
+
+      document.querySelector("#second-option").dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: 320,
+        clientY: 245
+      }));
+      const hovered = await waitForPath("figures/second.png");
+      checks.hoverPreview = Boolean(hovered);
+      checks.hoverImage = Boolean(
+        hovered?.querySelector(".smarttex-graphic-autocomplete-image")
+      );
+
+      document.querySelector("#first-option").dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: 320,
+        clientY: 200
+      }));
+      checks.hoverCanReturn = Boolean(await waitForPath("figures/first.png"));
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#includegraphics-hover-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Includegraphics hover preview test passed"
+        : `Includegraphics hover preview test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.includegraphicsHoverTest = passed ? "passed" : "failed";
+    }
+
+    runTest().catch((error) => {
+      const output = document.querySelector("#includegraphics-hover-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Includegraphics hover preview test failed: ${error.message}`;
+      document.documentElement.dataset.includegraphicsHoverTest = "failed";
+    });
+  </script>
+</body>
+</html>

@@ -112,6 +112,41 @@ Use ${command}`;
         .map((element) => element.textContent);
     }
 
+    function descriptions() {
+      return [...document.querySelectorAll(".smarttex-reference-autocomplete-description")]
+        .map((element) => element.textContent);
+    }
+
+    function sendCustomSource(value) {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex: value.length,
+          selectionFrom: value.length,
+          selectionTo: value.length,
+          screen: { pageX: 280, pageY: 180, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "codemirror"
+        })
+      }));
+    }
+
+    function sendCustomSourceAt(value, cursorIndex) {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          screen: { pageX: 280, pageY: 180, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "codemirror"
+        })
+      }));
+    }
+
     async function waitForPopup() {
       for (let attempt = 0; attempt < 80; attempt += 1) {
         const popup = document.querySelector("#smarttex-reference-autocomplete-popup:not([hidden])");
@@ -220,6 +255,62 @@ Use ${command}`;
       checks.existingReferenceSelected = selectedExisting?.textContent === "fig:alpha";
       checks.existingReferencePreview = previewLabels.at(-1) === "fig:alpha";
       checks.activeEvent = activeStates.includes(true);
+
+      sendState("plain text");
+      await delay(40);
+      const openReferenceValue = sourceWith(String.raw`\ref{fig:alpha`);
+      const openReferenceCursor = openReferenceValue.indexOf(String.raw`\ref{fig:`) +
+        String.raw`\ref{fig:`.length;
+      sendCustomSourceAt(openReferenceValue, openReferenceCursor);
+      await waitForPopup();
+      await delay(60);
+      checks.openReferenceUsesOnlyPrefix = document.querySelector(
+        ".smarttex-reference-autocomplete-query"
+      )?.textContent === "ref matching “fig:”";
+
+      const closedReferenceValue = sourceWith(String.raw`\ref{fig:alpha}`);
+      const closedReferenceCursor = closedReferenceValue.indexOf(String.raw`\ref{fig:`) +
+        String.raw`\ref{fig:`.length;
+      sendCustomSourceAt(closedReferenceValue, closedReferenceCursor);
+      await waitForPopup();
+      await delay(60);
+      checks.closedReferenceIncludesSuffix = document.querySelector(
+        ".smarttex-reference-autocomplete-query"
+      )?.textContent === "ref matching “fig:alpha”";
+
+      sendState("plain text");
+      await delay(40);
+      sendCustomSource(String.raw`\documentclass{revtex4-2}
+\section{Main section}\label{sec:main}
+\subsection{Main subsection}\label{sec:sub}
+\appendix
+\section{Appendix section}\label{sec:appendix}
+Use \ref{`);
+      await waitForPopup();
+      await delay(60);
+      const numberedDescriptions = descriptions();
+      checks.revtexAndAppendixNumbering = (
+        numberedDescriptions.some((text) => text.startsWith("Section I — Main section")) &&
+        numberedDescriptions.some((text) => text.startsWith("Section I.A — Main subsection")) &&
+        numberedDescriptions.some((text) => text.startsWith("Section A — Appendix section"))
+      );
+
+      sendState("plain text");
+      await delay(40);
+      const manySections = Array.from({ length: 24 }, (_, index) => (
+        `\\section{Section ${index + 1}}\\label{sec:${String(index + 1).padStart(2, "0")}}`
+      )).join("\n");
+      sendCustomSource(`${manySections}\nUse \\ref{`);
+      const scrollingPopup = await waitForPopup();
+      await delay(80);
+      const scrollingList = scrollingPopup?.querySelector(
+        ".smarttex-reference-autocomplete-list"
+      );
+      checks.largeListScrolls = Boolean(
+        scrollingList &&
+        scrollingList.scrollHeight > scrollingList.clientHeight &&
+        ["auto", "scroll"].includes(getComputedStyle(scrollingList).overflowY)
+      );
 
       const passed = Object.values(checks).every(Boolean);
       const output = document.querySelector("#reference-autocomplete-test-result");

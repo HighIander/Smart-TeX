@@ -5,6 +5,10 @@
 
   if (globalThis.SmartTeXBibTeX) return;
 
+  function taskCheckpoint(iteration = 0, interval = 128) {
+    globalThis.SmartTeXInteractionTasks?.checkpoint?.(iteration, interval);
+  }
+
   function stripOuterDelimiters(value) {
     let result = String(value || "").trim();
     while (
@@ -55,7 +59,9 @@
     let parenDepth = 0;
     let quoted = false;
     let escaped = false;
+    let characterIndex = 0;
     for (const character of String(text || "")) {
+      taskCheckpoint(characterIndex++);
       if (escaped) {
         current += character;
         escaped = false;
@@ -99,6 +105,7 @@
     let current = "";
     let depth = 0;
     for (let index = 0; index < text.length;) {
+      taskCheckpoint(index);
       if (text[index] === "{") depth += 1;
       if (text[index] === "}") depth = Math.max(0, depth - 1);
       if (
@@ -137,6 +144,7 @@
     let quoted = false;
     let escaped = false;
     for (let index = startIndex; index < text.length; index += 1) {
+      taskCheckpoint(index - startIndex);
       const character = text[index];
       if (escaped) {
         escaped = false;
@@ -162,7 +170,10 @@
 
   function parseFields(body) {
     const fields = {};
-    for (const rawPart of splitTopLevel(body)) {
+    const rawParts = splitTopLevel(body);
+    for (let partIndex = 0; partIndex < rawParts.length; partIndex += 1) {
+      taskCheckpoint(partIndex, 16);
+      const rawPart = rawParts[partIndex];
       const part = rawPart.trim();
       if (!part) continue;
       let depth = 0;
@@ -170,6 +181,7 @@
       let escaped = false;
       let equalsIndex = -1;
       for (let index = 0; index < part.length; index += 1) {
+        taskCheckpoint(index);
         const character = part[index];
         if (escaped) {
           escaped = false;
@@ -205,6 +217,7 @@
     const pattern = /^[\t \u00a0\ufeff]*@([A-Za-z][A-Za-z0-9_-]*)\s*([({])/gm;
     let match;
     while ((match = pattern.exec(text)) !== null) {
+      taskCheckpoint(pattern.lastIndex);
       starts.push({
         start: match.index + match[0].indexOf("@"),
         type: match[1].toLowerCase(),
@@ -266,17 +279,20 @@
     const text = String(value || "");
     const starts = findEntryStarts(text);
     const records = [];
-    starts.forEach((entry, index) => {
+    for (let index = 0; index < starts.length; index += 1) {
+      taskCheckpoint(index, 16);
+      const entry = starts[index];
       try {
         const record = parseEntry(text, entry, starts[index + 1]?.start, sourceFile);
         if (record) records.push(record);
       } catch (error) {
+        if (globalThis.SmartTeXInteractionTasks?.isAbortError?.(error)) throw error;
         console.warn(
           `[SmartTeX] Skipped malformed BibTeX entry near character ${entry.start}:`,
           error
         );
       }
-    });
+    }
     return records;
   }
 

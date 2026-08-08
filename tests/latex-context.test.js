@@ -364,6 +364,76 @@ function tableAt(source, marker = "|") {
   }
 }
 
+
+{
+  const matrixEquation = String.raw`\mathbf M
+\begin{pmatrix}
+E_\parallel \\ E_\perp
+\end{pmatrix}
+=
+0,
+\quad
+\mathbf M=
+\begin{pmatrix}
+\varepsilon_{\parallel\parallel} & \varepsilon_{\parallel\perp} \\[3pt]
+\varepsilon_{\perp\parallel} & \varepsilon_{\perp\perp}-k^2/\omega^2
+\end{pmatrix}.
+\label{eq:M_def}`;
+  const context = {
+    kind: "environment",
+    environment: "equation",
+    source: matrixEquation,
+    cursorOffset: 0
+  };
+  let previousPlacement = null;
+  const protectedOffsets = new Set();
+  for (const token of ["\\begin{pmatrix}", "\\end{pmatrix}", "\\\\[3pt]"]) {
+    let tokenStart = matrixEquation.indexOf(token);
+    while (tokenStart >= 0) {
+      for (let offset = tokenStart + 1; offset < tokenStart + token.length; offset += 1) {
+        protectedOffsets.add(offset);
+      }
+      tokenStart = matrixEquation.indexOf(token, tokenStart + token.length);
+    }
+  }
+
+  for (let cursor = 0; cursor <= matrixEquation.length; cursor += 1) {
+    context.cursorOffset = cursor;
+    const placement = tools.resolveCaretPlacement(
+      matrixEquation,
+      cursor,
+      previousPlacement
+    );
+    previousPlacement = placement;
+    const body = tools.previewBody(
+      context,
+      placement.commandSide,
+      { numbers: [{ value: "1", starred: false }], rows: [] },
+      true
+    );
+    let html = "";
+    assert.doesNotThrow(() => {
+      html = katex.renderToString(body, {
+        displayMode: true,
+        throwOnError: true,
+        strict: "ignore",
+        trust: true,
+        macros: {
+          "\\label": { tokens: [], numArgs: 1 },
+          "\\SmartTeXCaret": "\\htmlClass{smarttex-rendered-caret}{\\vphantom{|}}"
+        }
+      });
+    }, `cursor offset ${cursor} must not make valid matrix LaTeX invalid`);
+    if (protectedOffsets.has(cursor)) {
+      assert.match(
+        html,
+        /smarttex-rendered-caret/,
+        `cursor offset ${cursor} inside protected syntax must be rendered at a safe boundary`
+      );
+    }
+  }
+}
+
 {
   const source = "\\newcommand{\\pair}[2][x]{#1+#2}\n$\\pair{|y}+\\pair[z]{w}$";
   const cursor = source.indexOf("|");
@@ -424,6 +494,26 @@ E=mc^2
 }
 
 {
+  const source = String.raw`\documentclass{revtex4-2}
+\section{Main section}\label{sec:main}
+\subsection{Main subsection}\label{sec:sub}
+\appendix
+\section{First appendix}\label{sec:appendix-a}
+\subsection{Appendix subsection}\label{sec:appendix-a1}
+\section{Second appendix}\label{sec:appendix-b}`;
+  const numbering = tools.sectionNumbering(source);
+  assert.deepEqual(
+    numbering.map((section) => section.number),
+    ["I", "I.A", "A", "A.1", "B"]
+  );
+  assert.equal(tools.referenceTarget(source, "sec:main").number, "I");
+  assert.equal(tools.referenceTarget(source, "sec:sub").number, "I.A");
+  assert.equal(tools.referenceTarget(source, "sec:appendix-a").number, "A");
+  assert.equal(tools.referenceTarget(source, "sec:appendix-a1").number, "A.1");
+  assert.equal(tools.referenceTarget(source, "sec:appendix-b").number, "B");
+}
+
+{
   const source = String.raw`\begin{table}
 \caption{Selected caption text}
 \label{tab:caption}
@@ -439,6 +529,32 @@ A & B \\
   assert.equal(context.source.trim(), "A & B \\\\");
   assert.ok(context.floatOpenStart < context.openStart);
   assert.ok(context.floatCloseEnd > context.closeEnd);
+}
+
+
+
+{
+  const source = [
+    "% \\begin{equation}commented=1\\end{equation}",
+    "\\begin{equation}active=1\\label{eq:active}\\end{equation}",
+    "% \\begin{figure}\\caption{Commented}\\label{fig:commented}\\end{figure}",
+    "\\begin{figure}\\caption{Active}\\label{fig:active}\\end{figure}",
+    "% \\begin{table}\\caption{Commented}\\begin{tabular}{c}X\\end{tabular}\\end{table}",
+    "\\begin{table}\\caption{Active}\\begin{tabular}{c}Y\\end{tabular}\\label{tab:active}\\end{table}",
+    "% \\section{Commented}",
+    "\\section{Active}\\label{sec:active}"
+  ].join("\n");
+
+  const equation = tools.referenceTarget(source, "eq:active");
+  const figure = tools.referenceTarget(source, "fig:active");
+  const table = tools.referenceTarget(source, "tab:active");
+  const section = tools.referenceTarget(source, "sec:active");
+
+  assert.equal(equation.number, "1");
+  assert.equal(figure.number, 1);
+  assert.equal(table.number, 1);
+  assert.equal(section.number, "1");
+  assert.equal(tools.referenceTarget(source, "fig:commented"), null);
 }
 
 console.log("SmartTeX LaTeX context tests passed.");

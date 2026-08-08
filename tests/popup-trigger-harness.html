@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX popup trigger harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; }
+    body { background: #eef1f5; font: 14px/1.5 system-ui, sans-serif; }
+    #ide-redesign-panel-editor { position: fixed; inset: 0; background: #fff; }
+    .toolbar-editor { display: flex; align-items: center; min-height: 42px; padding: 4px 8px; background: #f4f6f8; }
+    .cm-content { margin: 24px; padding: 18px; white-space: pre-wrap; font: 15px/1.5 Consolas, monospace; }
+    #popup-trigger-result { position: fixed; right: 10px; bottom: 10px; z-index: 2147483647; color: #fff; background: #9a6700; padding: 7px 10px; }
+    #popup-trigger-result[data-result="passed"] { background: #16803b; }
+    #popup-trigger-result[data-result="failed"] { background: #cf222e; }
+  </style>
+</head>
+<body>
+  <section id="ide-redesign-panel-editor">
+    <div class="toolbar toolbar-editor" role="toolbar"><button type="button">Menu</button></div>
+    <div class="cm-content">See Equation \eqref{eq:test}.</div>
+  </section>
+  <output id="popup-trigger-result">Popup trigger test running</output>
+  <script>
+    const popupKey = "smarttex:reference-popups:v1";
+    const featureKey = "smarttex:features:v1";
+    const storageValues = {
+      [popupKey]: { trigger: "cursor" },
+      [featureKey]: { equations: true, tables: true, figures: true }
+    };
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(keys) {
+            const list = Array.isArray(keys) ? keys : [keys];
+            return Object.fromEntries(list.map((key) => [key, storageValues[key]]));
+          },
+          async set(values) { Object.assign(storageValues, values); }
+        },
+        onChanged: { addListener() {} }
+      },
+      runtime: { async sendMessage() { return { ok: true }; } }
+    };
+    const source = String.raw`\begin{document}
+See Equation \eqref{eq:test}.
+\begin{equation}
+E=mc^2+\frac{p_1^4+q_1^3+r_1^2}{1+x_1^2+y_1^4}
+\label{eq:test}
+\end{equation}
+\end{document}`;
+    const commandStart = source.indexOf("\\eqref{eq:test}");
+    const cursorIndex = commandStart + 8;
+    const bridgeRequests = [];
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      bridgeRequests.push(request);
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({ requestId: request.requestId, ok: true })
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../table-editor.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+    async function waitFor(selector, timeout = 5000) {
+      const end = performance.now() + timeout;
+      while (performance.now() < end) {
+        const element = document.querySelector(selector);
+        if (element) return element;
+        await delay(25);
+      }
+      return null;
+    }
+    async function run() {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value: source,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          selectionAnchor: cursorIndex,
+          selectionHead: cursorIndex,
+          screen: { pageX: 230, pageY: 115, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "codemirror"
+        })
+      }));
+      const popup = await waitFor(".smarttex-editor-reference-popup:not([hidden])");
+      const title = popup?.querySelector("a.smarttex-reference-popup-title");
+      const equation = popup?.querySelector(".smarttex-reference-popup-equation");
+      title?.click();
+      await delay(80);
+      const jumpRequest = bridgeRequests.find((request) => request.type === "setCursor");
+      const checks = {
+        cursorTriggered: Boolean(popup && title?.textContent === "Equation 1"),
+        equationRendered: Boolean(equation?.querySelector(".katex")),
+        jumpRecorded: jumpRequest?.index === source.indexOf("\\begin{equation}"),
+        noDocumentPreviewControls: !document.querySelector(
+          "#smarttex-document-preview-controls, #smarttex-document-preview-toggle, .smarttex-document-preview"
+        )
+      };
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#popup-trigger-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed ? "Popup trigger test passed" : JSON.stringify(checks);
+      document.documentElement.dataset.popupTriggerTest = passed ? "passed" : "failed";
+    }
+    run().catch((error) => {
+      document.querySelector("#popup-trigger-result").textContent = error.message;
+      document.documentElement.dataset.popupTriggerTest = "failed";
+    });
+  </script>
+</body>
+</html>

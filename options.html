@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SmartTeX options</title>
+  <title>SmartTeX presets</title>
   <link rel="icon" type="image/png" sizes="128x128" href="icons/icon128.png">
   <link rel="stylesheet" href="options.css">
 </head>
@@ -13,127 +13,179 @@
     <header>
       <img src="icons/icon128.png" alt="">
       <div>
-        <h1>SmartTeX options</h1>
-        <p>Configure where SmartTeX enhances your LaTeX editor.</p>
+        <h1>SmartTeX presets</h1>
+        <p>Configure the extension defaults used by the SmartTeX menu in document editors.</p>
       </div>
     </header>
 
     <form id="smarttex-options-form">
       <section>
-        <label for="smarttex-editor-sites">Document editor sites</label>
-        <p class="hint">
-          Define domains where SmartTeX should be active. Enter one hostname or URL per line.
-          Wildcard subdomains are supported; for example, <code>*.example.org</code> includes
-          the main domain and its subdomains. URL paths and trailing slashes are ignored.
-          Lines beginning with <code>#</code> are ignored.
-        </p>
+        <div class="section-heading-row">
+          <div>
+            <h2>Document editor sites</h2>
+            <p class="hint">
+              Define domains where SmartTeX should be active. Enter one hostname or URL per line.
+              Wildcard subdomains are supported. URL paths and trailing slashes are ignored.
+              Lines beginning with <code>#</code> are ignored.
+            </p>
+          </div>
+          <button type="button" class="option-reset-button" data-reset-setting="sites" title="Reset document editor sites">↺</button>
+        </div>
         <textarea id="smarttex-editor-sites" rows="9" spellcheck="false" placeholder="collabtex.helmholtz.cloud"></textarea>
       </section>
 
+
       <section>
-        <h2>Features</h2>
-        <p class="hint">Choose which SmartTeX previews should appear in document editors.</p>
-        <div class="feature-list">
-          <label class="feature-option">
-            <input id="smarttex-feature-equations" type="checkbox">
-            <span>Popup preview for equations</span>
+        <h2>Comments identity</h2>
+        <p class="hint">This name and color identify your comments, replies, and text markings to collaborators using SmartTeX.</p>
+        <div class="smarttex-comment-profile-options">
+          <label for="smarttex-comment-user-name">Name
+            <input id="smarttex-comment-user-name" type="text" maxlength="80" autocomplete="off" spellcheck="false">
           </label>
-          <label class="feature-option">
-            <input id="smarttex-feature-tables" type="checkbox">
-            <span>Popup preview for tables</span>
-          </label>
-          <label class="feature-option">
-            <input id="smarttex-feature-figures" type="checkbox">
-            <span>Popup preview for figures</span>
+          <label for="smarttex-comment-user-color">User color
+            <input id="smarttex-comment-user-color" type="color" value="#268bd2">
           </label>
         </div>
       </section>
 
       <section>
-        <h2>Reference and citation popups</h2>
-        <label for="smarttex-reference-popup-trigger">Popup trigger</label>
-        <p class="hint">
-          Choose whether previews for <code>\ref</code>, <code>\eqref</code>, and citation
-          commands open on hover in the editor and Live preview, or only beside the source
-          editor cursor while it is inside the command.
-        </p>
-        <select id="smarttex-reference-popup-trigger">
-          <option value="hover">Open on hover</option>
-          <option value="cursor">Open only when the cursor is inside the command</option>
-        </select>
-
-        <label for="smarttex-environment-popup-trigger" class="suboption-label">Equation, table, and figure popup trigger</label>
-        <p class="hint">
-          Choose whether source previews open while the text cursor is inside an equation,
-          table, or figure, or when the corresponding source is hovered.
-        </p>
-        <select id="smarttex-environment-popup-trigger">
-          <option value="cursor">Open when the cursor is inside the source</option>
-          <option value="hover">Open on hover</option>
-        </select>
+        <h2>Preview presets</h2>
+        <p class="hint">Default popup behavior for documents that use extension defaults.</p>
+        <div class="preset-list">
+          <div class="preset-option-row">
+            <label class="feature-option"><input id="smarttex-feature-equations" type="checkbox"><span>Popup preview for equations</span></label>
+            <button type="button" class="option-reset-button" data-reset-setting="equations" title="Reset equation previews">↺</button>
+          </div>
+          <div class="preset-option-row">
+            <label class="feature-option"><input id="smarttex-feature-tables" type="checkbox"><span>Popup preview for tables</span></label>
+            <button type="button" class="option-reset-button" data-reset-setting="tables" title="Reset table previews">↺</button>
+          </div>
+          <div class="preset-option-row">
+            <label class="feature-option"><input id="smarttex-feature-figures" type="checkbox"><span>Popup preview for figures</span></label>
+            <button type="button" class="option-reset-button" data-reset-setting="figures" title="Reset figure previews">↺</button>
+          </div>
+        </div>
       </section>
 
       <section>
-        <h2>Autocomplete</h2>
-        <label for="smarttex-reference-order">Reference-list order</label>
-        <p class="hint">
-          Choose how labels are ordered in SmartTeX autocomplete lists for commands such as
-          <code>\ref</code> and <code>\eqref</code>.
-        </p>
-        <select id="smarttex-reference-order">
-          <option value="document">Order of appearance in the document</option>
-          <option value="alphabetical">Alphabetical by label</option>
-        </select>
+        <h2>Reference and popup presets</h2>
+        <div class="preset-control-row">
+          <div>
+            <label for="smarttex-reference-popup-trigger">Reference and citation popup trigger</label>
+            <p class="hint">Choose whether reference and citation previews open on hover or at the source cursor.</p>
+            <select id="smarttex-reference-popup-trigger">
+              <option value="cursor">Open only when the cursor is inside the command</option>
+              <option value="hover">Open on hover</option>
+            </select>
+          </div>
+          <button type="button" class="option-reset-button" data-reset-setting="referencePopupTrigger" title="Reset reference popup trigger">↺</button>
+        </div>
+
+        <div class="preset-control-row">
+          <div>
+            <label for="smarttex-environment-popup-trigger">Equation, table, and figure popup trigger</label>
+            <p class="hint">Choose whether source previews open at the cursor or while the source is hovered.</p>
+            <select id="smarttex-environment-popup-trigger">
+              <option value="cursor">Open when the cursor is inside the source</option>
+              <option value="hover">Open on hover</option>
+            </select>
+          </div>
+          <button type="button" class="option-reset-button" data-reset-setting="environmentPopupTrigger" title="Reset environment popup trigger">↺</button>
+        </div>
+
+        <div class="preset-option-row">
+          <label class="feature-option">
+            <input id="smarttex-label-reference-guard-enabled" type="checkbox" checked>
+            <span>Warn when a changed or deleted label is still used by references</span>
+          </label>
+          <button type="button" class="option-reset-button" data-reset-setting="labelReferenceGuard" title="Reset label warning">↺</button>
+        </div>
       </section>
 
+      <section>
+        <h2>Autocomplete preset</h2>
+        <div class="preset-control-row">
+          <div>
+            <label for="smarttex-reference-order">Reference-list order</label>
+            <p class="hint">Default ordering for labels in <code>\ref</code> and <code>\eqref</code> lists.</p>
+            <select id="smarttex-reference-order">
+              <option value="document">Order of appearance in the document</option>
+              <option value="alphabetical">Alphabetical by label</option>
+            </select>
+          </div>
+          <button type="button" class="option-reset-button" data-reset-setting="referenceOrder" title="Reset reference-list order">↺</button>
+        </div>
+      </section>
 
       <section>
-        <h2>Source highlighting</h2>
-        <p class="hint">Each source annotation can be disabled and assigned its own color. Highlights are rendered behind editor text and editor controls.</p>
+        <h2>Source-highlighting presets</h2>
+        <p class="hint">Environment bodies, their first lines, and section command lines are independent categories.</p>
         <div class="highlight-options-grid">
-          <label><input id="smarttex-highlight-environment-enabled" type="checkbox" checked> Environments and section lines</label>
-          <input id="smarttex-highlight-environment-color" type="color" value="#8ec5ff" aria-label="Environment highlight color">
-          <label><input id="smarttex-highlight-caption-enabled" type="checkbox" checked> <code>\caption{...}</code></label>
-          <input id="smarttex-highlight-caption-color" type="color" value="#70afea" aria-label="Caption highlight color">
-          <label><input id="smarttex-highlight-label-enabled" type="checkbox" checked> <code>\label{...}</code></label>
-          <input id="smarttex-highlight-label-color" type="color" value="#8fd19e" aria-label="Label highlight color">
-          <label><input id="smarttex-highlight-reference-enabled" type="checkbox" checked> References</label>
-          <input id="smarttex-highlight-reference-color" type="color" value="#8fd19e" aria-label="Reference highlight color">
-          <label><input id="smarttex-highlight-nonumber-enabled" type="checkbox" checked> <code>\nonumber</code> / <code>\notag</code></label>
-          <input id="smarttex-highlight-nonumber-color" type="color" value="#ffe69a" aria-label="Nonumber highlight color">
-          <label><input id="smarttex-highlight-inline-math-enabled" type="checkbox" checked> Inline equations</label>
-          <input id="smarttex-highlight-inline-math-color" type="color" value="#8ec5ff" aria-label="Inline equation highlight color">
-        </div>
-        <button id="smarttex-highlight-reset" type="button" class="secondary-button">Reset highlight settings</button>
-      </section>
+          <label><input id="smarttex-highlight-environment-enabled" type="checkbox" checked> Environment body</label>
+          <input id="smarttex-highlight-environment-color" type="color" value="#dfedfb" aria-label="Environment body color">
+          <button type="button" class="option-reset-button" data-reset-setting="environmentHighlight" title="Reset environment body highlighting">↺</button>
 
-      <section>
-        <h2>Live previews</h2>
-        <label class="feature-option">
-          <input id="smarttex-feature-live-document-preview" type="checkbox">
-          <span>Show the <strong>S Live</strong> full-document preview button <span class="beta-badge">Beta</span></span>
-        </label>
-        <p class="hint">
-          This experimental button switches the compiled-PDF pane to a fully rendered SmartTeX
-          document preview. It is hidden by default. Popup previews for equations, tables, and
-          figures remain available independently.
-        </p>
-        <p class="hint">
-          Depending on the popup-trigger setting, move the text cursor into or hover over an
-          inline or display equation to show a live KaTeX preview beside it. SmartTeX applies <code>\newcommand</code>, <code>\renewcommand</code>, and
-          <code>\providecommand</code> definitions found earlier in the active LaTeX file.
-          Moving into a <code>tabular</code>, <code>tabularx</code>, <code>longtable</code>,
-          or <code>array</code> block shows a live table preview with its rules, alignment,
-          formatted text, and inline mathematics. Moving into a <code>figure</code> block
-          shows its project image or PDF together with its caption.
-        </p>
+          <label><input id="smarttex-highlight-environment-first-line-enabled" type="checkbox" checked> First line of environments</label>
+          <input id="smarttex-highlight-environment-first-line-color" type="color" value="#c7e4ff" aria-label="Environment first-line color">
+          <button type="button" class="option-reset-button" data-reset-setting="environmentFirstLineHighlight" title="Reset first-line highlighting">↺</button>
+
+          <label><input id="smarttex-highlight-section-enabled" type="checkbox" checked> Section command lines</label>
+          <input id="smarttex-highlight-section-color" type="color" value="#c4a7ff" aria-label="Section-line color">
+          <button type="button" class="option-reset-button" data-reset-setting="sectionHighlight" title="Reset section-line highlighting">↺</button>
+
+          <label><input id="smarttex-highlight-caption-enabled" type="checkbox"> <code>\caption{...}</code></label>
+          <input id="smarttex-highlight-caption-color" type="color" value="#70afea" aria-label="Caption highlight color">
+          <button type="button" class="option-reset-button" data-reset-setting="captionHighlight" title="Reset caption highlighting">↺</button>
+
+          <label><input id="smarttex-highlight-label-enabled" type="checkbox"> <code>\label{...}</code></label>
+          <input id="smarttex-highlight-label-color" type="color" value="#8fd19e" aria-label="Label highlight color">
+          <button type="button" class="option-reset-button" data-reset-setting="labelHighlight" title="Reset label highlighting">↺</button>
+
+          <label><input id="smarttex-highlight-reference-enabled" type="checkbox" checked> References</label>
+          <input id="smarttex-highlight-reference-color" type="color" value="#bcf0c8" aria-label="Reference highlight color">
+          <button type="button" class="option-reset-button" data-reset-setting="referenceHighlight" title="Reset reference highlighting">↺</button>
+
+          <label><input id="smarttex-highlight-nonumber-enabled" type="checkbox"> <code>\nonumber</code> / <code>\notag</code></label>
+          <input id="smarttex-highlight-nonumber-color" type="color" value="#ffe69a" aria-label="Nonumber highlight color">
+          <button type="button" class="option-reset-button" data-reset-setting="nonumberHighlight" title="Reset nonumber highlighting">↺</button>
+
+          <label><input id="smarttex-highlight-inline-math-enabled" type="checkbox" checked> Inline equations</label>
+          <input id="smarttex-highlight-inline-math-color" type="color" value="#cce5ff" aria-label="Inline-equation highlight color">
+          <button type="button" class="option-reset-button" data-reset-setting="inlineMathHighlight" title="Reset inline-equation highlighting">↺</button>
+        </div>
+
+        <div class="active-highlight-options">
+          <div class="preset-option-row">
+            <label class="feature-option active-highlight-toggle">
+              <input id="smarttex-highlight-active-enabled" type="checkbox" checked>
+              <span>Emphasize the field or environment containing the cursor</span>
+            </label>
+            <button type="button" class="option-reset-button" data-reset-setting="activeEnabled" title="Reset active highlighting">↺</button>
+          </div>
+          <div class="active-highlight-strength-row">
+            <label for="smarttex-highlight-active-strength">Active emphasis strength</label>
+            <output id="smarttex-highlight-active-strength-output" for="smarttex-highlight-active-strength">55%</output>
+            <button type="button" class="option-reset-button" data-reset-setting="activeStrength" title="Reset active emphasis strength">↺</button>
+          </div>
+          <input id="smarttex-highlight-active-strength" type="range" min="0" max="100" step="5" value="55">
+          <p class="hint active-highlight-hint">When a normal category is disabled, its active field or environment is still shown in gray.</p>
+        </div>
+        <button id="smarttex-highlight-reset" type="button" class="secondary-button">Reset all highlighting presets</button>
       </section>
 
       <div class="actions" aria-live="polite">
-        <span class="autosave-note">Changes are saved automatically.</span>
+        <span class="autosave-note">Preset changes are saved automatically.</span>
         <span id="smarttex-options-status" role="status"></span>
       </div>
     </form>
+
+    <section class="license-notice smarttex-legal-notice">
+      <h2>Privacy and legal information</h2>
+      <p>
+        Review the <a href="https://smartioz.com/smartTex/dataprotection.php" target="_blank" rel="noopener noreferrer">data protection information</a>
+        and the <a href="https://smartioz.com/smartTex/impressum.php" target="_blank" rel="noopener noreferrer">imprint</a>.
+      </p>
+    </section>
 
     <section class="license-notice">
       <h2>License</h2>
@@ -144,6 +196,8 @@
       </p>
     </section>
   </main>
+  <script src="privacy-consent.js"></script>
+  <script src="comment-profile.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

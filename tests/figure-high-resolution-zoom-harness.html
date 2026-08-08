@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX high-resolution figure zoom harness</title>
+  <link rel="stylesheet" href="../content.css">
+</head>
+<body>
+  <output id="figure-high-resolution-zoom-test-result">High-resolution zoom test running</output>
+  <script>
+    globalThis.__smarttexPdfRenderScales = [];
+    const pdfModuleSource = `
+      export const GlobalWorkerOptions = {};
+      export function getDocument() {
+        return {
+          promise: Promise.resolve({
+            async getPage() {
+              return {
+                getViewport({ scale }) {
+                  return { width: 100 * scale, height: 50 * scale, scale };
+                },
+                render({ viewport }) {
+                  globalThis.__smarttexPdfRenderScales.push(viewport.scale);
+                  const delay = viewport.scale > 2 ? 120 : 0;
+                  return { promise: new Promise((resolve) => setTimeout(resolve, delay)) };
+                }
+              };
+            },
+            destroy() {}
+          })
+        };
+      }
+    `;
+    const pdfModuleUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(pdfModuleSource)}`;
+    globalThis.browser = {
+      runtime: {
+        getURL(path) {
+          return path.includes("pdf.mjs") ? pdfModuleUrl : path;
+        }
+      }
+    };
+  </script>
+  <script src="../figure-renderer.js"></script>
+  <script>
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    async function run() {
+      const renderer = globalThis.SmartTeXFigureRenderer;
+      const figure = document.createElement("figure");
+      figure.className = "smarttex-figure-popup";
+      const viewport = document.createElement("div");
+      viewport.className = "smarttex-figure-popup-viewport";
+      viewport.style.width = "400px";
+      viewport.style.height = "220px";
+      const media = document.createElement("div");
+      media.className = "smarttex-figure-popup-media smarttex-figure-layout";
+      media.dataset.smarttexDesiredWidthPx = "400";
+      const row = document.createElement("div");
+      row.className = "smarttex-figure-layout-row";
+      const panel = document.createElement("div");
+      panel.className = "smarttex-figure-layout-panel";
+      panel.dataset.smarttexWidthRatio = "1";
+      panel.style.flexBasis = "100%";
+
+      const pdfData = "data:application/pdf;base64,JVBERi0xLjQKJSVFT0Y=";
+      const image = await renderer.createMedia("figure.pdf", pdfData, {
+        imageClass: "smarttex-figure-popup-image",
+        pdfClass: "smarttex-figure-popup-image"
+      });
+      image.dataset.smarttexLocalWidthRatio = "1";
+      image.dataset.smarttexImageScale = "1";
+      image.style.width = "100%";
+      panel.appendChild(image);
+      row.appendChild(panel);
+      media.appendChild(row);
+      viewport.appendChild(media);
+      figure.appendChild(viewport);
+      document.body.appendChild(figure);
+      renderer.observePopupLayout(media);
+      await delay(50);
+
+      const controller = viewport.__smarttexFigureZoom;
+      const baseMediaWidth = media.getBoundingClientRect().width;
+      const rect = viewport.getBoundingClientRect();
+      viewport.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        deltaY: -120,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2
+      }));
+
+      await delay(30);
+      const heldUntilHighResolution = controller.scale === 1;
+      await delay(220);
+
+      const scales = globalThis.__smarttexPdfRenderScales;
+      const zoomedMediaWidth = media.getBoundingClientRect().width;
+      const zoomedImageWidth = image.getBoundingClientRect().width;
+      const backingWidth = Number(image.dataset.smarttexPdfPreviewWidth) || 0;
+      const usesLayoutZoom = zoomedMediaWidth > baseMediaWidth * 1.1 &&
+        !/scale\s*\(/i.test(media.style.transform || "");
+      const backingIsDoubleTarget = backingWidth >= zoomedImageWidth * 1.9;
+      const rerenderedForTarget = scales.some((scale) => scale > 4);
+      const passed = Boolean(
+        heldUntilHighResolution &&
+        scales.some((scale) => Math.abs(scale - 2) < 1e-6) &&
+        rerenderedForTarget &&
+        usesLayoutZoom &&
+        backingIsDoubleTarget &&
+        controller.scale > 1
+      );
+      const diagnostics = {
+        heldUntilHighResolution,
+        scales,
+        baseMediaWidth,
+        zoomedMediaWidth,
+        zoomedImageWidth,
+        backingWidth,
+        usesLayoutZoom,
+        backingIsDoubleTarget,
+        scale: controller.scale,
+        transform: media.style.transform
+      };
+      const output = document.querySelector("#figure-high-resolution-zoom-test-result");
+      output.textContent = passed
+        ? "High-resolution figure zoom test passed"
+        : `High-resolution figure zoom test failed: ${JSON.stringify(diagnostics)}`;
+      document.documentElement.dataset.figureHighResolutionZoomTest = passed ? "passed" : "failed";
+    }
+
+    run().catch((error) => {
+      const output = document.querySelector("#figure-high-resolution-zoom-test-result");
+      output.textContent = `High-resolution figure zoom test failed: ${error.message}`;
+      document.documentElement.dataset.figureHighResolutionZoomTest = "failed";
+      console.error(error);
+    });
+  </script>
+</body>
+</html>

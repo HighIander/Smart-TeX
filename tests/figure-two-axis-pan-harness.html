@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX two-axis figure panning harness</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 20px; }
+    #host { width: 360px; height: 240px; }
+    .smarttex-graphic-autocomplete-output { width: 360px; height: 240px; }
+  </style>
+</head>
+<body>
+  <output id="figure-two-axis-pan-test-result">Two-axis pan test running</output>
+  <div id="host" class="smarttex-graphic-autocomplete-output"></div>
+  <script>globalThis.browser = { runtime: { getURL(path) { return path; } } };</script>
+  <script src="../figure-renderer.js"></script>
+  <script>
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    async function run() {
+      const sourceCanvas = document.createElement("canvas");
+      sourceCanvas.width = 900;
+      sourceCanvas.height = 900;
+      const context = sourceCanvas.getContext("2d");
+      context.fillRect(0, 0, 900, 900);
+      context.clearRect(100, 100, 700, 700);
+
+      const figure = document.createElement("figure");
+      figure.className = "smarttex-figure-popup smarttex-graphic-autocomplete-figure";
+      const viewport = document.createElement("div");
+      viewport.className = "smarttex-figure-popup-viewport smarttex-graphic-autocomplete-viewport";
+      viewport.style.width = "360px";
+      viewport.style.height = "240px";
+      const media = document.createElement("div");
+      media.className = "smarttex-figure-popup-media smarttex-graphic-autocomplete-media";
+      const image = await globalThis.SmartTeXFigureRenderer.createMedia(
+        "square.png",
+        sourceCanvas.toDataURL("image/png"),
+        { imageClass: "smarttex-graphic-autocomplete-image" }
+      );
+      media.appendChild(image);
+      viewport.appendChild(media);
+      figure.appendChild(viewport);
+      document.querySelector("#host").appendChild(figure);
+      await image.decode();
+      await delay(40);
+
+      const controller = globalThis.SmartTeXFigureRenderer.ensurePopupZoom(figure);
+      controller.refresh();
+      const popupRectBefore = figure.getBoundingClientRect();
+      await controller.setScale(2.2, 180, 120);
+      await delay(20);
+
+      controller.panX = -10000;
+      controller.panY = -10000;
+      controller.clampPan();
+      controller.apply();
+      const minimumPan = { x: controller.panX, y: controller.panY };
+      const viewportRect = viewport.getBoundingClientRect();
+      const imageAtMinimum = image.getBoundingClientRect();
+
+      controller.panX = 10000;
+      controller.panY = 10000;
+      controller.clampPan();
+      controller.apply();
+      const maximumPan = { x: controller.panX, y: controller.panY };
+      const imageAtMaximum = image.getBoundingClientRect();
+      const popupRectAfter = figure.getBoundingClientRect();
+
+      const verticalRange = maximumPan.y - minimumPan.y;
+      const horizontalRange = maximumPan.x - minimumPan.x;
+      const revealsBottom = Math.abs(imageAtMinimum.bottom - viewportRect.bottom) < 3;
+      const revealsRight = Math.abs(imageAtMinimum.right - viewportRect.right) < 3;
+      const revealsTop = Math.abs(imageAtMaximum.top - viewportRect.top) < 3;
+      const revealsLeft = Math.abs(imageAtMaximum.left - viewportRect.left) < 3;
+      const popupStayedFixed = Math.abs(popupRectAfter.width - popupRectBefore.width) < 3 &&
+        Math.abs(popupRectAfter.height - popupRectBefore.height) < 3;
+      const mediaIsDetachedFromSizing = getComputedStyle(media).position === "absolute";
+      const passed = Boolean(
+        controller.scale > 2 &&
+        verticalRange > 80 &&
+        horizontalRange > 80 &&
+        revealsBottom && revealsRight && revealsTop && revealsLeft &&
+        popupStayedFixed && mediaIsDetachedFromSizing
+      );
+      const diagnostics = {
+        scale: controller.scale,
+        minimumPan,
+        maximumPan,
+        verticalRange,
+        horizontalRange,
+        revealsBottom,
+        revealsRight,
+        revealsTop,
+        revealsLeft,
+        popupStayedFixed,
+        popupRectBefore: { width: popupRectBefore.width, height: popupRectBefore.height },
+        popupRectAfter: { width: popupRectAfter.width, height: popupRectAfter.height },
+        viewportRect: { left: viewportRect.left, top: viewportRect.top, right: viewportRect.right, bottom: viewportRect.bottom, width: viewportRect.width, height: viewportRect.height },
+        imageAtMinimum: { left: imageAtMinimum.left, top: imageAtMinimum.top, right: imageAtMinimum.right, bottom: imageAtMinimum.bottom, width: imageAtMinimum.width, height: imageAtMinimum.height },
+        imageAtMaximum: { left: imageAtMaximum.left, top: imageAtMaximum.top, right: imageAtMaximum.right, bottom: imageAtMaximum.bottom, width: imageAtMaximum.width, height: imageAtMaximum.height },
+        mediaPosition: getComputedStyle(media).position
+      };
+      document.querySelector("#figure-two-axis-pan-test-result").textContent = passed
+        ? "Two-axis figure panning test passed"
+        : `Two-axis figure panning test failed: ${JSON.stringify(diagnostics)}`;
+      document.documentElement.dataset.figureTwoAxisPanTest = passed ? "passed" : "failed";
+    }
+
+    run().catch((error) => {
+      document.querySelector("#figure-two-axis-pan-test-result").textContent =
+        `Two-axis figure panning test failed: ${error.stack || error.message}`;
+      document.documentElement.dataset.figureTwoAxisPanTest = "failed";
+    });
+  </script>
+</body>
+</html>

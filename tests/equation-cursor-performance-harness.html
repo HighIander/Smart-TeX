@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX equation cursor performance harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+</head>
+<body>
+  <output id="equation-cursor-performance-test-result">running</output>
+  <script>
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail || "{}");
+      if (request.type !== "getCoordinates") return;
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({
+          requestId: request.requestId,
+          ok: true,
+          screen: { pageX: 420, pageY: 320, lineHeight: 20 }
+        })
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    (async () => {
+      const waitFor = async (predicate, timeout = 8000) => {
+        const started = performance.now();
+        while (!predicate()) {
+          if (performance.now() - started > timeout) throw new Error("timeout");
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      };
+      const equations = [];
+      for (let index = 0; index < 800; index += 1) {
+        equations.push(`\\begin{equation}x_{${index}}=${index}\\end{equation}`);
+      }
+      const source = [
+        "\\newcommand{\\vect}[1]{\\mathbf{#1}}",
+        ...equations
+      ].join("\n");
+      const targetOpen = source.lastIndexOf("\\begin{equation}");
+      const contentStart = source.indexOf("}", targetOpen) + 1;
+      const contentEnd = source.indexOf("\\end{equation}", contentStart);
+      const positions = [];
+      for (let index = contentStart + 1; index < contentEnd; index += 1) positions.push(index);
+      const dispatchState = (cursorIndex) => {
+        window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+          detail: JSON.stringify({
+            value: source,
+            cursorIndex,
+            selectionFrom: cursorIndex,
+            selectionTo: cursorIndex,
+            screen: { pageX: 500, pageY: 360, lineHeight: 20 },
+            fileName: "main.tex",
+            focused: true,
+            editorKind: "harness"
+          })
+        }));
+      };
+
+      dispatchState(positions[0]);
+      await waitFor(() => {
+        const popup = document.querySelector("#smarttex-equation-preview");
+        return popup && !popup.hidden && popup.querySelector(".smarttex-rendered-caret");
+      });
+
+      const output = document.querySelector("#smarttex-equation-preview-output");
+      const latencies = [];
+      for (let pass = 0; pass < 24; pass += 1) {
+        const cursor = positions[pass % positions.length];
+        const latency = await new Promise((resolve, reject) => {
+          const started = performance.now();
+          const timeout = setTimeout(() => {
+            observer.disconnect();
+            reject(new Error("cursor popup update timeout"));
+          }, 1000);
+          const observer = new MutationObserver(() => {
+            clearTimeout(timeout);
+            observer.disconnect();
+            resolve(performance.now() - started);
+          });
+          observer.observe(output, { childList: true, subtree: true });
+          dispatchState(cursor);
+        });
+        latencies.push(latency);
+      }
+      latencies.sort((a, b) => a - b);
+      const median = latencies[Math.floor(latencies.length / 2)];
+      const maximum = Math.max(...latencies);
+      const passed = median < 20 && maximum < 60;
+      document.documentElement.dataset.equationCursorPerformanceTest = passed ? "passed" : "failed";
+      document.documentElement.dataset.cursorMedianMs = median.toFixed(2);
+      document.documentElement.dataset.cursorMaximumMs = maximum.toFixed(2);
+      document.querySelector("#equation-cursor-performance-test-result").textContent =
+        `${passed ? "passed" : "failed"}: median ${median.toFixed(2)} ms, max ${maximum.toFixed(2)} ms`;
+    })().catch((error) => {
+      document.documentElement.dataset.equationCursorPerformanceTest = "failed";
+      document.querySelector("#equation-cursor-performance-test-result").textContent = error.message;
+    });
+  </script>
+</body>
+</html>

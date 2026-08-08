@@ -37,6 +37,10 @@
   ];
   const CARET_MACRO = "\\SmartTeXCaret{}";
   const MASK_CHARACTER = "\u0000";
+  function taskCheckpoint(iteration = 0, interval = 256) {
+    global.SmartTeXInteractionTasks?.checkpoint?.(iteration, interval);
+  }
+
   const DELIMITER_COMMANDS = new Set([
     "\\left",
     "\\right",
@@ -63,8 +67,103 @@
     return backslashes % 2 === 1;
   }
 
+  function romanNumber(value) {
+    const table = [
+      [1000, "M"], [900, "CM"], [500, "D"], [400, "CD"],
+      [100, "C"], [90, "XC"], [50, "L"], [40, "XL"],
+      [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]
+    ];
+    let number = Math.max(0, Number(value) || 0);
+    let result = "";
+    for (const [amount, symbol] of table) {
+      while (number >= amount) {
+        result += symbol;
+        number -= amount;
+      }
+    }
+    return result;
+  }
+
+  function alphaNumber(value) {
+    let number = Math.max(1, Number(value) || 1);
+    let result = "";
+    while (number > 0) {
+      number -= 1;
+      result = String.fromCharCode(65 + (number % 26)) + result;
+      number = Math.floor(number / 26);
+    }
+    return result;
+  }
+
+  function sectionNumbering(sourceValue) {
+    const source = String(sourceValue || "");
+    const masked = maskIgnoredLatex(source);
+    const revtex = /\\documentclass(?:\s*\[[^\]]*\])?\s*\{[^{}]*revtex/i.test(masked);
+    const counters = [0, 0, 0, 0];
+    const sections = [];
+    let appendix = false;
+    const tokenPattern = /\\appendix\b|\\(section|subsection|subsubsection|paragraph)(\*)?\s*\{([^{}]*)\}/g;
+    let match;
+
+    while ((match = tokenPattern.exec(masked))) {
+      taskCheckpoint(tokenPattern.lastIndex);
+      if (match[0].startsWith("\\appendix")) {
+        appendix = true;
+        counters.fill(0);
+        continue;
+      }
+
+      const level = [
+        "section",
+        "subsection",
+        "subsubsection",
+        "paragraph"
+      ].indexOf(match[1]);
+      const starred = Boolean(match[2]);
+      let number = "";
+      if (!starred) {
+        counters[level] += 1;
+        for (let index = level + 1; index < counters.length; index += 1) {
+          counters[index] = 0;
+        }
+
+        if (appendix) {
+          const parts = [];
+          if (counters[0]) parts.push(alphaNumber(counters[0]));
+          for (let index = 1; index <= level; index += 1) {
+            if (counters[index]) parts.push(String(counters[index]));
+          }
+          number = parts.join(".");
+        } else if (revtex) {
+          const parts = [];
+          if (counters[0]) parts.push(romanNumber(counters[0]));
+          if (level >= 1 && counters[1]) parts.push(alphaNumber(counters[1]));
+          for (let index = 2; index <= level; index += 1) {
+            if (counters[index]) parts.push(String(counters[index]));
+          }
+          number = parts.join(".");
+        } else {
+          number = counters.slice(0, level + 1).filter(Boolean).join(".");
+        }
+      }
+
+      sections.push({
+        command: match[1],
+        level,
+        starred,
+        appendix,
+        number,
+        title: String(match[3] || "").trim(),
+        sourceIndex: match.index
+      });
+    }
+
+    return sections;
+  }
+
   function blankRange(characters, start, end) {
     for (let index = start; index < end; index += 1) {
+      taskCheckpoint(index - start);
       if (characters[index] !== "\r" && characters[index] !== "\n") {
         characters[index] = MASK_CHARACTER;
       }
@@ -76,6 +175,7 @@
     const source = String(sourceValue || "");
     const characters = source.split("");
     for (let index = 0; index < source.length; index += 1) {
+      taskCheckpoint(index);
       if (source[index] === "\\" && source.slice(index, index + 5) === "\\verb") {
         let delimiterIndex = index + 5;
         if (source[delimiterIndex] === "*") delimiterIndex += 1;
@@ -102,6 +202,7 @@
     const characters = source.split("");
 
     for (let index = 0; index < source.length; index += 1) {
+      taskCheckpoint(index);
       if (source[index] === "%" && !isEscaped(source, index)) {
         let end = index;
         while (end < source.length && source[end] !== "\r" && source[end] !== "\n") {
@@ -131,6 +232,7 @@
       const beginPattern = new RegExp(`\\\\begin\\s*\\{${escapedEnvironment}\\}`, "g");
       let match;
       while ((match = beginPattern.exec(masked))) {
+        taskCheckpoint(beginPattern.lastIndex);
         const endPattern = new RegExp(`\\\\end\\s*\\{${escapedEnvironment}\\}`, "g");
         endPattern.lastIndex = match.index + match[0].length;
         const endMatch = endPattern.exec(masked);
@@ -187,6 +289,7 @@
     let index = 0;
 
     while (index < masked.length) {
+      taskCheckpoint(index);
       if (!active) {
         const environment = environmentOpeningAt(masked, index);
         if (environment) {
@@ -304,6 +407,7 @@
     let match;
 
     while ((match = tokenPattern.exec(masked))) {
+      taskCheckpoint(tokenPattern.lastIndex);
       const kind = match[1];
       const environment = match[2].trim();
       if (kind === "begin") {
@@ -405,6 +509,7 @@
     if (source[start] !== opening) return null;
     let depth = 0;
     for (let index = start; index < source.length; index += 1) {
+      taskCheckpoint(index - start);
       if (source[index] === opening && !isEscaped(source, index)) depth += 1;
       if (source[index] === closing && !isEscaped(source, index)) {
         depth -= 1;
@@ -439,6 +544,7 @@
     let match;
 
     while ((match = pattern.exec(masked))) {
+      taskCheckpoint(pattern.lastIndex);
       if (match.index >= beforeIndex || records.length >= 250) break;
       let position = skipWhitespace(masked, match.index + match[0].length);
       let name = "";
@@ -595,6 +701,7 @@
     let index = 0;
 
     while (index < source.length) {
+      taskCheckpoint(index);
       const record = source[index] === "\\"
         ? optionalRecords.find((candidate) => macroNameMatches(source, index, candidate.name))
         : null;
@@ -652,7 +759,7 @@
     return value;
   }
 
-  function prepareDocumentCommands(sourceValue, beforeIndexValue, bodyValue) {
+  function prepareDocumentCommandContext(sourceValue, beforeIndexValue) {
     const activeRecords = activeDocumentCommandRecords([
       ...parseNewCommandRecords(sourceValue, beforeIndexValue),
       ...parseDeclareMathOperatorRecords(sourceValue, beforeIndexValue)
@@ -678,10 +785,29 @@
       macros[record.name] = expandOptionalCommands(record.body, optionalRecords);
     }
     return {
-      body: expandOptionalCommands(bodyValue, optionalRecords),
       macros,
+      optionalRecords,
       count: activeRecords.length
     };
+  }
+
+  function applyPreparedDocumentCommands(preparedValue, bodyValue) {
+    const prepared = preparedValue || {};
+    const optionalRecords = Array.isArray(prepared.optionalRecords)
+      ? prepared.optionalRecords
+      : [];
+    return {
+      body: expandOptionalCommands(bodyValue, optionalRecords),
+      macros: prepared.macros || { "\\ensuremath": "#1" },
+      count: Number(prepared.count) || 0
+    };
+  }
+
+  function prepareDocumentCommands(sourceValue, beforeIndexValue, bodyValue) {
+    return applyPreparedDocumentCommands(
+      prepareDocumentCommandContext(sourceValue, beforeIndexValue),
+      bodyValue
+    );
   }
 
   function extendedDelimiterSequence(source, start) {
@@ -725,13 +851,71 @@
     return sequence;
   }
 
+  function environmentDirectiveAround(sourceValue, offsetValue) {
+    const source = String(sourceValue || "");
+    const offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
+    const searchStart = Math.max(0, offset - 96);
+
+    for (let start = searchStart; start <= offset; start += 1) {
+      if (source[start] !== "\\") continue;
+      const command = readControlSequence(source, start);
+      if (!command) continue;
+      const commandName = source.slice(command.start, command.end);
+      if (commandName !== "\\begin" && commandName !== "\\end") continue;
+      const argumentStart = skipWhitespace(source, command.end);
+      const argument = readBalanced(source, argumentStart, "{", "}");
+      const end = argument?.end || command.end;
+      if (offset < command.start || offset > end) continue;
+      return {
+        start: command.start,
+        end,
+        syntaxKind: "environment-directive"
+      };
+    }
+    return null;
+  }
+
+  function rowBreakDirectiveAround(sourceValue, offsetValue) {
+    const source = String(sourceValue || "");
+    const offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
+    const searchStart = Math.max(0, offset - 64);
+
+    for (let start = searchStart; start <= offset; start += 1) {
+      if (source[start] !== "\\" || source[start + 1] !== "\\") continue;
+      let end = start + 2;
+      if (source[end] === "*") end += 1;
+      end = skipWhitespace(source, end);
+      if (source[end] === "[") {
+        const spacing = readBalanced(source, end, "[", "]");
+        if (spacing) end = spacing.end;
+      }
+      if (offset < start || offset > end) continue;
+      return {
+        start,
+        end,
+        syntaxKind: "row-break-directive"
+      };
+    }
+    return null;
+  }
+
+  function caretProtectedSequenceAround(sourceValue, offsetValue) {
+    const source = String(sourceValue || "");
+    const offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
+    return (
+      environmentDirectiveAround(source, offset) ||
+      rowBreakDirectiveAround(source, offset) ||
+      controlSequenceAround(source, offset)
+    );
+  }
+
   function resolveCaretPlacement(sourceValue, offsetValue, previousValue = null) {
     const source = String(sourceValue || "");
     const cursorOffset = Math.max(
       0,
       Math.min(Number(offsetValue) || 0, source.length)
     );
-    const command = controlSequenceAround(source, cursorOffset);
+    const command = caretProtectedSequenceAround(source, cursorOffset);
     if (!command) {
       return {
         cursorOffset,
@@ -799,7 +983,7 @@
   function commandAwareCaretOffset(sourceValue, offsetValue, commandSide = null) {
     const source = String(sourceValue || "");
     let offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
-    const command = controlSequenceAround(source, offset);
+    const command = caretProtectedSequenceAround(source, offset);
     if (command && offset > command.start && offset < command.end) {
       offset = commandSide === "right" ? command.end : command.start;
     } else if (command && offset < command.end) {
@@ -816,7 +1000,7 @@
   function cursorInsideControlSequence(sourceValue, offsetValue) {
     const source = String(sourceValue || "");
     const offset = Math.max(0, Math.min(Number(offsetValue) || 0, source.length));
-    const command = controlSequenceAround(source, offset);
+    const command = caretProtectedSequenceAround(source, offset);
     return Boolean(
       command &&
       offset > command.start &&
@@ -984,8 +1168,7 @@
     return rows.filter((row) => !row.suppressed).length;
   }
 
-  function equationPreviewNumbering(sourceValue, context) {
-    const source = String(sourceValue || "");
+  function equationPreviewNumberingAtCounter(context, counterValue = 0) {
     const environment = String(context?.environment || "");
     const starred = environment.endsWith("*");
     const directives = equationLineDirectives(context);
@@ -1002,15 +1185,7 @@
         "eqnarray"
       ].includes(directives.baseEnvironment)
     );
-    let counter = equationContexts(source).contexts
-      .filter((candidate) => candidate.closeEnd <= context.openStart)
-      .reduce((total, candidate) => {
-        const completeContext = {
-          ...candidate,
-          source: source.slice(candidate.contentStart, candidate.contentEnd)
-        };
-        return total + equationCounterIncrement(completeContext);
-      }, 0);
+    let counter = Math.max(0, Number(counterValue) || 0);
     const numbers = directives.rows.map(() => null);
 
     if (directives.baseEnvironment === "multline") {
@@ -1034,9 +1209,87 @@
     }
 
     return {
-      ...directives,
-      numbers
+      numbering: {
+        ...directives,
+        numbers
+      },
+      counter
     };
+  }
+
+  function analyzeEquations(sourceValue) {
+    const source = String(sourceValue || "");
+    const parsed = equationContexts(source);
+    const numberingByOpenStart = new Map();
+    let counter = 0;
+
+    for (let candidateIndex = 0; candidateIndex < parsed.contexts.length; candidateIndex += 1) {
+      taskCheckpoint(candidateIndex, 32);
+      const candidate = parsed.contexts[candidateIndex];
+      const completeContext = {
+        ...candidate,
+        source: source.slice(candidate.contentStart, candidate.contentEnd)
+      };
+      const result = equationPreviewNumberingAtCounter(completeContext, counter);
+      counter = result.counter;
+      numberingByOpenStart.set(candidate.openStart, result.numbering);
+    }
+
+    return {
+      ...parsed,
+      numberingByOpenStart,
+      finalCounter: counter
+    };
+  }
+
+  function findEquationContextFromAnalysis(sourceValue, cursorValue, analysisValue) {
+    const source = String(sourceValue || "");
+    const cursor = Math.max(0, Math.min(Number(cursorValue) || 0, source.length));
+    const analysis = analysisValue || analyzeEquations(source);
+    const masked = String(analysis?.masked || "");
+    if (cursor < source.length && masked[cursor] === MASK_CHARACTER) return null;
+    const contexts = Array.isArray(analysis?.contexts) ? analysis.contexts : [];
+    let context = null;
+    let low = 0;
+    let high = contexts.length - 1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      const candidate = contexts[middle];
+      if (cursor < candidate.contentStart) {
+        high = middle - 1;
+      } else if (cursor > candidate.contentEnd) {
+        low = middle + 1;
+      } else {
+        context = candidate;
+        break;
+      }
+    }
+    if (!context) return null;
+    return {
+      ...context,
+      source: source.slice(context.contentStart, context.contentEnd),
+      cursorOffset: cursor - context.contentStart
+    };
+  }
+
+  function equationPreviewNumbering(sourceValue, context) {
+    const source = String(sourceValue || "");
+    const analysis = analyzeEquations(source);
+    const cached = analysis.numberingByOpenStart.get(context?.openStart);
+    if (cached) return cached;
+
+    let counter = 0;
+    for (let candidateIndex = 0; candidateIndex < analysis.contexts.length; candidateIndex += 1) {
+      taskCheckpoint(candidateIndex, 32);
+      const candidate = analysis.contexts[candidateIndex];
+      if (candidate.closeEnd > Number(context?.openStart)) break;
+      const completeContext = {
+        ...candidate,
+        source: source.slice(candidate.contentStart, candidate.contentEnd)
+      };
+      counter = equationPreviewNumberingAtCounter(completeContext, counter).counter;
+    }
+    return equationPreviewNumberingAtCounter(context, counter).numbering;
   }
 
   function genericEnvironmentContexts(sourceValue, environmentNames) {
@@ -1266,8 +1519,10 @@
   function containsLabel(sourceValue, labelValue) {
     const label = String(labelValue || "").trim();
     const pattern = /\\label\s*\{([^{}]+)\}/g;
+    const masked = maskIgnoredLatex(sourceValue);
     let match;
-    while ((match = pattern.exec(String(sourceValue || "")))) {
+    while ((match = pattern.exec(masked))) {
+      taskCheckpoint(pattern.lastIndex);
       if (match[1].trim() === label) return true;
     }
     return false;
@@ -1277,10 +1532,12 @@
     const source = String(sourceValue || "");
     const label = String(labelValue || "").trim();
     if (!label) return null;
+    const masked = maskIgnoredLatex(source);
     const labelPattern = /\\label\s*\{([^{}]+)\}/g;
     let labelIndex = -1;
     let labelMatch;
-    while ((labelMatch = labelPattern.exec(source))) {
+    while ((labelMatch = labelPattern.exec(masked))) {
+      taskCheckpoint(labelPattern.lastIndex);
       if (labelMatch[1].trim() === label) {
         labelIndex = labelMatch.index;
         break;
@@ -1342,35 +1599,19 @@
       };
     }
 
-    const counters = [0, 0, 0, 0];
-    const sectionPattern =
-      /\\(section|subsection|subsubsection|paragraph)(\*)?\s*\{([^{}]*)\}/g;
-    let section = null;
-    let sectionMatch;
-    while ((sectionMatch = sectionPattern.exec(source))) {
-      if (sectionMatch.index > labelIndex) break;
-      const level = [
-        "section",
-        "subsection",
-        "subsubsection",
-        "paragraph"
-      ].indexOf(sectionMatch[1]);
-      let number = "";
-      if (!sectionMatch[2]) {
-        counters[level] += 1;
-        for (let index = level + 1; index < counters.length; index += 1) {
-          counters[index] = 0;
+    const numberedSections = sectionNumbering(source);
+    const matchedSection = numberedSections
+      .filter((candidate) => candidate.sourceIndex <= labelIndex)
+      .at(-1);
+    const section = matchedSection
+      ? {
+          label,
+          type: "section",
+          number: matchedSection.number,
+          title: matchedSection.title,
+          sourceIndex: matchedSection.sourceIndex
         }
-        number = counters.slice(0, level + 1).filter(Boolean).join(".");
-      }
-      section = {
-        label,
-        type: "section",
-        number,
-        title: sectionMatch[3].trim(),
-        sourceIndex: sectionMatch.index
-      };
-    }
+      : null;
     return section || {
       label,
       type: "label",
@@ -1442,6 +1683,10 @@
     findFigureContext,
     extractNewCommandDefinitions,
     prepareDocumentCommands,
+    prepareDocumentCommandContext,
+    applyPreparedDocumentCommands,
+    analyzeEquations,
+    findEquationContextFromAnalysis,
     resolveCaretPlacement,
     commandAwareCaretOffset,
     cursorInsideControlSequence,
@@ -1452,6 +1697,7 @@
     tablePreviewNumber,
     figurePreviewNumber,
     floatCaption,
+    sectionNumbering,
     referenceTarget
   });
 })(globalThis);

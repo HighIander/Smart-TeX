@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX figure autocomplete harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; padding: 60px; font: 14px system-ui, sans-serif; }
+    #figure-autocomplete-test-result {
+      position: fixed; right: 12px; bottom: 12px; z-index: 2147483647;
+      padding: 7px 11px; border-radius: 999px; color: white;
+      background: #9a6700; font: 700 12px/1.2 system-ui, sans-serif;
+    }
+    #figure-autocomplete-test-result[data-result="passed"] { background: #16803b; }
+    #figure-autocomplete-test-result[data-result="failed"] { background: #cf222e; }
+  </style>
+</head>
+<body>
+  <div class="file-tree-list" hidden>
+    <div role="treeitem" data-path="fig/alpha.png"
+      data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='120'%3E%3Crect width='240' height='120' fill='%233158b8'/%3E%3C/svg%3E"></div>
+    <div role="treeitem" data-path="fig/beta.png"
+      data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='120'%3E%3Crect width='240' height='120' fill='%235b3da5'/%3E%3C/svg%3E"></div>
+    <div role="treeitem" data-path="fig/zeta.png"
+      data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='120'%3E%3Crect width='240' height='120' fill='%23518358'/%3E%3C/svg%3E"></div>
+  </div>
+  <output id="figure-autocomplete-test-result">Figure autocomplete test running</output>
+  <script>
+    const featureKey = "smarttex:features:v1";
+    const popupKey = "smarttex:reference-popups:v1";
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get() {
+            return {
+              [featureKey]: { equations: true, tables: true, figures: true },
+              [popupKey]: { trigger: "cursor", environmentTrigger: "cursor" }
+            };
+          }
+        },
+        onChanged: { addListener() {} }
+      },
+      runtime: { async sendMessage() { return { ok: true }; } }
+    };
+    globalThis.__insertedFigurePath = "";
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(String(event.detail || "{}"));
+      const response = { requestId: request.requestId, ok: true };
+      if (request.type === "listProjectFigures") {
+        response.figures = ["fig/zeta.png", "fig/beta.png", "fig/alpha.png"];
+        response.complete = request.full === true;
+      } else if (request.type === "getCoordinates") {
+        response.screen = { pageX: 240, pageY: 170, lineHeight: 20 };
+      } else if (request.type === "replaceFigureToken") {
+        globalThis.__insertedFigurePath = request.text;
+        response.token = { start: 0, end: 0, fragment: request.text };
+      } else if (request.type === "resolveProjectFile") {
+        response.file = null;
+        response.ok = false;
+        response.error = "not needed";
+      } else {
+        response.active = Boolean(request.active);
+      }
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify(response)
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script src="../figure-autocomplete.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+    function sendState() {
+      const value = String.raw`\includegraphics{fig/beta.png}\n\includegraphics{fig/}`;
+      const cursorIndex = value.length - 1;
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          screen: { pageX: 240, pageY: 170, lineHeight: 20 },
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "codemirror"
+        })
+      }));
+    }
+
+    async function waitFor(predicate, attempts = 120) {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const value = predicate();
+        if (value) return value;
+        await delay(20);
+      }
+      return null;
+    }
+
+    async function runTest() {
+      const checks = {};
+      sendState();
+      const popup = await waitFor(() => document.querySelector(
+        "#smarttex-figure-autocomplete-popup:not([hidden])"
+      ));
+      checks.opensImmediately = Boolean(popup);
+      const items = await waitFor(() => {
+        const values = [...document.querySelectorAll(".smarttex-figure-autocomplete-item")];
+        return values.length === 3 ? values : null;
+      });
+      const paths = items?.map((item) => item.querySelector("code")?.textContent) || [];
+      checks.alphabetical = JSON.stringify(paths) === JSON.stringify([
+        "fig/alpha.png", "fig/beta.png", "fig/zeta.png"
+      ]);
+      const beta = items?.find((item) => item.textContent.includes("fig/beta.png"));
+      checks.includedCheck = Boolean(
+        beta?.classList.contains("smarttex-figure-autocomplete-included") &&
+        beta.querySelector(".smarttex-figure-autocomplete-check")?.textContent === "✓"
+      );
+
+      const zeta = items?.find((item) => item.textContent.includes("fig/zeta.png"));
+      zeta?.dispatchEvent(new MouseEvent("mouseenter", {
+        bubbles: false, clientX: 320, clientY: 230
+      }));
+      zeta?.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true, clientX: 320, clientY: 230
+      }));
+      checks.hoverPreview = Boolean(await waitFor(() => {
+        const preview = document.querySelector("#smarttex-graphic-autocomplete-preview:not([hidden])");
+        return preview?.querySelector(".smarttex-preview-meta")?.textContent === "fig/zeta.png"
+          ? preview : null;
+      }));
+
+      document.querySelector(".smarttex-figure-autocomplete-unused")?.click();
+      await delay(30);
+      const filteredPaths = [...document.querySelectorAll(".smarttex-figure-autocomplete-item code")]
+        .map((node) => node.textContent);
+      checks.unusedFilter = !filteredPaths.includes("fig/beta.png") && filteredPaths.length === 2;
+      checks.filterLabel = document.querySelector(".smarttex-figure-autocomplete-unused")
+        ?.textContent === "Only show figures not yet included";
+
+      const alpha = [...document.querySelectorAll(".smarttex-figure-autocomplete-item")]
+        .find((item) => item.textContent.includes("fig/alpha.png"));
+      alpha?.click();
+      await delay(30);
+      checks.insertion = globalThis.__insertedFigurePath === "fig/alpha.png";
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#figure-autocomplete-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Figure autocomplete test passed"
+        : `Figure autocomplete test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.figureAutocompleteTest = passed ? "passed" : "failed";
+    }
+
+    runTest().catch((error) => {
+      const output = document.querySelector("#figure-autocomplete-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Figure autocomplete test failed: ${error.message}`;
+      document.documentElement.dataset.figureAutocompleteTest = "failed";
+    });
+  </script>
+</body>
+</html>

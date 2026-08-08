@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX direct autocomplete routing harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; padding: 60px; font: 14px system-ui, sans-serif; }
+    .cm-content { min-height: 160px; padding: 20px; border: 1px solid #aaa; }
+    #direct-routing-test-result {
+      position: fixed; right: 12px; bottom: 12px; z-index: 2147483647;
+      padding: 7px 11px; border-radius: 999px; color: #fff;
+      background: #9a6700; font: 700 12px/1.2 system-ui, sans-serif;
+    }
+    #direct-routing-test-result[data-result="passed"] { background: #16803b; }
+    #direct-routing-test-result[data-result="failed"] { background: #cf222e; }
+  </style>
+</head>
+<body>
+  <div class="cm-editor"><div id="editor" class="cm-content">Mock editor surface</div></div>
+  <output id="direct-routing-test-result">Direct routing test running</output>
+  <script>
+    const FEATURES_KEY = "smarttex:features:v1";
+    const POPUP_KEY = "smarttex:reference-popups:v1";
+    const AUTOCOMPLETE_KEY = "smarttex:autocomplete:v1";
+    const storageListeners = [];
+    let features = { equations: true, tables: true, figures: true };
+    let currentHarnessState = null;
+    const citationCache = {
+      records: [{
+        key: "Kluge2024",
+        title: "Direct citation routing",
+        authors: ["Kluge, Thomas"],
+        journal: "Harness Journal",
+        year: "2024"
+      }],
+      files: ["refs.bib"],
+      parsedAt: "2026-08-06T00:00:00.000Z"
+    };
+
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get(key) {
+            if (key === FEATURES_KEY) return { [FEATURES_KEY]: { ...features } };
+            if (key === POPUP_KEY) {
+              return { [POPUP_KEY]: { trigger: "cursor", environmentTrigger: "cursor" } };
+            }
+            if (key === AUTOCOMPLETE_KEY) {
+              return { [AUTOCOMPLETE_KEY]: { referenceOrder: "document" } };
+            }
+            if (String(key).startsWith("smarttex:citation-cache:v1:")) {
+              return { [key]: citationCache };
+            }
+            return { [key]: undefined };
+          },
+          async set() {}
+        },
+        onChanged: {
+          addListener(listener) { storageListeners.push(listener); }
+        }
+      },
+      runtime: {
+        async sendMessage() { return { ok: true }; }
+      }
+    };
+
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      const response = { requestId: request.requestId, ok: true };
+      if (request.type === "getState") response.state = currentHarnessState;
+      if (request.type === "getCoordinates") {
+        response.screen = { pageX: 390, pageY: 260, lineHeight: 22 };
+      }
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify(response)
+      }));
+    });
+
+    function changeFeatures(next) {
+      features = { ...next };
+      for (const listener of storageListeners) {
+        listener({ [FEATURES_KEY]: { newValue: { ...features } } }, "local");
+      }
+    }
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../figure-renderer.js"></script>
+  <script src="../bibtex-parser.js"></script>
+  <script src="../content.js"></script>
+  <script src="../citation-autocomplete.js"></script>
+  <script src="../reference-autocomplete.js"></script>
+  <script>
+    const editor = document.querySelector("#editor");
+    const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+    function makeState(value, cursorIndex) {
+      return {
+        value,
+        cursorIndex,
+        selectionFrom: cursorIndex,
+        selectionTo: cursorIndex,
+        screen: { pageX: 390, pageY: 260, lineHeight: 22 },
+        fileName: "main.tex",
+        focused: true,
+        editorKind: "codemirror"
+      };
+    }
+
+    function emitState(state) {
+      currentHarnessState = state;
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify(state)
+      }));
+    }
+
+    async function clickIntoState(state) {
+      editor.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        clientX: 390,
+        clientY: 260
+      }));
+      const started = performance.now();
+      emitState(state);
+      return started;
+    }
+
+    async function waitVisible(selector, timeout = 1000) {
+      const deadline = performance.now() + timeout;
+      while (performance.now() < deadline) {
+        const node = document.querySelector(selector);
+        if (node && !node.hidden) return node;
+        await delay(5);
+      }
+      return null;
+    }
+
+    async function sampleReferencePopupFrames(frameCount = 16) {
+      const samples = [];
+      for (let frame = 0; frame < frameCount; frame += 1) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const popup = document.querySelector(
+          ".smarttex-editor-reference-popup:not([hidden])"
+        );
+        if (popup) {
+          samples.push(popup.dataset.smarttexAutocompleteOwner || "normal");
+        }
+      }
+      return samples;
+    }
+
+    async function runDirectRoutingTest() {
+      const checks = {};
+      await delay(80);
+
+      const referenceSource = String.raw`\begin{equation}
+E=mc^2
+\label{eq:test}
+\end{equation}
+Use \eqref{eq:test}`;
+      const referenceCursor = referenceSource.lastIndexOf("}");
+      const referenceFramesPromise = sampleReferencePopupFrames();
+      const referenceStart = await clickIntoState(
+        makeState(referenceSource, referenceCursor)
+      );
+      const referenceList = await waitVisible(
+        "#smarttex-reference-autocomplete-popup:not([hidden])"
+      );
+      const referenceOpenMs = performance.now() - referenceStart;
+      const selectedPreview = await waitVisible(
+        ".smarttex-editor-reference-popup[data-smarttex-autocomplete-owner='reference']:not([hidden])"
+      );
+      const referenceFrames = await referenceFramesPromise;
+      checks.referenceListImmediate = Boolean(referenceList) && referenceOpenMs < 65;
+      checks.referenceSelectedPreview = Boolean(selectedPreview);
+      checks.referenceNoIntermediatePopup = !referenceFrames.includes("normal");
+
+      emitState(makeState("Plain text", 3));
+      await delay(50);
+      changeFeatures({ equations: false, tables: true, figures: true });
+      await delay(40);
+      const disabledStart = await clickIntoState(
+        makeState(referenceSource, referenceCursor)
+      );
+      const disabledList = await waitVisible(
+        "#smarttex-reference-autocomplete-popup:not([hidden])"
+      );
+      checks.disabledTargetKeepsList = Boolean(disabledList) &&
+        performance.now() - disabledStart < 65;
+      await delay(80);
+      checks.disabledTargetHidesPreview = !document.querySelector(
+        ".smarttex-editor-reference-popup:not([hidden])"
+      );
+
+      emitState(makeState("Plain text", 3));
+      await delay(50);
+      changeFeatures({ equations: true, tables: true, figures: true });
+      await delay(40);
+      const citationSource = String.raw`Text \cite{Kluge2024}`;
+      const citationCursor = citationSource.lastIndexOf("}");
+      const citationFramesPromise = sampleReferencePopupFrames();
+      const citationStart = await clickIntoState(
+        makeState(citationSource, citationCursor)
+      );
+      const citationList = await waitVisible(
+        "#smarttex-citation-popup:not([hidden])"
+      );
+      const citationOpenMs = performance.now() - citationStart;
+      const citationFrames = await citationFramesPromise;
+      checks.citationListImmediate = Boolean(citationList) && citationOpenMs < 120;
+      checks.citationShowsDetails = Boolean(
+        citationList?.querySelector(".smarttex-citation-item")
+      );
+      checks.citationNoIntermediatePopup = !citationFrames.includes("normal");
+
+      const passed = Object.values(checks).every(Boolean);
+      const output = document.querySelector("#direct-routing-test-result");
+      output.dataset.result = passed ? "passed" : "failed";
+      output.textContent = passed
+        ? "Direct autocomplete routing test passed"
+        : `Direct autocomplete routing test failed: ${JSON.stringify(checks)}; ` +
+          `referenceOpenMs=${referenceOpenMs.toFixed(1)}; citationOpenMs=${citationOpenMs.toFixed(1)}; ` +
+          `referenceFrames=${JSON.stringify(referenceFrames)}; citationFrames=${JSON.stringify(citationFrames)}`;
+      document.documentElement.dataset.directRoutingTest = passed ? "passed" : "failed";
+    }
+
+    runDirectRoutingTest().catch((error) => {
+      const output = document.querySelector("#direct-routing-test-result");
+      output.dataset.result = "failed";
+      output.textContent = `Direct autocomplete routing test failed: ${error.message}`;
+      document.documentElement.dataset.directRoutingTest = "failed";
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX subfigure layout harness</title>
+  <style>
+    .media { display: grid; width: max-content; }
+    .row { display: flex; width: 100%; gap: 8px; }
+    .panel { flex: 0 0 auto; min-width: 0; height: 40px; box-sizing: border-box; border: 1px solid; }
+  </style>
+</head>
+<body>
+  <output id="subfigure-layout-test-result">running</output>
+  <script>
+    globalThis.chrome = { runtime: { getURL: () => "" } };
+  </script>
+  <script src="../figure-renderer.js"></script>
+  <script>
+    (() => {
+      const output = document.getElementById("subfigure-layout-test-result");
+      const source = String.raw`
+        \\centering
+        \\begin{subfigure}[t]{0.49\\textwidth}
+          \\includegraphics[width=\\linewidth]{cold.png}
+        \\end{subfigure}%
+        \\hfill
+        \\begin{subfigure}[t]{0.49\\textwidth}
+          \\includegraphics[width=\\linewidth]{warm.png}
+        \\end{subfigure}`;
+
+      function build(environment) {
+        const model = SmartTeXFigureRenderer.parseFigureLayout(source, { environment });
+        const media = document.createElement("div");
+        media.className = "media";
+        media.style.width = `${model.desiredWidthPx}px`;
+        for (const rowModel of model.rows) {
+          const row = document.createElement("div");
+          row.className = "row";
+          const items = rowModel.items || [];
+          const total = Number(rowModel.relativeWidthRatio) || 1;
+          for (const panelModel of items) {
+            const panel = document.createElement("div");
+            panel.className = "panel";
+            const ratio = Number(panelModel.widthRatio) || 1;
+            const fraction = rowModel.normalizeRelativeWidths ? ratio / total : ratio;
+            panel.style.flexBasis = `${fraction * 100}%`;
+            row.appendChild(panel);
+          }
+          media.appendChild(row);
+        }
+        document.body.appendChild(media);
+        return { model, media };
+      }
+
+      try {
+        const wide = build("figure*");
+        const stacked = build("figure");
+        const wideRows = [...wide.media.children];
+        const stackedRows = [...stacked.media.children];
+        if (wideRows.length !== 1 || wideRows[0].children.length !== 2) {
+          throw new Error("figure* did not create one two-panel row");
+        }
+        if (stackedRows.length !== 2 || stackedRows.some((row) => row.children.length !== 1)) {
+          throw new Error("figure did not create two one-panel rows");
+        }
+        const wideRowWidth = wideRows[0].getBoundingClientRect().width;
+        const widePanelWidths = [...wideRows[0].children].map(
+          (panel) => panel.getBoundingClientRect().width
+        );
+        if (widePanelWidths.some((width) => width < wideRowWidth * 0.45)) {
+          throw new Error("figure* panels are not laid out side by side at approximately half width");
+        }
+        for (const row of stackedRows) {
+          const rowWidth = row.getBoundingClientRect().width;
+          const panelWidth = row.firstElementChild.getBoundingClientRect().width;
+          if (panelWidth < rowWidth * 0.95) {
+            throw new Error("stacked figure panel does not fill its generated row");
+          }
+        }
+        document.documentElement.dataset.subfigureLayoutTest = "passed";
+        output.textContent = "passed";
+      } catch (error) {
+        document.documentElement.dataset.subfigureLayoutTest = "failed";
+        output.textContent = `failed: ${error.message}`;
+      }
+    })();
+  </script>
+</body>
+</html>

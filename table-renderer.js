@@ -6,6 +6,10 @@
   const CARET_MARKER = "\uE001";
   const OPERATOR_CARET_MARKER = "\uE002";
 
+  function taskCheckpoint(iteration = 0, interval = 128) {
+    global.SmartTeXInteractionTasks?.checkpoint?.(iteration, interval);
+  }
+
   function isEscaped(source, index) {
     let slashes = 0;
     for (let position = index - 1; position >= 0 && source[position] === "\\"; position -= 1) {
@@ -18,6 +22,7 @@
     if (source[start] !== opening) return null;
     let depth = 0;
     for (let index = start; index < source.length; index += 1) {
+      taskCheckpoint(index - start);
       if (source[index] === opening && !isEscaped(source, index)) depth += 1;
       if (source[index] === closing && !isEscaped(source, index)) {
         depth -= 1;
@@ -52,6 +57,7 @@
     };
 
     for (let index = 0; index < source.length; index += 1) {
+      taskCheckpoint(index);
       const character = source[index];
       if (!isEscaped(source, index)) {
         if (!mathDelimiter && character === "$") {
@@ -389,7 +395,9 @@
     const rows = [];
     let pendingBoundary = emptyHorizontalBoundary();
 
-    for (const rawRow of rawRows) {
+    for (let rawRowIndex = 0; rawRowIndex < rawRows.length; rawRowIndex += 1) {
+      taskCheckpoint(rawRowIndex, 16);
+      const rawRow = rawRows[rawRowIndex];
       const rawCells = rawRow.cells.map((cell) => ({ ...cell }));
       const first = stripLeadingRules(rawCells[0]?.raw || "");
       if (rawCells[0]) {
@@ -900,7 +908,9 @@
     table.appendChild(body);
     wrapper.appendChild(table);
 
-    for (const rowModel of model.rows) {
+    for (let rowIndex = 0; rowIndex < model.rows.length; rowIndex += 1) {
+      taskCheckpoint(rowIndex, 16);
+      const rowModel = model.rows[rowIndex];
       const row = document.createElement("tr");
       let descriptorColumn = 0;
       const descriptors = rowModel.cells.map((cellModel) => {

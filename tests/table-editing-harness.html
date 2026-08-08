@@ -75,7 +75,7 @@
   <script src="../table-renderer.js"></script>
   <script src="../table-editor.js"></script>
   <script src="../figure-renderer.js"></script>
-  <script src="../document-preview.js"></script>
+  <script src="../editor-toolbar.js"></script>
   <script>
     const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     async function waitFor(selector, predicate = () => true) {
@@ -145,7 +145,7 @@ After`;
       checks.doubleRightBorder = /\\multicolumn\{1\}\{c\|\|\}\{D\}/.test(borderEdit.text);
 
       dispatch("Text before.", "Text before.".length);
-      await delay(30);
+      await delay(150);
       checks.outsideVisibility = Boolean(
         !addTable?.hidden &&
         structureButton?.hidden &&
