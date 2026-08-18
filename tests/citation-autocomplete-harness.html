@@ -75,6 +75,7 @@
     let fileSwitchTimer = null;
     let bibliographyFetches = 0;
     let fileSwitches = 0;
+    let editorScreen = { pageX: 420, pageY: 280, lineHeight: 22 };
     const cursorVerticalMoves = [];
     const files = {
       "main.tex": String.raw`\documentclass{article}
@@ -139,7 +140,7 @@ Text \cite{Klu}
         cursorIndex: activeFile === "main.tex" ? cursorIndex : 0,
         selectionFrom: activeFile === "main.tex" ? cursorIndex : 0,
         selectionTo: activeFile === "main.tex" ? cursorIndex : 0,
-        screen: { pageX: 420, pageY: 280, lineHeight: 22 },
+        screen: editorScreen,
         fileName: selectedFile,
         focused: true,
         editorKind: "harness"
@@ -188,16 +189,28 @@ Text \cite{Klu}
       return { start, end: cursorIndex + after.length };
     }
 
-    window.addEventListener(REQUEST_EVENT, (event) => {
+    window.addEventListener(REQUEST_EVENT, async (event) => {
       const request = JSON.parse(event.detail);
       const response = { requestId: request.requestId, ok: true };
       if (request.type === "getState") {
         response.state = state();
       } else if (request.type === "getCoordinates") {
-        response.screen = { pageX: 390, pageY: 270, lineHeight: 22 };
+        response.screen = editorScreen;
       } else if (request.type === "setCitationAutocompleteActive") {
         bridgeActive = request.active === true;
         response.active = bridgeActive;
+      } else if (request.type === "readProjectTextFile") {
+        bibliographyFetches += 1;
+        await new Promise((resolve) => window.setTimeout(resolve, 220));
+        if (typeof files[request.path] === "string") {
+          response.file = {
+            value: files[request.path],
+            fileName: request.path
+          };
+        } else {
+          response.ok = false;
+          response.error = `Missing project file ${request.path}`;
+        }
       } else if (request.type === "resolveProjectFile") {
         response.file = {
           url: `https://project.test/files/${request.path}`,
@@ -386,7 +399,29 @@ Text \cite{Klu}
       emitState();
       await waitFor(
         () => !popup.hidden,
-        "Second citation context did not reopen"
+        "Second citation context did not reopen",
+        9000
+      );
+
+      const activeCitationCursor = cursorIndex;
+      cursorIndex = 0;
+      emitState();
+      await waitFor(() => popup.hidden, "Citation popup did not close for placement test");
+      editorScreen = {
+        pageX: 420,
+        pageY: window.scrollY + window.innerHeight - 24,
+        lineHeight: 22
+      };
+      cursorIndex = activeCitationCursor;
+      emitState();
+      await waitFor(() => !popup.hidden, "Low citation popup did not reopen");
+      await delay(100);
+      const lowCitationRect = popup.getBoundingClientRect();
+      checks.lowCitationListMovesAboveAndFits = (
+        popup.dataset.smarttexPlacement === "above" &&
+        lowCitationRect.top >= 8 &&
+        lowCitationRect.bottom <= window.innerHeight - 8 &&
+        lowCitationRect.bottom < editorScreen.pageY - window.scrollY
       );
 
       const smartCitationsPopup = document.createElement("div");

@@ -54,6 +54,10 @@
   const REVIEW_HYDRATION_STATE_EVENT = "smarttex:review-hydration-state";
   const COMMENT_OVERLAY_STATE_EVENT = "smarttex:comment-overlay-state";
   const COMMENT_ANCHOR_ACTIVATE_EVENT = "smarttex:comment-anchor-activate";
+  const COLLABORATION_PRESENCE_EVENT = "smarttex:collaboration-presence";
+  const COLLABORATION_PROFILE_EVENT = "smarttex:collaboration-local-profile";
+  const COLLABORATION_DIRTY_EVENT = "smarttex:collaboration-metadata-dirty";
+  const COLLABORATION_SIGNAL_EVENT = "smarttex:collaboration-signal";
   const CITE_COMMAND = /\\(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/i;
   const REFERENCE_COMMAND = /\\(?:eqref|ref|pageref|autoref|cref|Cref|vref|Vref|nameref)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/;
   const INCLUDEGRAPHICS_COMMAND = /\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^{}]*)$/i;
@@ -76,6 +80,16 @@
   let commentIconOpacity = 1;
   let commentMarksVisible = true;
   let commentMarkOpacity = 0.30;
+  let collaborationSocket = null;
+  let collaborationSocketCleanup = null;
+  let collaborationPresenceTimer = 0;
+  let collaborationPresenceHeartbeat = 0;
+  let collaborationSocketPoll = 0;
+  let collaborationSocketSearchMisses = 0;
+  const pendingCollaborationSignals = new Map();
+  let lastCollaborationPresenceFingerprint = "";
+  let collaborationProfile = { name: "Anonymous", color: "#268bd2", authorId: "" };
+  let selectedDocumentCache = { fileName: "", documentId: "", at: 0 };
   let lastPointerClientX = -10000;
   let lastPointerClientY = -10000;
   const markerConvertHoverUntil = new Map();
@@ -207,6 +221,16 @@
       .ace_editor .ace_cursor-layer,
       .cm-editor .cm-cursorLayer {
         z-index: 4 !important;
+      }
+      /* CollabTeX/Overleaf already transports collaborator cursors over its
+         realtime socket. Keep that native, zero-extra-traffic layer above all
+         SmartTeX editor-local colour fields. */
+      .cm-editor .ol-cm-cursorHighlightsLayer,
+      .ace_editor [class*="remote-cursor"],
+      .ace_editor [class*="remote_cursor"] {
+        z-index: 1000 !important;
+        visibility: visible !important;
+        opacity: 1 !important;
       }
       .ace_editor .ace_gutter,
       .cm-editor .cm-gutters {
@@ -345,7 +369,6 @@
     const badges = [];
     const highlights = [];
     const sectionTokens = [];
-    const counters = { figure: 0, table: 0 };
     const latexContext = globalThis.SmartTeXLatexContext;
     const masked = latexContext?.maskIgnoredLatex?.(source) || source;
     const numberedSections = latexContext?.sectionNumbering?.(source) || [];
@@ -355,6 +378,12 @@
     const tokenPattern = /\\begin\s*\{(equation\*?|align\*?|alignat\*?|flalign\*?|gather\*?|multline\*?|eqnarray\*?|figure\*?|table\*?)\}|\\(section|subsection|subsubsection|paragraph)(\*)?\s*\{/g;
     const equationContexts = latexContext?.equationContexts?.(source)?.contexts || [];
     const equationByStart = new Map(equationContexts.map((context) => [context.openStart, context]));
+    const figureByStart = new Map(
+      (latexContext?.figureContexts?.(source) || []).map((context) => [context.openStart, context])
+    );
+    const tableByStart = new Map(
+      (latexContext?.tableFloatContexts?.(source) || []).map((context) => [context.openStart, context])
+    );
     let match;
 
     while ((match = tokenPattern.exec(masked))) {
@@ -388,10 +417,19 @@
       };
 
       if (base === "figure" || base === "table") {
-        const numbered = /\\caption(?!\*)\s*(?:\[[^\]]*\]\s*)?\{/.test(body);
-        if (numbered) {
-          counters[base] += 1;
-          badges.push({ index: start, label: `${base === "figure" ? "Fig." : "Tab."} ${counters[base]}` });
+        const context = base === "figure"
+          ? figureByStart.get(match.index)
+          : tableByStart.get(match.index);
+        const number = context
+          ? (base === "figure"
+            ? latexContext?.figurePreviewNumber?.(source, context)
+            : latexContext?.tablePreviewNumber?.(source, context))
+          : null;
+        if (number !== null && number !== undefined && String(number)) {
+          badges.push({
+            index: start,
+            label: `${base === "figure" ? "Fig." : "Tab."} ${number}`
+          });
         }
         highlights.push(environmentHighlight);
         continue;
@@ -1529,6 +1567,56 @@
     ).trim();
   }
 
+  function treeItemProjectPath(item) {
+    const explicit = String(
+      item?.getAttribute("data-path") ||
+      item?.getAttribute("data-file-path") ||
+      ""
+    ).trim();
+    if (explicit.includes("/") || explicit.includes("\\")) return explicit;
+    const ownName = explicit || treeItemPath(item);
+    if (!ownName || ownName.includes("/")) return ownName;
+    const segments = [ownName];
+    let parentItem = item?.parentElement?.closest?.('[role="treeitem"]') || null;
+    while (parentItem) {
+      const parentPath = treeItemPath(parentItem).replace(/\\/g, "/").replace(/\/+$/, "");
+      if (parentPath) {
+        if (parentPath.includes("/")) return `${parentPath}/${segments.join("/")}`;
+        segments.unshift(parentPath);
+      }
+      parentItem = parentItem.parentElement?.closest?.('[role="treeitem"]') || null;
+    }
+    return segments.join("/");
+  }
+
+  function treeItemVisualIndent(item) {
+    const content = item?.querySelector?.(
+      ".item-name-button, .item-name, .entity-name, [data-testid*='file-name']"
+    ) || item;
+    const rectLeft = Number(content?.getBoundingClientRect?.().left);
+    if (Number.isFinite(rectLeft) && rectLeft > 0) return rectLeft;
+    let indent = 0;
+    for (const element of [item, content]) {
+      if (!element || element.nodeType !== Node.ELEMENT_NODE) continue;
+      const style = getComputedStyle(element);
+      indent += Number.parseFloat(style.paddingLeft) || 0;
+      indent += Number.parseFloat(style.marginLeft) || 0;
+    }
+    return indent;
+  }
+
+  function treeItemIsFolder(item, name) {
+    if (!item || FIGURE_FILE_PATTERN.test(String(name || ""))) return false;
+    return (
+      item.hasAttribute("aria-expanded") ||
+      /(?:^|[\s_-])folder(?:[\s_-]|$)/i.test(String(item.className || "")) ||
+      Boolean(item.querySelector(
+        "[class*='folder' i], [data-testid*='folder' i], " +
+        "[aria-label*='folder' i], [aria-label*='expand' i], [aria-label*='collapse' i]"
+      ))
+    );
+  }
+
   function likelyFileId(value) {
     const text = String(value || "").trim();
     if (/^[a-f0-9]{24}$/i.test(text) || /^[a-f0-9-]{32,40}$/i.test(text)) {
@@ -1714,6 +1802,33 @@
     return null;
   }
 
+  function selectedDocumentId() {
+    const fileName = selectedFileName();
+    if (
+      selectedDocumentCache.fileName === fileName &&
+      Date.now() - selectedDocumentCache.at < 1500
+    ) {
+      return selectedDocumentCache.documentId;
+    }
+    const item = document.querySelector(
+      '.file-tree-list [role="treeitem"][aria-selected="true"], ' +
+      '.file-tree-list li.selected[role="treeitem"]'
+    );
+    const entity = fileName ? reactProjectFile(fileName, item) : null;
+    const documentId = likelyFileId(
+      item?.getAttribute?.("data-doc-id") ||
+      item?.getAttribute?.("data-document-id") ||
+      item?.getAttribute?.("data-file-id") ||
+      item?.getAttribute?.("data-entity-id") ||
+      item?.getAttribute?.("data-id") ||
+      item?.id ||
+      entity?.fileId ||
+      ""
+    );
+    selectedDocumentCache = { fileName, documentId, at: Date.now() };
+    return documentId;
+  }
+
   function delay(milliseconds) {
     return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
   }
@@ -1821,6 +1936,258 @@
       try { roots.push(window[key]); } catch (_error) { /* guarded globals */ }
     }
     return roots;
+  }
+
+  function looksLikeCollaborationSocket(value) {
+    if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
+    try {
+      return Boolean(
+        typeof value.on === "function" &&
+        typeof value.emit === "function" &&
+        (typeof value.removeListener === "function" || typeof value.off === "function") &&
+        value.socket &&
+        typeof value.socket === "object" &&
+        (
+          "publicId" in value ||
+          typeof value.socket.sessionid === "string" ||
+          typeof value.socket.connect === "function"
+        )
+      );
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function findCollaborationSocket() {
+    const seen = new Set();
+    const budget = { remaining: 9000 };
+    const visit = (value, depth = 0) => {
+      if (
+        !value || depth > 10 || budget.remaining-- <= 0 || seen.has(value) ||
+        (typeof value !== "object" && typeof value !== "function")
+      ) return null;
+      seen.add(value);
+      if (looksLikeCollaborationSocket(value)) return value;
+      let keys = [];
+      try { keys = Object.getOwnPropertyNames(value).slice(0, 180); } catch (_error) { return null; }
+      const preferred = [
+        "socket", "connectionManager", "connection", "manager", "ide", "data",
+        "props", "memoizedProps", "memoizedState", "stateNode", "child", "sibling"
+      ];
+      keys.sort((left, right) => {
+        const leftIndex = preferred.indexOf(left);
+        const rightIndex = preferred.indexOf(right);
+        return (leftIndex < 0 ? preferred.length : leftIndex) -
+          (rightIndex < 0 ? preferred.length : rightIndex);
+      });
+      for (const key of keys) {
+        if (["window", "document", "ownerDocument", "parentNode"].includes(key)) continue;
+        try {
+          const found = visit(value[key], depth + 1);
+          if (found) return found;
+        } catch (_error) {
+          // Framework and socket internals may expose guarded accessors.
+        }
+      }
+      return null;
+    };
+    const roots = [
+      globalThis.io,
+      globalThis.OL,
+      document.querySelector("#ide-root"),
+      document.querySelector("[data-testid='ide-root']"),
+      document.querySelector(".cm-editor"),
+      ...projectModelRoots()
+    ].filter(Boolean);
+    for (const root of roots) {
+      const found = visit(root);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function editorPositionAtIndex(indexValue) {
+    const index = Math.max(0, Number(indexValue) || 0);
+    if (editorKind === "codemirror" && editor?.state?.doc) {
+      const bounded = Math.min(index, editor.state.doc.length);
+      const line = editor.state.doc.lineAt(bounded);
+      return { row: line.number - 1, column: bounded - line.from };
+    }
+    const session = editor?.getSession?.();
+    const position = session?.doc?.indexToPosition?.(
+      Math.min(index, session.getValue().length),
+      0
+    );
+    return position ? { row: Number(position.row) || 0, column: Number(position.column) || 0 } : null;
+  }
+
+  function editorIndexAtPosition(position) {
+    if (!position) return 0;
+    const row = Math.max(0, Number(position.row) || 0);
+    const column = Math.max(0, Number(position.column) || 0);
+    if (editorKind === "codemirror" && editor?.state?.doc) {
+      const lineNumber = Math.max(1, Math.min(editor.state.doc.lines, row + 1));
+      const line = editor.state.doc.line(lineNumber);
+      return Math.min(line.to, line.from + column);
+    }
+    const session = editor?.getSession?.();
+    return Math.max(0, Number(session?.doc?.positionToIndex?.({ row, column }, 0)) || 0);
+  }
+
+  function dispatchCollaborationPresence(raw) {
+    if (!raw || typeof raw !== "object") return;
+    const cursorData = raw.cursorData && typeof raw.cursorData === "object"
+      ? raw.cursorData
+      : raw;
+    const id = String(raw.id || raw.client_id || "");
+    if (!id || id === String(collaborationSocket?.publicId || "")) return;
+    const documentId = String(raw.doc_id || cursorData.doc_id || "");
+    const cursorPosition = cursorData;
+    const selectionValue = raw.smarttexSelection || cursorData.smarttexSelection;
+    const selection = selectionValue && typeof selectionValue === "object"
+      ? selectionValue
+      : null;
+    const cursorIndex = editorIndexAtPosition(cursorPosition);
+    const selectionAnchor = selection ? editorIndexAtPosition(selection.anchor) : cursorIndex;
+    const selectionHead = selection ? editorIndexAtPosition(selection.head) : cursorIndex;
+    const detail = {
+      id,
+      userId: String(raw.user_id || ""),
+      authorId: String(raw.smarttexAuthorId || cursorData.smarttexAuthorId || ""),
+      name: String(raw.smarttexName || cursorData.smarttexName || raw.name || "Anonymous").slice(0, 80),
+      color: normalizedHighlightColor(raw.smarttexColor || cursorData.smarttexColor || "#64748b"),
+      documentId,
+      cursorIndex,
+      selectionAnchor,
+      selectionHead,
+      updatedAt: Date.now()
+    };
+    window.dispatchEvent(new CustomEvent(COLLABORATION_PRESENCE_EVENT, {
+      detail: JSON.stringify(detail)
+    }));
+    const signals = Array.isArray(raw.smarttexSignals || cursorData.smarttexSignals)
+      ? (raw.smarttexSignals || cursorData.smarttexSignals)
+      : Array.isArray(selection?.smarttexSignals)
+        ? selection.smarttexSignals
+        : ((raw.smarttexSignal || cursorData.smarttexSignal) &&
+            typeof (raw.smarttexSignal || cursorData.smarttexSignal) === "object"
+          ? [raw.smarttexSignal || cursorData.smarttexSignal]
+          : (selection?.smarttexSignal && typeof selection.smarttexSignal === "object"
+            ? [selection.smarttexSignal]
+            : []));
+    for (const signal of signals) {
+      if (!signal || typeof signal !== "object") continue;
+      window.dispatchEvent(new CustomEvent(COLLABORATION_SIGNAL_EVENT, {
+        detail: JSON.stringify({
+          kind: String(signal.kind || ""),
+          nonce: String(signal.nonce || ""),
+          path: String(signal.path || ""),
+          fileId: String(signal.fileId || ""),
+          entityType: String(signal.entityType || ""),
+          payload: signal.payload && typeof signal.payload === "object" ? signal.payload : null,
+          sourceId: id
+        })
+      }));
+    }
+  }
+
+  function bindCollaborationSocket(socket) {
+    if (!socket || socket === collaborationSocket) return Boolean(socket);
+    collaborationSocketCleanup?.();
+    collaborationSocket = socket;
+    const updated = (payload) => dispatchCollaborationPresence(payload);
+    const disconnected = (idValue) => {
+      window.dispatchEvent(new CustomEvent(COLLABORATION_PRESENCE_EVENT, {
+        detail: JSON.stringify({ id: String(idValue || ""), disconnected: true })
+      }));
+    };
+    const remove = (eventName, handler) => {
+      try {
+        if (typeof socket.removeListener === "function") socket.removeListener(eventName, handler);
+        else socket.off?.(eventName, handler);
+      } catch (_error) {}
+    };
+    socket.on("clientTracking.clientUpdated", updated);
+    socket.on("clientTracking.clientDisconnected", disconnected);
+    collaborationSocketCleanup = () => {
+      remove("clientTracking.clientUpdated", updated);
+      remove("clientTracking.clientDisconnected", disconnected);
+    };
+    try {
+      socket.emit("clientTracking.getConnectedUsers", (error, users) => {
+        if (error || !Array.isArray(users)) return;
+        for (const user of users) {
+          if (!user?.cursorData) continue;
+          dispatchCollaborationPresence({ ...user.cursorData, ...user, id: user.client_id });
+        }
+      });
+    } catch (_error) {}
+    scheduleCollaborationPresence(true);
+    return true;
+  }
+
+  function ensureCollaborationSocket() {
+    if (looksLikeCollaborationSocket(collaborationSocket)) return true;
+    const socket = findCollaborationSocket();
+    if (socket) {
+      collaborationSocketSearchMisses = 0;
+      return bindCollaborationSocket(socket);
+    }
+    collaborationSocketSearchMisses += 1;
+    return false;
+  }
+
+  function emitCollaborationPresence() {
+    collaborationPresenceTimer = 0;
+    if (!ensureCollaborationSocket()) return false;
+    const state = getEditorState();
+    const documentId = selectedDocumentId();
+    if (!state || !documentId) return false;
+    const cursor = editorPositionAtIndex(state.cursorIndex);
+    const anchor = editorPositionAtIndex(state.selectionAnchor ?? state.selectionFrom ?? state.cursorIndex);
+    const head = editorPositionAtIndex(state.selectionHead ?? state.selectionTo ?? state.cursorIndex);
+    if (!cursor || !anchor || !head) return false;
+    const signals = [...pendingCollaborationSignals.values()];
+    pendingCollaborationSignals.clear();
+    const payload = {
+      row: cursor.row,
+      column: cursor.column,
+      doc_id: documentId,
+      smarttexSelection: { anchor, head },
+      smarttexName: collaborationProfile.name,
+      smarttexColor: collaborationProfile.color,
+      smarttexAuthorId: collaborationProfile.authorId
+    };
+    if (signals.length) {
+      // Keep the original single-signal field for CollabTeX deployments that
+      // preserve custom cursor-data objects but discard arrays. The array lets
+      // newer deployments carry simultaneous comments/review updates.
+      payload.smarttexSignal = signals[0];
+      payload.smarttexSignals = signals;
+      // smarttexSelection is already known to survive the host's client
+      // tracking relay. Mirror the compact signal there for deployments that
+      // whitelist that object while pruning other custom top-level fields.
+      payload.smarttexSelection.smarttexSignal = signals[0];
+      payload.smarttexSelection.smarttexSignals = signals;
+    }
+    const fingerprint = JSON.stringify(payload);
+    if (!signals.length && fingerprint === lastCollaborationPresenceFingerprint) return true;
+    lastCollaborationPresenceFingerprint = fingerprint;
+    try {
+      collaborationSocket.emit("clientTracking.updatePosition", payload, () => {});
+      return true;
+    } catch (_error) {
+      for (const signal of signals) pendingCollaborationSignals.set(signal.kind, signal);
+      return false;
+    }
+  }
+
+  function scheduleCollaborationPresence(immediate = false) {
+    window.clearTimeout(collaborationPresenceTimer);
+    collaborationPresenceTimer = window.setTimeout(
+      emitCollaborationPresence,
+      immediate ? 0 : 90
+    );
   }
 
   function rootFolderIdFromProjectModel() {
@@ -1960,9 +2327,35 @@
     return { value: "", entityType: String(entityType || "") };
   }
 
-  async function readProjectMetadataFile(pathValue) {
+  async function readProjectMetadataFile(pathValue, options = {}) {
     const targetPath = String(pathValue || "").trim();
     if (!targetPath) throw new Error("No metadata-file path was supplied.");
+    const projectId = projectIdFromLocation();
+    const hintedFileId = likelyFileId(options.fileId || "");
+    const hintedEntityType = String(options.entityType || "");
+
+    // Realtime invalidations carry the id returned by the writer's upload.
+    // Reading that immutable version directly avoids waiting for this tab's
+    // hidden file-tree model to notice the delete-and-reupload operation.
+    if (projectId && hintedFileId) {
+      try {
+        const fetched = await fetchMetadataEntityText(projectId, hintedFileId, hintedEntityType);
+        projectMetadataEntityCache.set(projectMetadataCacheKey(targetPath), {
+          fileId: hintedFileId,
+          entityType: fetched.entityType
+        });
+        return {
+          exists: true,
+          value: fetched.value,
+          fileName: targetPath,
+          fileId: hintedFileId,
+          entityType: fetched.entityType
+        };
+      } catch (_error) {
+        // Fall through to normal tree/model resolution. This also preserves
+        // compatibility with deployments whose upload response omits a type.
+      }
+    }
 
     // The editor can become usable before CollabTeX has populated the project
     // tree/model. Do not interpret that short bootstrap window as proof that a
@@ -1980,15 +2373,20 @@
       }
       return { exists: false, value: "", fileName: targetPath };
     }
-    if (typeof entity?.text === "string" && entity.text) {
-      return {
-        exists: true, value: entity.text, fileName: treeItemPath(item) || targetPath,
-        fileId, entityType: entity.entityType || resolved.entityType || ""
-      };
+    if (!projectId || !fileId) {
+      if (typeof entity?.text === "string") {
+        return {
+          exists: true, value: entity.text, fileName: treeItemPath(item) || targetPath,
+          fileId, entityType: entity.entityType || resolved.entityType || ""
+        };
+      }
+      return { exists: false, value: "", fileName: targetPath };
     }
-    const projectId = projectIdFromLocation();
-    if (!projectId || !fileId) return { exists: false, value: "", fileName: targetPath };
     try {
+      // React's file-tree entity keeps the text that existed when the hidden
+      // metadata file was first observed. Fetch by id even when that cached
+      // entity has text; otherwise collaborators can keep seeing the initial
+      // comments forever after another client replaces the file.
       const fetched = await fetchMetadataEntityText(projectId, fileId, resolved.entityType);
       projectMetadataEntityCache.set(projectMetadataCacheKey(targetPath), { fileId, entityType: fetched.entityType });
       return {
@@ -1997,8 +2395,25 @@
       };
     } catch (error) {
       // A recent delete-and-reupload can leave our short-lived cache stale until
-      // the project tree refreshes. Drop it so the next poll resolves afresh.
+      // the project tree refreshes. Drop it and retry once against a newly
+      // resolved id so realtime invalidation signals do not race that refresh.
       projectMetadataEntityCache.delete(projectMetadataCacheKey(targetPath));
+      await delay(180);
+      const refreshed = projectMetadataEntity(targetPath);
+      if (refreshed.fileId && refreshed.fileId !== fileId) {
+        const fetched = await fetchMetadataEntityText(projectId, refreshed.fileId, refreshed.entityType);
+        projectMetadataEntityCache.set(projectMetadataCacheKey(targetPath), {
+          fileId: refreshed.fileId,
+          entityType: fetched.entityType
+        });
+        return {
+          exists: true,
+          value: fetched.value,
+          fileName: treeItemPath(refreshed.item) || targetPath,
+          fileId: refreshed.fileId,
+          entityType: fetched.entityType
+        };
+      }
       if (!item && !entity) return { exists: false, value: "", fileName: targetPath };
       throw error;
     }
@@ -2120,10 +2535,50 @@
     const paths = new Set();
     const add = (value) => {
       const path = String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
-      if (path && FIGURE_FILE_PATTERN.test(path)) paths.add(path);
+      if (!path || !FIGURE_FILE_PATTERN.test(path)) return false;
+      paths.add(path);
+      return true;
     };
+    const hierarchyNames = [];
+    const visualFolders = [];
     for (const item of document.querySelectorAll('.file-tree-list [role="treeitem"]')) {
-      add(treeItemPath(item));
+      const ownPath = treeItemPath(item).replace(/\\/g, "/").replace(/^\.\//, "");
+      const ownName = ownPath.split("/").filter(Boolean).pop() || "";
+      const level = Number(item.getAttribute("aria-level"));
+      const visualIndent = treeItemVisualIndent(item);
+      while (
+        visualFolders.length &&
+        visualFolders[visualFolders.length - 1].indent >= visualIndent - 0.5
+      ) {
+        visualFolders.pop();
+      }
+      let projectPath = treeItemProjectPath(item);
+      if (
+        ownName &&
+        Number.isInteger(level) &&
+        level > 1 &&
+        !String(projectPath || "").replace(/\\/g, "/").includes("/")
+      ) {
+        const parents = hierarchyNames.slice(0, level - 1);
+        if (parents.length === level - 1 && parents.every(Boolean)) {
+          projectPath = [...parents, ownName].join("/");
+        }
+      }
+      if (
+        ownName &&
+        !String(projectPath || "").replace(/\\/g, "/").includes("/") &&
+        visualFolders.length
+      ) {
+        projectPath = [...visualFolders.map((folder) => folder.name), ownName].join("/");
+      }
+      if (Number.isInteger(level) && level > 0 && ownName) {
+        hierarchyNames[level - 1] = ownName;
+        hierarchyNames.length = level;
+      }
+      add(projectPath);
+      if (ownName && treeItemIsFolder(item, ownName)) {
+        visualFolders.push({ indent: visualIndent, name: ownName });
+      }
     }
 
     const roots = [
@@ -2149,10 +2604,18 @@
       ) return;
       seen.add(value);
       try {
-        add(value.path);
-        add(value.filePath);
-        add(value.name);
-        add(value.fileName);
+        // A model object often exposes both `path: "fig/plot.png"` and
+        // `name: "plot.png"`. Adding both creates a phantom root-level file
+        // and loses the distinction between equal basenames in two folders.
+        // Prefer the complete project-relative path whenever it is available.
+        // Names without directory information are ambiguous: the same model
+        // shape is used for root files and children of collapsed folders.
+        // The visible tree and project archive cover those cases with real
+        // hierarchy, so never promote a model basename to the project root.
+        for (const candidate of [value.path, value.filePath]) {
+          const path = String(candidate || "").replace(/\\/g, "/");
+          if (path.includes("/")) add(path);
+        }
       } catch (_error) {
         // Continue through accessible child values.
       }
@@ -2174,7 +2637,19 @@
         visit(root);
       }
     }
-    return [...paths];
+    return withoutFigureBasenameAliases(paths);
+  }
+
+  function withoutFigureBasenameAliases(values) {
+    const paths = [...values].map((value) => (
+      String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "")
+    )).filter(Boolean);
+    const nestedBasenames = new Set(paths.filter((path) => path.includes("/")).map((path) => (
+      path.split("/").pop().toLocaleLowerCase()
+    )));
+    return paths.filter((path) => (
+      path.includes("/") || !nestedBasenames.has(path.toLocaleLowerCase())
+    ));
   }
 
   function listProjectZipPaths(buffer, pattern) {
@@ -2225,17 +2700,21 @@
     ) {
       return projectFigureListCache.value;
     }
-    const paths = new Set(quickPaths);
+    let paths = new Set(quickPaths);
     if (projectId) {
       try {
         const archive = await fetchProjectArchive(projectId);
-        for (const path of listProjectZipPaths(archive, FIGURE_FILE_PATTERN)) paths.add(path);
+        // The archive contains authoritative project-relative paths. Do not
+        // retain basename-only aliases collected from a collapsed file tree.
+        paths = new Set(withoutFigureBasenameAliases(
+          listProjectZipPaths(archive, FIGURE_FILE_PATTERN)
+        ));
       } catch (_error) {
         // The visible/project-model list remains usable when archive download is unavailable.
       }
     }
     const value = {
-      figures: [...paths].sort((left, right) => left.localeCompare(right, undefined, {
+      figures: withoutFigureBasenameAliases(paths).sort((left, right) => left.localeCompare(right, undefined, {
         sensitivity: "base", numeric: true
       })),
       complete: true
@@ -2626,6 +3105,7 @@
         selectionHead: Number(selection?.head ?? cursorIndex),
         screen: codeMirrorScreenPosition(cursorIndex),
         fileName: selectedFileName(),
+        documentId: selectedDocumentId(),
         focused: Boolean(editor.hasFocus || (content && content.contains(document.activeElement))),
         editorKind
       };
@@ -2650,6 +3130,7 @@
       selectionHead: cursorIndex,
       screen: aceScreenPosition(cursor),
       fileName: selectedFileName(),
+      documentId: selectedDocumentId(),
       focused: Boolean(editor.isFocused?.()),
       editorKind
     };
@@ -2978,6 +3459,7 @@
     window.dispatchEvent(new CustomEvent(STATE_EVENT, {
       detail: JSON.stringify(state)
     }));
+    scheduleCollaborationPresence();
     refreshStructureCache(state);
   }
 
@@ -3084,6 +3566,45 @@
     scheduleState();
   }
 
+  window.addEventListener(COLLABORATION_PROFILE_EVENT, (event) => {
+    let detail = {};
+    try {
+      detail = typeof event.detail === "string"
+        ? JSON.parse(event.detail || "{}")
+        : (event.detail && typeof event.detail === "object" ? event.detail : {});
+    } catch (_error) {
+      return;
+    }
+    collaborationProfile = {
+      name: String(detail.name || "Anonymous").trim().slice(0, 80) || "Anonymous",
+      color: normalizedHighlightColor(detail.color || "#268bd2"),
+      authorId: String(detail.authorId || "")
+    };
+    scheduleCollaborationPresence(true);
+  });
+
+  window.addEventListener(COLLABORATION_DIRTY_EVENT, (event) => {
+    let detail = {};
+    try {
+      detail = typeof event.detail === "string"
+        ? JSON.parse(event.detail || "{}")
+        : (event.detail && typeof event.detail === "object" ? event.detail : {});
+    } catch (_error) {
+      return;
+    }
+    const kind = String(detail.kind || "");
+    if (!kind) return;
+    pendingCollaborationSignals.set(kind, {
+      kind,
+      nonce: String(detail.nonce || `${Date.now()}-${Math.random().toString(36).slice(2)}`),
+      path: String(detail.path || ""),
+      fileId: String(detail.fileId || ""),
+      entityType: String(detail.entityType || ""),
+      payload: detail.payload && typeof detail.payload === "object" ? detail.payload : null
+    });
+    scheduleCollaborationPresence(true);
+  });
+
   window.addEventListener(COMMENT_OVERLAY_STATE_EVENT, (event) => {
     try {
       const detail = JSON.parse(String(event.detail || "{}"));
@@ -3122,7 +3643,8 @@
         const anchor = editorScreenPosition(Math.max(0, Number(request.start) || 0));
         const lineHeight = Math.max(2, Number(anchor?.lineHeight) || 16);
         const gutterX = editorGutterBoundaryX();
-        citationResponse(requestId, Boolean(editor), { rects, lineHeight, gutterX });
+        const bounds = editorViewportBounds();
+        citationResponse(requestId, Boolean(editor), { rects, lineHeight, gutterX, bounds });
         return;
       }
       if (request.type === "getEditorBounds") {
@@ -3141,7 +3663,8 @@
             );
             return aceScreenPosition(position);
           })();
-        citationResponse(requestId, Boolean(screen), { screen });
+        const bounds = editorViewportBounds();
+        citationResponse(requestId, Boolean(screen && bounds), { screen, bounds });
         return;
       }
       if (request.type === "getIndexAtCoordinates") {
@@ -3241,7 +3764,10 @@
         return;
       }
       if (request.type === "readProjectMetadataFile") {
-        const file = await readProjectMetadataFile(request.path);
+        const file = await readProjectMetadataFile(request.path, {
+          fileId: request.fileId,
+          entityType: request.entityType
+        });
         citationResponse(requestId, true, { file });
         return;
       }
@@ -3316,8 +3842,31 @@
     if (state && stateFingerprint(state) !== lastFingerprint) scheduleState();
   }, 250);
 
+  collaborationSocketPoll = window.setInterval(() => {
+    // Search eagerly during bootstrap, then back off to one scan per 10 s on
+    // hosts that do not expose their socket through reachable app state.
+    if (collaborationSocketSearchMisses < 6 || collaborationSocketSearchMisses % 5 === 0) {
+      ensureCollaborationSocket();
+    } else {
+      collaborationSocketSearchMisses += 1;
+    }
+  }, 2000);
+  collaborationPresenceHeartbeat = window.setInterval(() => {
+    // Clear the deduplication key so active collaborators remain discoverable
+    // after reconnects while producing only one tiny presence packet per 4 s.
+    lastCollaborationPresenceFingerprint = "";
+    scheduleCollaborationPresence();
+  }, 4000);
+  ensureCollaborationSocket();
+
   window.addEventListener("pagehide", () => {
     window.clearInterval(poll);
+    window.clearInterval(collaborationSocketPoll);
+    window.clearInterval(collaborationPresenceHeartbeat);
+    window.clearTimeout(collaborationPresenceTimer);
+    collaborationSocketCleanup?.();
+    collaborationSocketCleanup = null;
+    collaborationSocket = null;
     cleanupCodeMirrorBinding();
     observer.disconnect();
     numberBadgeLayer?.remove();

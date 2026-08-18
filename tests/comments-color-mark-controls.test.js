@@ -8,7 +8,7 @@ const css = fs.readFileSync('content.css', 'utf8');
 // Thread and mark headers get a palette control immediately before deletion.
 assert.match(comments, /function paletteIconSvg\(\)/);
 assert.match(comments, /attachColorPicker\(header, thread, card, "Change comment color"\)/);
-assert.match(comments, /header\.append\(location, spacer, collapse, palette\.button, trash\)/);
+assert.match(comments, /header\.append\(location, spacer, resolve, collapse, palette\.button, trash\)/);
 assert.match(comments, /attachColorPicker\(header, mark, card, "Change marking color"\)/);
 assert.match(comments, /header\.append\(location, text, spacer, palette\.button, remove\)/);
 

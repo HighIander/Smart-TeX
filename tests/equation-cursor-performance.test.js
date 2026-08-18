@@ -51,6 +51,11 @@ assert.match(content, /queueMicrotask\(\(\) =>/);
 assert.match(content, /equationRenderData: new Map\(\)/);
 assert.match(content, /activeEquationContextForState\(state\) \|\| cachedEquationContextForState\(state\)/);
 assert.match(content, /activePreviewState = currentState;\s*window\.requestAnimationFrame\(\(\) => positionPreview\(\)\);\s*return;/s);
+assert.match(
+  content,
+  /if \(generation !== renderGeneration\) return;\s*if \(!stateCanShowPreview\(state\)\) \{\s*hidePreview\(\)/s,
+  "A superseded equation render must not hide the popup owned by the latest keystroke."
+);
 
 const bridge = fs.readFileSync(path.join(root, "page-bridge.js"), "utf8");
 assert.match(bridge, /if \(source === cachedStructureSource\) \{ scheduleOverlayRender\(\); return; \}/);

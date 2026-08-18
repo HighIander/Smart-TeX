@@ -37,6 +37,28 @@ function tableAt(source, marker = "|") {
 }
 
 {
+  const { source, context } = equationAt("Text $|$ text");
+  assert.ok(context, "an editor-created empty $…$ pair must already be an equation");
+  assert.equal(context.source, "");
+  assert.equal(context.display, false);
+  assert.equal(context.complete, true);
+  assert.equal(
+    tools.findEquationContextFromAnalysis(source, context.contentStart, tools.analyzeEquations(source))
+      ?.display,
+    false,
+    "cached equation lookup must recognize the auto-closed inline pair too"
+  );
+}
+
+{
+  const { context } = equationAt("Text $1|$ text");
+  assert.ok(context, "typing inside an auto-closed inline pair must retain the equation context");
+  assert.equal(context.source, "1");
+  assert.equal(context.cursorOffset, 1);
+  assert.equal(context.display, false);
+}
+
+{
   const { context } = equationAt("\\[\\frac{a}{|b}\\]");
   assert.equal(context.source, "\\frac{a}{b}");
   assert.equal(context.display, true);
@@ -499,6 +521,8 @@ E=mc^2
 \subsection{Main subsection}\label{sec:sub}
 \appendix
 \section{First appendix}\label{sec:appendix-a}
+\begin{equation}a=1\label{eq:appendix-a1}\end{equation}
+\begin{equation}b=2\label{eq:appendix-a2}\end{equation}
 \subsection{Appendix subsection}\label{sec:appendix-a1}
 \section{Second appendix}\label{sec:appendix-b}`;
   const numbering = tools.sectionNumbering(source);
@@ -511,6 +535,45 @@ E=mc^2
   assert.equal(tools.referenceTarget(source, "sec:appendix-a").number, "A");
   assert.equal(tools.referenceTarget(source, "sec:appendix-a1").number, "A.1");
   assert.equal(tools.referenceTarget(source, "sec:appendix-b").number, "B");
+  assert.equal(tools.referenceTarget(source, "eq:appendix-a1").number, "A1");
+  assert.equal(tools.referenceTarget(source, "eq:appendix-a2").number, "A2");
+}
+
+{
+  const source = String.raw`\numberwithin{equation}{section}
+\counterwithin{figure}{section}
+\renewcommand{\thesection}{\roman{section}}
+\section{First}\label{sec:first}
+\begin{equation}a=1\label{eq:first}\end{equation}
+\begin{figure}\caption{First}\label{fig:first}\end{figure}
+\section{Second}\label{sec:second}
+\begin{equation}b=2\label{eq:second}\end{equation}
+\appendix
+\renewcommand{\theequation}{\thesection\arabic{equation}}
+\renewcommand{\thefigure}{\thesection-\Alph{figure}}
+\section{Appendix}\label{sec:appendix}
+\begin{equation}c=3\label{eq:appendix-one}\end{equation}
+\begin{equation}d=4\label{eq:appendix-two}\end{equation}
+\begin{figure}\caption{Appendix figure}\label{fig:appendix}\end{figure>`;
+  assert.equal(tools.referenceTarget(source, "sec:first").number, "i");
+  assert.equal(tools.referenceTarget(source, "eq:first").number, "i.1");
+  assert.equal(tools.referenceTarget(source, "fig:first").number, "i.1");
+  assert.equal(tools.referenceTarget(source, "sec:second").number, "ii");
+  assert.equal(tools.referenceTarget(source, "eq:second").number, "ii.1");
+  assert.equal(tools.referenceTarget(source, "sec:appendix").number, "A");
+  assert.equal(tools.referenceTarget(source, "eq:appendix-one").number, "A1");
+  assert.equal(tools.referenceTarget(source, "eq:appendix-two").number, "A2");
+  assert.equal(tools.referenceTarget(source, "fig:appendix").number, "A-A");
+}
+
+{
+  const source = String.raw`\setcounter{equation}{7}
+\begin{equation}a=1\label{eq:eight}\end{equation}
+\addtocounter{equation}{2}
+\renewcommand{\theequation}{\Roman{equation}}
+\begin{equation}b=2\label{eq:eleven}\end{equation}`;
+  assert.equal(tools.referenceTarget(source, "eq:eight").number, "8");
+  assert.equal(tools.referenceTarget(source, "eq:eleven").number, "XI");
 }
 
 {

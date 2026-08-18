@@ -48,9 +48,24 @@
 
   function cachedObjectUrl(url) {
     if (!objectUrlPromises.has(url)) {
-      objectUrlPromises.set(url, fetchedBlob(url).then((blob) => URL.createObjectURL(blob)));
+      objectUrlPromises.set(url, fetchedBlob(url)
+        .then((blob) => URL.createObjectURL(blob))
+        .catch((error) => {
+          // A transient first fetch must not poison every later preview attempt
+          // for this figure URL with the same permanently rejected promise.
+          objectUrlPromises.delete(url);
+          throw error;
+        }));
     }
     return objectUrlPromises.get(url);
+  }
+
+  function invalidateMediaUrl(urlValue) {
+    const url = String(urlValue || "");
+    blobPromises.delete(url);
+    const objectUrl = objectUrlPromises.get(url);
+    objectUrlPromises.delete(url);
+    objectUrl?.then?.((value) => URL.revokeObjectURL(value)).catch(() => {});
   }
 
   function pdfModule() {
@@ -1047,6 +1062,7 @@
     createMedia,
     ensurePopupZoom,
     fitPopupLayout,
+    invalidateMediaUrl,
     isPdf,
     observePopupLayout,
     parseFigureLayout

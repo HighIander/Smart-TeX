@@ -89,6 +89,7 @@
   const REFERENCE_AUTOCOMPLETE_PREVIEW_EVENT = "smarttex:reference-autocomplete-preview";
   const REFERENCE_AUTOCOMPLETE_PREVIEW_HIDE_EVENT = "smarttex:reference-autocomplete-preview-hide";
   const REFERENCE_AUTOCOMPLETE_ACTIVE_EVENT = "smarttex:reference-autocomplete-active";
+  const GRAPHIC_AUTOCOMPLETE_ACTIVE_EVENT = "smarttex:graphic-autocomplete-active";
   const NAVIGATION_PUSH_EVENT = "smarttex:navigation-history-push";
   const CITATION_REFRESH_REQUEST_EVENT = "smarttex:citation-refresh-request";
   const CITATION_REFRESH_RESULT_EVENT = "smarttex:citation-refresh-result";
@@ -109,6 +110,36 @@
   const popupInteractionReady = () => globalThis.SmartTeXPopupGate?.isReady?.() !== false;
   const tableRenderer = globalThis.SmartTeXTableRenderer;
   const katex = globalThis.katex;
+  let figureRendererReadyPromise = null;
+  function ensureFigureRendererReady() {
+    const rendererReady = () => Boolean(
+      globalThis.SmartTeXFigureRenderer?.parseFigureLayout &&
+      globalThis.SmartTeXFigureRenderer?.createMedia
+    );
+    if (rendererReady()) return Promise.resolve(globalThis.SmartTeXFigureRenderer);
+    if (figureRendererReadyPromise) return figureRendererReadyPromise;
+    figureRendererReadyPromise = (async () => {
+      try {
+        await extensionApi?.runtime?.sendMessage?.({
+          type: "smarttex-reinject-preview-dependencies"
+        });
+      } catch (_error) {
+        // The registered dependency script may still finish normally.
+      }
+      const startedAt = Date.now();
+      while (!rendererReady()) {
+        if (Date.now() - startedAt > 10000) {
+          throw new Error("SmartTeX: The figure renderer could not be loaded.");
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+      }
+      return globalThis.SmartTeXFigureRenderer;
+    })().catch((error) => {
+      figureRendererReadyPromise = null;
+      throw error;
+    });
+    return figureRendererReadyPromise;
+  }
   const katexFontsReady = Promise.resolve(
     globalThis.SmartTeXKatexFonts?.ready
   ).catch(() => ({ loaded: 0, total: 0 }));
@@ -214,8 +245,11 @@
   graphicAutocompletePreview.innerHTML = `
     <div class="smarttex-preview-heading">
       <span class="smarttex-preview-title">Figure file preview</span>
-      <span class="smarttex-preview-meta"></span>
-      <span class="smarttex-inline-loading-spinner smarttex-graphic-preview-spinner" hidden aria-hidden="true"></span>
+      <span class="smarttex-preview-heading-actions">
+        <span class="smarttex-preview-meta"></span>
+        <span class="smarttex-inline-loading-spinner smarttex-graphic-preview-spinner" hidden aria-hidden="true"></span>
+        <button class="smarttex-preview-close smarttex-graphic-autocomplete-close" type="button" title="Close figure preview" aria-label="Close figure preview" hidden>&times;</button>
+      </span>
     </div>
     <div class="smarttex-graphic-autocomplete-output"></div>`;
   document.documentElement.appendChild(graphicAutocompletePreview);
@@ -227,6 +261,9 @@
   );
   const graphicAutocompleteSpinner = graphicAutocompletePreview.querySelector(
     ".smarttex-graphic-preview-spinner"
+  );
+  const graphicAutocompleteClose = graphicAutocompletePreview.querySelector(
+    ".smarttex-graphic-autocomplete-close"
   );
 
   const preview = document.createElement("aside");
@@ -413,6 +450,7 @@
   }
   let currentState = null;
   let hoverPreviewState = null;
+  let typedEnvironmentPreviewActive = false;
   let activePreviewState = null;
   let environmentHoverTimer = null;
   let environmentHoverGeneration = 0;
@@ -422,6 +460,7 @@
   const dismissedPreviewContexts = new Map();
   let caretPlacementState = null;
   let lastSuccessfulMarkup = "";
+  let captionPreviewLock = null;
   let previewPositioned = false;
   let activePreviewContext = null;
   let documentAnalysisCache = {
@@ -449,11 +488,16 @@
   let editorReferenceHoverGeneration = 0;
   let referenceAutocompleteActive = false;
   let graphicAutocompleteActive = false;
+  let graphicAutocompleteContextActive = false;
   let graphicAutocompletePath = "";
   let graphicAutocompleteGeneration = 0;
   let graphicAutocompleteUpdateFrame = null;
   let graphicAutocompleteHoveredOwner = null;
   let graphicAutocompleteHoveredEntry = null;
+  let customGraphicAutocompleteSelectionPath = "";
+  let customGraphicAutocompletePreviewSuppressed = false;
+  let graphicAutocompleteClickPreview = false;
+  let lastEditorTextInputAt = 0;
   let activeEditorReferenceKey = "";
   let activeEditorReferenceType = "";
   let activeSecondaryEditorReferenceKey = "";
@@ -600,19 +644,60 @@
     if (popupLoadingSpinner) popupLoadingSpinner.hidden = true;
   }
 
-  function showPreviewLoading() {
+  function applyPreviewPresentation(context) {
+    const isTable = context?.kind === "table";
+    const isFigure = context?.kind === "figure";
+    preview.dataset.previewKind = isFigure ? "figure" : isTable ? "table" : "equation";
+    previewTitle.textContent = isFigure
+      ? "Figure preview"
+      : isTable
+        ? "Table preview"
+        : "Equation preview";
+    preview.setAttribute(
+      "aria-label",
+      isFigure
+        ? "Live figure preview"
+        : isTable
+          ? "Live table preview"
+          : "Live equation preview"
+    );
+  }
+
+  function showPreviewLoading(state, context) {
     const generation = ++previewLoadingGeneration;
+    const contextId = previewContextId(state, context);
+    const openingNewContext = preview.hidden || contextId !== activeContextId;
     preview.setAttribute("aria-busy", "true");
-    if (!preview.hidden) {
-      previewLoadingIndicator.hidden = false;
+    if (previewLoadingGlobalGeneration !== null) {
+      hidePopupLoadingSpinner(previewLoadingGlobalGeneration);
       previewLoadingGlobalGeneration = null;
-    } else {
-      previewLoadingIndicator.hidden = true;
-      previewLoadingGlobalGeneration = showPopupLoadingSpinner(
-        null,
-        editorCursorAnchorRect(currentState)
-      );
     }
+    if (openingNewContext) {
+      output.replaceChildren();
+      previewMeta.textContent = "";
+      previewMeta.hidden = true;
+      status.textContent = "";
+      status.hidden = true;
+      preview.classList.remove("smarttex-preview-stale");
+      caretPlacementState = null;
+      lastSuccessfulMarkup = "";
+      previewPositioned = false;
+    }
+    applyPreviewPresentation(context);
+    activePreviewContext = context;
+    activePreviewState = state;
+    previewLoadingIndicator.hidden = false;
+    status.hidden = true;
+    preview.hidden = false;
+    preview.classList.add("smarttex-preview-visible");
+    refreshCaptionPreviewLock(state);
+    window.requestAnimationFrame(() => {
+      if (generation !== previewLoadingGeneration || preview.hidden) return;
+      positionPreviewAtCursor({
+        force: openingNewContext,
+        preferPointer: state?.smarttexHoverPreview === true
+      });
+    });
     return generation;
   }
 
@@ -650,7 +735,12 @@
   }
 
 
-  function hidePreview({ clearDismissal = true } = {}) {
+  function hidePreview({ clearDismissal = true, force = false } = {}) {
+    if (!force && captionPreviewIsLocked()) {
+      hidePreviewLoading();
+      return false;
+    }
+    captionPreviewLock = null;
     hidePreviewLoading();
     if (renderTimer !== null) {
       window.clearTimeout(renderTimer);
@@ -681,6 +771,7 @@
     }
     status.hidden = true;
     if (clearDismissal) pruneDismissedPreviewContexts(previewStateForRender());
+    return true;
   }
 
   function dismissPreview() {
@@ -694,11 +785,15 @@
         hover: activePreviewState.smarttexHoverPreview === true
       });
     }
-    hidePreview({ clearDismissal: false });
+    hidePreview({ clearDismissal: false, force: true });
   }
 
   function stateCanShowPreview(state) {
-    if (!popupInteractionReady() || graphicAutocompleteActive) return false;
+    if (
+      !popupInteractionReady() ||
+      graphicAutocompleteActive ||
+      graphicAutocompleteContextActive
+    ) return false;
     const popupInteraction = (
       previewPointerInside ||
       Date.now() < previewInteractionUntil ||
@@ -740,6 +835,100 @@
       context.kind,
       context.environment || context.delimiter || ""
     ].join(":");
+  }
+
+  function captionBounds(caption) {
+    if (!caption) return null;
+    const start = Number.isFinite(Number(caption.rawStart))
+      ? Number(caption.rawStart)
+      : Number(caption.start);
+    const end = Number.isFinite(Number(caption.rawEnd))
+      ? Number(caption.rawEnd)
+      : Number(caption.end);
+    return Number.isFinite(start) && Number.isFinite(end)
+      ? { start, end: Math.max(start, end) }
+      : null;
+  }
+
+  function captionPreviewIsLocked() {
+    if (
+      !captionPreviewLock ||
+      preview.hidden ||
+      activePreviewContext?.kind !== "figure" ||
+      !activePreviewState
+    ) return false;
+    return previewContextId(activePreviewState, activePreviewContext) ===
+      captionPreviewLock.contextId;
+  }
+
+  function refreshCaptionPreviewLock(state) {
+    if (
+      !state ||
+      state.focused === false ||
+      activePreviewContext?.kind !== "figure" ||
+      preview.hidden
+    ) {
+      captionPreviewLock = null;
+      return false;
+    }
+    const container = captionContainerAtIndex(state);
+    const bounds = captionBounds(container?.caption);
+    const containerId = container
+      ? previewContextId(state, container.context)
+      : "";
+    const activeId = previewContextId(activePreviewState || state, activePreviewContext);
+    if (container?.kind === "figure" && bounds && containerId === activeId) {
+      captionPreviewLock = {
+        contextId: activeId,
+        fileName: String(state.fileName || ""),
+        start: bounds.start,
+        end: bounds.end,
+        sourceLength: String(state.value || "").length
+      };
+      return true;
+    }
+    if (
+      captionPreviewLock?.contextId === activeId &&
+      captionPreviewLock.fileName === String(state.fileName || "") &&
+      Number.isInteger(Number(state.cursorIndex))
+    ) {
+      const lengthDelta = String(state.value || "").length -
+        Number(captionPreviewLock.sourceLength || 0);
+      const cursor = Number(state.cursorIndex);
+      if (
+        cursor >= captionPreviewLock.start &&
+        cursor <= Math.max(captionPreviewLock.start, captionPreviewLock.end + lengthDelta)
+      ) return true;
+    }
+    captionPreviewLock = null;
+    return false;
+  }
+
+  function stateContinuesActiveEnvironmentPreview(state) {
+    if (
+      preview.hidden ||
+      !activePreviewContext ||
+      !activePreviewState ||
+      String(state?.fileName || "") !== String(activePreviewState.fileName || "") ||
+      !Number.isInteger(Number(state?.cursorIndex)) ||
+      includeGraphicsArgumentAtCursor(state) ||
+      captionReferenceSuppressesEnvironmentPreview(state)
+    ) return false;
+    try {
+      const context = findPreviewContext(state);
+      if (context && previewContextId(state, context) === activeContextId) return true;
+    } catch (_error) {
+      // Fall through to the old environment range while the parser sees an
+      // intermediate source state from the editor.
+    }
+    const range = contextEnvironmentRange(activePreviewContext);
+    const lengthDelta = String(state.value || "").length -
+      String(activePreviewState.value || "").length;
+    const cursor = Number(state.cursorIndex);
+    return (
+      cursor >= range.openStart &&
+      cursor <= Math.max(range.openStart, range.closeEnd + lengthDelta)
+    );
   }
 
   function documentAnalysisForState(state) {
@@ -859,8 +1048,8 @@
       }))
       .filter((candidate) => (
         candidate.caption &&
-        index >= candidate.caption.start &&
-        index <= candidate.caption.end
+        index >= Number(candidate.caption.rawStart ?? candidate.caption.start) &&
+        index <= Number(candidate.caption.rawEnd ?? candidate.caption.end)
       ))
       .sort((left, right) => (
         (left.context.closeEnd - left.context.openStart) -
@@ -883,6 +1072,10 @@
 
   function findPreviewContext(state) {
     if (!state) return null;
+    // The includegraphics filename argument owns this interaction. Its
+    // SmartTeX list and (when enabled) selected-file preview are the only
+    // surfaces that may be shown while the caret is between these braces.
+    if (includeGraphicsArgumentAtCursor(state)) return null;
     const equation = enabledFeatures.equations
       ? (activeEquationContextForState(state) || cachedEquationContextForState(state))
       : null;
@@ -1019,6 +1212,22 @@
       imageClass: "smarttex-figure-popup-image",
       pdfClass: "smarttex-figure-popup-image smarttex-figure-popup-pdf"
     });
+    try {
+      await media.decode?.();
+    } catch (error) {
+      // A cold image must remain behind its visible resolving placeholder until
+      // it has real intrinsic geometry. Replacing the placeholder earlier made
+      // the first popup collapse to a caption-only box while a second opening
+      // worked from the decoded cache.
+      if (!(media.complete && Number(media.naturalWidth) > 0)) {
+        renderer.invalidateMediaUrl?.(url);
+        throw error;
+      }
+    }
+    if ("naturalWidth" in media && !(Number(media.naturalWidth) > 0)) {
+      renderer.invalidateMediaUrl?.(url);
+      throw new Error("The resolved figure did not decode as an image.");
+    }
     if (!placeholder.parentNode) return;
     for (const attribute of [
       "data-smarttex-local-width-ratio",
@@ -1038,13 +1247,25 @@
     });
   }
 
-  function resolveFigurePopupFile(path, placeholder) {
+  function resolveFigurePopupFile(path, placeholder, attempt = 0, forceProjectResolution = false) {
+    const retryOrShowFailure = () => {
+      if (!placeholder.parentNode) return;
+      if (attempt < 2) {
+        window.setTimeout(() => {
+          if (placeholder.parentNode) {
+            resolveFigurePopupFile(path, placeholder, attempt + 1, true);
+          }
+        }, 160 * (attempt + 1));
+        return;
+      }
+      placeholder.classList.remove("smarttex-figure-popup-resolving");
+      placeholder.textContent = path;
+      placeholder.title = "The figure file could not be resolved from the CollabTeX project.";
+    };
     const direct = directFigureFile(path);
-    if (direct?.url) {
-      replaceFigurePopupMedia(placeholder, direct.path || path, direct.url).catch(() => {
-        if (!placeholder.parentNode) return;
-        placeholder.replaceWith(figurePopupPlaceholder(path));
-      });
+    if (!forceProjectResolution && direct?.url) {
+      replaceFigurePopupMedia(placeholder, direct.path || path, direct.url)
+        .catch(retryOrShowFailure);
       return;
     }
     bridgeRequest("resolveProjectFile", { path }).then((response) => {
@@ -1052,12 +1273,7 @@
       const file = response?.file;
       if (!file?.url) throw new Error("Figure URL is unavailable.");
       return replaceFigurePopupMedia(placeholder, file.path || path, file.url);
-    }).catch(() => {
-      if (!placeholder.parentNode) return;
-      placeholder.classList.remove("smarttex-figure-popup-resolving");
-      placeholder.textContent = path;
-      placeholder.title = "The figure file could not be resolved from the CollabTeX project.";
-    });
+    }).catch(retryOrShowFailure);
   }
 
 
@@ -1070,18 +1286,13 @@
     // to the current logical line instead of scanning the complete document
     // prefix after every keystroke. An includegraphics argument cannot legally
     // cross an unescaped line break in this completion context.
-    const scanStart = Math.max(
-      0,
-      source.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1,
-      cursor - 2048
-    );
+    const scanStart = Math.max(0, cursor - 4096);
     const masked = contextTools.maskIgnoredLatex(source);
     const before = masked.slice(scanStart, cursor);
     const command = before.match(/\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^{}]*)$/i);
     if (!command) return null;
     const argumentStart = cursor - String(command[1] || "").length;
     const closingBrace = source.indexOf("}", cursor);
-    if (closingBrace >= 0 && /[\r\n]/.test(source.slice(cursor, closingBrace))) return null;
     return {
       fragment: String(command[1] || ""),
       start: argumentStart,
@@ -1180,13 +1391,39 @@
   function hideGraphicAutocompletePreview() {
     graphicAutocompleteGeneration += 1;
     graphicAutocompleteActive = false;
+    graphicAutocompleteClickPreview = false;
     graphicAutocompletePath = "";
     graphicAutocompleteSpinner.hidden = true;
     graphicAutocompletePreview.removeAttribute("aria-busy");
     graphicAutocompletePreview.hidden = true;
     graphicAutocompletePreview.classList.remove("smarttex-preview-visible");
+    graphicAutocompletePreview.classList.remove(
+      "smarttex-graphic-autocomplete-click-preview"
+    );
+    graphicAutocompleteClose.hidden = true;
     graphicAutocompleteOutput.replaceChildren();
   }
+
+  function dismissGraphicAutocompleteClickPreview() {
+    customGraphicAutocompleteSelectionPath = "";
+    customGraphicAutocompletePreviewSuppressed = true;
+    hideGraphicAutocompletePreview();
+  }
+
+  graphicAutocompleteClose.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  graphicAutocompleteClose.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dismissGraphicAutocompleteClickPreview();
+  });
+  graphicAutocompletePreview.addEventListener("pointerleave", () => {
+    if (graphicAutocompleteClickPreview) {
+      dismissGraphicAutocompleteClickPreview();
+    }
+  });
 
   function graphicAutocompleteMediaAspect(media) {
     if (!media) return null;
@@ -1266,54 +1503,87 @@
     graphicAutocompletePreview.setAttribute("aria-busy", "true");
     graphicAutocompletePreview.hidden = false;
     graphicAutocompletePreview.classList.add("smarttex-preview-visible");
+    graphicAutocompletePreview.classList.toggle(
+      "smarttex-graphic-autocomplete-click-preview",
+      graphicAutocompleteClickPreview
+    );
+    graphicAutocompleteClose.hidden = !graphicAutocompleteClickPreview;
     positionGraphicAutocompletePreview(owner);
 
-    const direct = directFigureFile(normalizedPath);
-    const resolution = direct?.url
-      ? Promise.resolve(direct)
-      : bridgeRequest("resolveProjectFile", { path: normalizedPath }).then((response) => response?.file);
-    resolution.then(async (file) => {
-      if (generation !== graphicAutocompleteGeneration || !file?.url || !placeholder.isConnected) return;
-      const renderer = globalThis.SmartTeXFigureRenderer;
-      const resolvedMedia = await renderer?.createMedia?.(file.path || normalizedPath, file.url, {
-        imageClass: "smarttex-graphic-autocomplete-image",
-        pdfClass: "smarttex-graphic-autocomplete-image smarttex-figure-popup-pdf"
-      });
-      if (generation !== graphicAutocompleteGeneration || !resolvedMedia || !placeholder.isConnected) return;
-      try {
-        await resolvedMedia.decode?.();
-      } catch (_error) {
-        // Some browsers reject decode() for an already available/cached image;
-        // natural dimensions are still usable in that case.
-      }
-      if (generation !== graphicAutocompleteGeneration || !placeholder.isConnected) return;
-      placeholder.replaceWith(resolvedMedia);
-      fitGraphicAutocompletePreviewToMedia(resolvedMedia);
-      graphicAutocompleteSpinner.hidden = true;
-      graphicAutocompletePreview.removeAttribute("aria-busy");
-      window.requestAnimationFrame(() => {
-        const baseWidth = Math.max(1, resolvedMedia.getBoundingClientRect?.().width || resolvedMedia.clientWidth || 1);
-        resolvedMedia.dataset.smarttexBaseWidthPx = String(baseWidth);
-        resolvedMedia.style.width = `${baseWidth}px`;
-        renderer?.ensurePopupZoom?.(figure)?.refresh?.();
-        positionGraphicAutocompletePreview(owner);
-      });
-    }).catch(() => {
+    const showFailure = () => {
       if (generation !== graphicAutocompleteGeneration || !placeholder.isConnected) return;
       graphicAutocompleteSpinner.hidden = true;
       graphicAutocompletePreview.removeAttribute("aria-busy");
       placeholder.classList.remove("smarttex-figure-popup-resolving");
       placeholder.textContent = normalizedPath;
       placeholder.title = "The selected figure could not be previewed.";
-    });
+      // Permit a later selection/state notification for the same path to try
+      // again instead of treating the failed placeholder as a completed cache.
+      graphicAutocompletePath = "";
+    };
+    const watchdog = window.setTimeout(() => {
+      if (generation !== graphicAutocompleteGeneration) return;
+      graphicAutocompleteGeneration += 1;
+      graphicAutocompleteSpinner.hidden = true;
+      graphicAutocompletePreview.removeAttribute("aria-busy");
+      if (placeholder.isConnected) {
+        placeholder.classList.remove("smarttex-figure-popup-resolving");
+        placeholder.textContent = normalizedPath;
+        placeholder.title = "The selected figure preview timed out.";
+      }
+      graphicAutocompletePath = "";
+    }, 12000);
+
+    const resolveAndRender = async (attempt = 0) => {
+      try {
+        const direct = directFigureFile(normalizedPath);
+        const file = direct?.url
+          ? direct
+          : (await bridgeRequest("resolveProjectFile", { path: normalizedPath })).file;
+        if (!file?.url) throw new Error("Figure URL is unavailable.");
+        if (generation !== graphicAutocompleteGeneration || !placeholder.isConnected) return;
+        const renderer = globalThis.SmartTeXFigureRenderer;
+        if (!renderer?.createMedia) throw new Error("The figure renderer is unavailable.");
+        const resolvedMedia = await renderer.createMedia(file.path || normalizedPath, file.url, {
+          imageClass: "smarttex-graphic-autocomplete-image",
+          pdfClass: "smarttex-graphic-autocomplete-image smarttex-figure-popup-pdf"
+        });
+        if (!resolvedMedia) throw new Error("Figure media could not be created.");
+        if (generation !== graphicAutocompleteGeneration || !placeholder.isConnected) return;
+        try {
+          await resolvedMedia.decode?.();
+        } catch (_error) {
+          // Some browsers reject decode() for an already available/cached image;
+          // natural dimensions are still usable in that case.
+        }
+        if (generation !== graphicAutocompleteGeneration || !placeholder.isConnected) return;
+        window.clearTimeout(watchdog);
+        placeholder.replaceWith(resolvedMedia);
+        fitGraphicAutocompletePreviewToMedia(resolvedMedia);
+        graphicAutocompleteSpinner.hidden = true;
+        graphicAutocompletePreview.removeAttribute("aria-busy");
+        window.requestAnimationFrame(() => {
+          const baseWidth = Math.max(1, resolvedMedia.getBoundingClientRect?.().width || resolvedMedia.clientWidth || 1);
+          resolvedMedia.dataset.smarttexBaseWidthPx = String(baseWidth);
+          resolvedMedia.style.width = `${baseWidth}px`;
+          renderer.ensurePopupZoom?.(figure)?.refresh?.();
+          positionGraphicAutocompletePreview(owner);
+        });
+      } catch (_error) {
+        if (generation !== graphicAutocompleteGeneration || !placeholder.isConnected) return;
+        if (attempt < 2) {
+          window.setTimeout(() => resolveAndRender(attempt + 1), 160 * (attempt + 1));
+          return;
+        }
+        window.clearTimeout(watchdog);
+        showFailure();
+      }
+    };
+    resolveAndRender();
   }
 
   function updateGraphicAutocompletePreview() {
     graphicAutocompleteUpdateFrame = null;
-    if (popupsSuppressedAfterEditorScroll) {
-      hideGraphicAutocompletePreview();
-      return;
-    }
     if (!enabledFeatures.figures) {
       hideGraphicAutocompletePreview();
       return;
@@ -1328,6 +1598,10 @@
         ".smarttex-figure-autocomplete-list"
       )
       : null;
+    if (popupsSuppressedAfterEditorScroll && !customOwner) {
+      hideGraphicAutocompletePreview();
+      return;
+    }
     const owner = hoveredOwner || customOwner || (argument ? visibleNativeGraphicAutocomplete() : null);
     const hoveredEntry = owner && owner === hoveredOwner &&
       graphicAutocompleteHoveredEntry?.isConnected &&
@@ -1335,8 +1609,13 @@
       ? graphicAutocompleteHoveredEntry
       : null;
     const entry = hoveredEntry || (owner ? selectedNativeGraphicEntry(owner) : null);
-    const path = graphicPathFromSuggestion(entry);
-    if (!argument || !owner || !entry || !path) {
+    const path = owner === customOwner && customGraphicAutocompletePreviewSuppressed
+      ? ""
+      : (
+          graphicPathFromSuggestion(entry) ||
+          (owner === customOwner ? customGraphicAutocompleteSelectionPath : "")
+        );
+    if (!argument || !owner || !path) {
       const wasActive = graphicAutocompleteActive;
       hideGraphicAutocompletePreview();
       if (wasActive && stateCanShowPreview(currentState)) scheduleRender();
@@ -1365,7 +1644,7 @@
     sourceOffset = null
   ) {
     const text = String(captionText || "").trim();
-    if (!text) return;
+    if (!text) return null;
     const caption = document.createElement("figcaption");
     caption.className = "smarttex-float-popup-caption";
     const label = document.createElement("strong");
@@ -1386,6 +1665,52 @@
       })
     );
     container.appendChild(caption);
+    return caption;
+  }
+
+  function collapsedCaretIsInsideCaption(state, caption) {
+    if (!state || !caption) return false;
+    const cursor = Number(state.cursorIndex);
+    const selectionFrom = Number(state.selectionFrom ?? cursor);
+    const selectionTo = Number(state.selectionTo ?? cursor);
+    const bounds = captionBounds(caption);
+    return Boolean(
+      bounds &&
+      Number.isInteger(cursor) &&
+      selectionFrom === selectionTo &&
+      cursor >= bounds.start &&
+      cursor <= bounds.end
+    );
+  }
+
+  function updateFigureCaptionInPlace(
+    figure,
+    figureNumber,
+    captionText,
+    macros,
+    captionSourceOffset
+  ) {
+    const staging = document.createElement("div");
+    const nextCaption = appendPopupCaption(
+      staging,
+      "Fig.",
+      figureNumber,
+      captionText,
+      macros,
+      captionSourceOffset
+    );
+    const currentCaption = figure.querySelector(":scope > .smarttex-float-popup-caption");
+    if (!nextCaption) {
+      currentCaption?.remove();
+      return;
+    }
+    if (!currentCaption) {
+      figure.appendChild(nextCaption);
+      return;
+    }
+    const scrollTop = currentCaption.scrollTop;
+    currentCaption.replaceChildren(...nextCaption.childNodes);
+    currentCaption.scrollTop = scrollTop;
   }
 
   function boundedPopupText(value, maximum) {
@@ -1673,8 +1998,10 @@
       captionReferencePopup.hidden = true;
       captionReferencePopup.classList.remove(
         "smarttex-editor-reference-popup",
-        "smarttex-reference-popup-compact"
+        "smarttex-reference-popup-compact",
+        "smarttex-reference-popup-click-preview"
       );
+      captionReferencePopup.removeAttribute("data-smarttex-autocomplete-owner");
       captionReferencePopup.style.removeProperty("width");
       captionReferencePopup.style.removeProperty("max-width");
       captionReferencePopup.removeAttribute("data-smarttex-content-kind");
@@ -1993,7 +2320,7 @@
 
   function repositionReferencePopups() {
     if (
-      captionReferencePopup?.dataset.smarttexAutocompleteOwner === "reference" &&
+      captionReferencePopup?.dataset.smarttexAutocompleteOwner?.startsWith("reference") &&
       autocompleteReferenceAnchorRect &&
       autocompleteReferenceOwnerRect
     ) {
@@ -2887,6 +3214,101 @@
     captionReferencePopup.style.top = `${Math.round(top)}px`;
   }
 
+  function addEquationReferencePopupZoom(popup, anchorRect, ownerRect) {
+    const equation = popup.querySelector(".smarttex-reference-popup-equation");
+    const heading = popup.querySelector(".smarttex-reference-popup-heading");
+    if (!equation || !heading) return;
+
+    popup.classList.add("smarttex-reference-popup-click-preview");
+    const actions = document.createElement("span");
+    actions.className = "smarttex-reference-popup-actions";
+    const zoomControls = document.createElement("span");
+    zoomControls.className = "smarttex-equation-popup-zoom-controls";
+    const zoomOut = document.createElement("button");
+    zoomOut.type = "button";
+    zoomOut.textContent = "−";
+    zoomOut.setAttribute("aria-label", "Zoom equation out");
+    const zoomValue = document.createElement("output");
+    zoomValue.textContent = "100%";
+    zoomValue.setAttribute("aria-label", "Equation zoom level");
+    const zoomIn = document.createElement("button");
+    zoomIn.type = "button";
+    zoomIn.textContent = "+";
+    zoomIn.setAttribute("aria-label", "Zoom equation in");
+    zoomControls.append(zoomOut, zoomValue, zoomIn);
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "smarttex-reference-popup-close";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "Close equation preview");
+    close.title = "Close equation preview";
+    actions.append(zoomControls, close);
+    heading.appendChild(actions);
+
+    const surface = document.createElement("div");
+    surface.className = "smarttex-equation-popup-zoom-surface";
+    surface.append(...equation.childNodes);
+    const stage = document.createElement("div");
+    stage.className = "smarttex-equation-popup-zoom-stage";
+    stage.appendChild(surface);
+    equation.appendChild(stage);
+
+    let scale = 1;
+    let naturalWidth = 1;
+    let naturalHeight = 1;
+    const applyZoom = () => {
+      const viewportWidth = Math.max(1, equation.clientWidth - 8);
+      const scaledWidth = naturalWidth * scale;
+      const scaledHeight = naturalHeight * scale;
+      const stageWidth = Math.max(viewportWidth, scaledWidth);
+      stage.style.width = `${Math.ceil(stageWidth)}px`;
+      stage.style.height = `${Math.ceil(scaledHeight)}px`;
+      surface.style.left = `${Math.max(0, (stageWidth - scaledWidth) / 2)}px`;
+      surface.style.transform = `scale(${scale})`;
+      zoomValue.textContent = `${Math.round(scale * 100)}%`;
+      window.requestAnimationFrame(() => {
+        if (!popup.hidden) positionAutocompleteReferencePopup(anchorRect, ownerRect);
+      });
+    };
+    const setZoom = (nextScale) => {
+      scale = Math.max(0.5, Math.min(4, Number(nextScale) || 1));
+      applyZoom();
+    };
+    const consumePress = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    for (const control of [zoomOut, zoomIn, close]) {
+      control.addEventListener("pointerdown", consumePress);
+      control.addEventListener("mousedown", consumePress);
+    }
+    zoomOut.addEventListener("click", (event) => {
+      consumePress(event);
+      setZoom(scale - 0.25);
+    });
+    zoomIn.addEventListener("click", (event) => {
+      consumePress(event);
+      setZoom(scale + 0.25);
+    });
+    popup.addEventListener("wheel", (event) => {
+      if (event.ctrlKey || event.metaKey || !event.deltaY) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setZoom(scale + (event.deltaY < 0 ? 0.25 : -0.25));
+    }, { passive: false });
+    close.addEventListener("click", (event) => {
+      consumePress(event);
+      hideCaptionReferencePopup();
+    });
+
+    window.requestAnimationFrame(() => {
+      const rect = surface.getBoundingClientRect();
+      naturalWidth = Math.max(1, surface.scrollWidth, rect.width);
+      naturalHeight = Math.max(1, surface.scrollHeight, rect.height);
+      applyZoom();
+    });
+  }
+
   function showReferenceAutocompletePreview(detailValue) {
     let detail = detailValue;
     if (typeof detailValue === "string") {
@@ -2902,6 +3324,7 @@
       : null;
     const anchorRect = normalizedPopupRect(detail?.anchorRect);
     const ownerRect = normalizedPopupRect(detail?.ownerRect);
+    const clickMode = detail?.mode === "click" && detail?.zoomable === true;
     if (!currentState || !label || !anchorRect || !ownerRect) return;
     const target = contextTools.referenceTarget?.(currentState.value, label);
     if (!target || !referenceTargetPreviewEnabled(target)) {
@@ -2916,15 +3339,23 @@
     }, anchorRect);
     window.requestAnimationFrame(() => {
       try {
+        const popup = ensureCaptionReferencePopup();
         renderEditorReferencePopup(anchorRect, {
           command: String(detail?.command || "ref"),
           labels: [label],
           sourceIndex: Number(target.sourceIndex) || 0,
           sourceEnd: Number(target.sourceIndex) || 0,
           type: "reference"
+        }, {
+          force: clickMode || popup.classList.contains(
+            "smarttex-reference-popup-click-preview"
+          )
         });
-        const popup = ensureCaptionReferencePopup();
-        popup.dataset.smarttexAutocompleteOwner = "reference";
+        popup.classList.toggle("smarttex-reference-popup-click-preview", clickMode);
+        popup.dataset.smarttexAutocompleteOwner = clickMode
+          ? "reference-click"
+          : "reference";
+        if (clickMode) addEquationReferencePopupZoom(popup, anchorRect, ownerRect);
         positionAutocompleteReferencePopup(anchorRect, ownerRect);
       } finally {
         hidePopupLoadingSpinner(spinnerGeneration);
@@ -2982,7 +3413,13 @@
     viewport.className = "smarttex-figure-popup-viewport";
     const media = document.createElement("div");
     media.className = "smarttex-figure-popup-media smarttex-figure-layout";
-    media.dataset.smarttexDesiredWidthPx = String(layoutModel.desiredWidthPx || 520);
+    const desiredWidth = Math.max(40, Number(layoutModel.desiredWidthPx) || 520);
+    media.dataset.smarttexDesiredWidthPx = String(desiredWidth);
+    // Give resolving placeholders real first-frame geometry. Percentage-width
+    // panels inside a max-content container otherwise have no intrinsic width,
+    // making the initial popup look like it contains only its caption until a
+    // cached image supplies dimensions on a later opening.
+    media.style.width = `${desiredWidth}px`;
 
     let imageCount = 0;
     for (const rowModel of layoutModel.rows || []) {
@@ -3189,11 +3626,12 @@
     const rect = preview.getBoundingClientRect();
     const width = Math.min(rect.width || 360, window.innerWidth - margin * 2);
     const height = Math.min(rect.height || 100, window.innerHeight - margin * 2);
-    const popupCoversCursor = (
-      rect.left < cursorRect.right &&
-      rect.right > cursorRect.left &&
-      rect.top < cursorRect.bottom &&
-      rect.bottom > cursorRect.top
+    const cursorClearance = Math.max(12, Math.round(lineHeight * 1.25));
+    const popupTooCloseToCursor = (
+      rect.left < cursorRect.right + cursorClearance &&
+      rect.right > cursorRect.left - cursorClearance &&
+      rect.top < cursorRect.bottom + cursorClearance &&
+      rect.bottom > cursorRect.top - cursorClearance
     );
     const popupLeavesViewport = (
       rect.left < margin ||
@@ -3213,7 +3651,7 @@
       return;
     }
 
-    if (!force && previewPositioned && !popupCoversCursor && !popupLeavesViewport) {
+    if (!force && previewPositioned && !popupTooCloseToCursor && !popupLeavesViewport) {
       preview.classList.remove("smarttex-preview-measuring");
       return;
     }
@@ -3231,9 +3669,9 @@
     const fitsBelow = spaceBelow >= height;
     let placeAbove;
 
-    if (popupCoversCursor && preview.dataset.placement === "above") {
+    if (popupTooCloseToCursor && preview.dataset.placement === "above") {
       placeAbove = !fitsBelow && fitsAbove;
-    } else if (popupCoversCursor && preview.dataset.placement === "below") {
+    } else if (popupTooCloseToCursor && preview.dataset.placement === "below") {
       placeAbove = fitsAbove || !fitsBelow;
     } else if (fitsAbove !== fitsBelow) {
       placeAbove = fitsAbove;
@@ -3404,7 +3842,11 @@
     await Promise.all([katexFontsReady, featureSettingsReady, popupSettingsReady]);
     taskCheckpoint(0, 1, taskToken);
     const state = previewStateForRender();
-    if (generation !== renderGeneration || !stateCanShowPreview(state)) {
+    // A superseded async render must never hide or invalidate the newer one.
+    // This is common while the first equation keystrokes are waiting for fonts
+    // or settings: the stale job simply yields ownership to the latest job.
+    if (generation !== renderGeneration) return;
+    if (!stateCanShowPreview(state)) {
       hidePreview();
       return;
     }
@@ -3437,21 +3879,13 @@
     }
     const isTable = context.kind === "table";
     const isFigure = context.kind === "figure";
-    const previewKind = isFigure ? "figure" : isTable ? "table" : "equation";
-    preview.dataset.previewKind = previewKind;
-    previewTitle.textContent = isFigure
-      ? "Figure preview"
-      : isTable
-        ? "Table preview"
-        : "Equation preview";
-    preview.setAttribute(
-      "aria-label",
-      isFigure
-        ? "Live figure preview"
-        : isTable
-          ? "Live table preview"
-          : "Live equation preview"
-    );
+    applyPreviewPresentation(context);
+    if (isFigure) {
+      await ensureFigureRendererReady();
+      // Loading the renderer may have overlapped another keystroke or cursor
+      // state. Only the newest render may populate the already-visible popup.
+      if (generation !== renderGeneration || contextId !== activeContextId) return;
+    }
     const equationRenderData = !isFigure && !isTable
       ? equationRenderDataForState(state, context)
       : null;
@@ -3489,13 +3923,26 @@
         : null)
     );
     const hasSelection = Boolean(activeSelection);
-    caretPlacementState = (isFigure || hasSelection)
-      ? null
-      : contextTools.resolveCaretPlacement(
-        context.source,
-        context.cursorOffset,
+    const caretInFigureCaption = Boolean(
+      isFigure &&
+      !hasSelection &&
+      collapsedCaretIsInsideCaption(state, floatCaption)
+    );
+    if (caretInFigureCaption) {
+      caretPlacementState = contextTools.resolveCaretPlacement(
+        floatCaption.text,
+        Number(state.cursorIndex) - Number(floatCaption.start),
         caretPlacementState
       );
+    } else {
+      caretPlacementState = (isFigure || hasSelection)
+        ? null
+        : contextTools.resolveCaretPlacement(
+          context.source,
+          context.cursorOffset,
+          caretPlacementState
+        );
+    }
     let equationRenderContext = context;
     if (!isTable && !isFigure && hasSelection) {
       const relativeStart = Math.max(
@@ -3517,14 +3964,41 @@
         )
       };
     }
-    const unpreparedBody = isTable || isFigure
-      ? floatCaption?.text || ""
-      : contextTools.previewBody(
+    let unpreparedBody;
+    if (caretInFigureCaption) {
+      const captionSource = String(floatCaption.text || "");
+      const literalOffset = Math.max(
+        0,
+        Math.min(
+          captionSource.length,
+          Number(state.cursorIndex) - Number(floatCaption.start)
+        )
+      );
+      const caretOffset = contextTools.commandAwareCaretOffset(
+        captionSource,
+        literalOffset,
+        caretPlacementState?.commandSide || null
+      );
+      const operatorCaret = Boolean(
+        contextTools.cursorInsideControlSequence?.(captionSource, literalOffset) ||
+        contextTools.cursorAtProtectedAtomBoundary?.(captionSource, literalOffset)
+      );
+      const marker = operatorCaret ? "\uE002" : "\uE001";
+      unpreparedBody = (
+        captionSource.slice(0, caretOffset) +
+        marker +
+        captionSource.slice(caretOffset)
+      );
+    } else if (isTable || isFigure) {
+      unpreparedBody = floatCaption?.text || "";
+    } else {
+      unpreparedBody = contextTools.previewBody(
         equationRenderContext,
         caretPlacementState?.commandSide || null,
         numbering,
         !hasSelection
       );
+    }
     let documentCommands;
     try {
       documentCommands = (
@@ -3582,8 +4056,24 @@
         "\\htmlClass{smarttex-rendered-operator-caret}{\\vphantom{|}}"
     };
 
+    const renderedFigure = isFigure && !contextChanged
+      ? output.querySelector(":scope > .smarttex-figure-popup")
+      : null;
+    const updateCaptionOnly = Boolean(
+      renderedFigure &&
+      caretInFigureCaption
+    );
+
     try {
-      if (isFigure) {
+      if (updateCaptionOnly) {
+        updateFigureCaptionInPlace(
+          renderedFigure,
+          numbering.figureNumber,
+          documentCommands.body,
+          macros,
+          floatCaption?.start
+        );
+      } else if (isFigure) {
         staging.appendChild(renderFigurePopup(
           context,
           numbering.figureNumber,
@@ -3686,19 +4176,26 @@
 
     taskCheckpoint(0, 1, taskToken);
     if (generation !== renderGeneration || contextId !== activeContextId) return;
-    lastSuccessfulMarkup = staging.innerHTML;
-    output.replaceChildren(...staging.childNodes);
+    if (!updateCaptionOnly) {
+      output.replaceChildren(...staging.childNodes);
+    }
+    lastSuccessfulMarkup = output.innerHTML;
     restorePopupScrollState(preview, previewScrollState);
     applyPopupSelectionHighlight(output, state, context);
-    globalThis.SmartTeXFigureRenderer?.observePopupLayout?.(
-      output.querySelector(".smarttex-figure-layout")
-    );
+    if (!updateCaptionOnly) {
+      globalThis.SmartTeXFigureRenderer?.observePopupLayout?.(
+        output.querySelector(".smarttex-figure-layout")
+      );
+    }
     status.hidden = true;
     status.removeAttribute("title");
     preview.classList.remove("smarttex-preview-stale");
     preview.hidden = false;
     preview.classList.add("smarttex-preview-visible");
-    window.requestAnimationFrame(() => positionPreview());
+    window.requestAnimationFrame(() => {
+      if (contextChanged || !previewPositioned) positionPreview();
+      else positionPreviewAtCursor();
+    });
     } finally {
       hidePreviewLoading(loadingGeneration);
       if (taskToken) interactionTasks?.end?.(taskToken);
@@ -3729,17 +4226,31 @@
     });
   }
 
-  function scheduleRender({ immediate = false } = {}) {
+  function scheduleRender({ immediate = false, preserveExisting = false } = {}) {
     if (renderTimer !== null) {
       window.clearTimeout(renderTimer);
       renderTimer = null;
     }
     hidePreviewLoading();
+    const state = previewStateForRender();
+    if (!stateCanShowPreview(state)) {
+      if (preserveExisting && !preview.hidden) return;
+      hidePreview();
+      return;
+    }
+    const context = findPreviewContext(state);
+    if (!context) {
+      if (preserveExisting && !preview.hidden) return;
+      hidePreview();
+      return;
+    }
+    if (previewContextIsDismissed(state, context)) {
+      hidePreview({ clearDismissal: false });
+      return;
+    }
     renderGeneration += 1;
     const generation = renderGeneration;
-    const loadingGeneration = stateCanShowPreview(previewStateForRender())
-      ? showPreviewLoading()
-      : null;
+    const loadingGeneration = showPreviewLoading(state, context);
     if (immediate) {
       // The page bridge already coalesces duplicate cursor callbacks in a
       // microtask. Do not add a timeout before moving the rendered caret.
@@ -3788,6 +4299,7 @@
 
   function scheduleEnvironmentPreviewHover(event) {
     if (!environmentPopupUsesHover()) return;
+    if (typedEnvironmentPreviewActive) return;
     if (pointerIsInsidePreviewSurface(event.target)) {
       window.clearTimeout(environmentHoverTimer);
       environmentHoverTimer = null;
@@ -3907,6 +4419,16 @@
     if (stateCanShowPreview(previewState)) scheduleRender();
     else hidePreview();
   });
+  window.addEventListener(GRAPHIC_AUTOCOMPLETE_ACTIVE_EVENT, (event) => {
+    const wasActive = graphicAutocompleteContextActive;
+    graphicAutocompleteContextActive = Boolean(event?.detail?.active);
+    if (graphicAutocompleteContextActive) {
+      captionPreviewLock = null;
+      hidePreview({ force: true });
+      return;
+    }
+    if (wasActive && stateCanShowPreview(currentState)) scheduleRender();
+  });
 
   window.addEventListener(STATE_EVENT, (event) => {
     const previousState = currentState;
@@ -3934,12 +4456,44 @@
       previousSource !== currentSource ||
       previousFileName !== currentFileName
     );
+    const continuingActivePreview = Boolean(
+      sourceChanged && stateContinuesActiveEnvironmentPreview(currentState)
+    );
+    const recentEditorTyping = Boolean(
+      sourceChanged &&
+      Date.now() - lastEditorTextInputAt < 500 &&
+      previousState?.focused !== false &&
+      previousFileName === currentFileName
+    );
+    if (recentEditorTyping) {
+      // CodeMirror/Ace can publish the document change before the next layout
+      // pass has produced caret coordinates, and some versions briefly report
+      // focus=false while replacing the hidden input value. Neither transient
+      // state ends the caption-editing interaction.
+      currentState.focused = true;
+      if (!currentState.screen && previousState?.screen) {
+        currentState.screen = previousState.screen;
+      }
+    } else if (continuingActivePreview) {
+      if (!currentState.screen && previousState?.screen) {
+        currentState.screen = previousState.screen;
+      }
+    } else if (
+      sourceChanged &&
+      !currentState?.screen &&
+      previousState?.screen &&
+      currentState?.focused !== false &&
+      previousFileName === currentFileName
+    ) {
+      currentState.screen = previousState.screen;
+    }
     const cursorChanged = (
       Number(previousState?.cursorIndex) !== Number(currentState?.cursorIndex) ||
       Number(previousState?.selectionFrom) !== Number(currentState?.selectionFrom) ||
       Number(previousState?.selectionTo) !== Number(currentState?.selectionTo)
     );
     const focusChanged = Boolean(previousState?.focused) !== Boolean(currentState?.focused);
+    refreshCaptionPreviewLock(currentState);
 
     if (popupsSuppressedAfterEditorScroll) {
       if (sourceChanged || cursorChanged || focusChanged) {
@@ -3972,6 +4526,34 @@
     }
 
     if (environmentPopupUsesHover()) {
+      const typedEnvironmentContext = (
+        typedEnvironmentPreviewActive || sourceChanged
+      ) ? findPreviewContext(currentState) : null;
+      if (sourceChanged && typedEnvironmentContext) {
+        typedEnvironmentPreviewActive = true;
+      } else if (
+        typedEnvironmentPreviewActive &&
+        ((!typedEnvironmentContext && !continuingActivePreview) ||
+          (currentState?.focused === false && !recentEditorTyping))
+      ) {
+        typedEnvironmentPreviewActive = false;
+      }
+
+      if (typedEnvironmentPreviewActive) {
+        if (hoverPreviewState) clearEnvironmentHoverPreview({ hide: false });
+        if (stateCanShowPreview(currentState)) {
+          scheduleRender({
+            immediate: !sourceChanged,
+            preserveExisting: recentEditorTyping || continuingActivePreview
+          });
+        } else if (continuingActivePreview) {
+          hidePreviewLoading();
+        } else {
+          hidePreview();
+        }
+        return;
+      }
+
       if (hoverPreviewState) {
         hoverPreviewState = {
           ...hoverPreviewState,
@@ -3984,14 +4566,19 @@
         } else {
           clearEnvironmentHoverPreview();
         }
-      } else {
-        hidePreview();
+        return;
       }
+      hidePreview();
       return;
     }
 
+    typedEnvironmentPreviewActive = false;
     hoverPreviewState = null;
     if (!stateCanShowPreview(currentState)) {
+      if (continuingActivePreview) {
+        hidePreviewLoading();
+        return;
+      }
       hidePreview();
       return;
     }
@@ -4011,7 +4598,10 @@
       return;
     }
 
-    scheduleRender({ immediate: !sourceChanged });
+    scheduleRender({
+      immediate: !sourceChanged,
+      preserveExisting: recentEditorTyping || continuingActivePreview
+    });
   });
 
   closeButton.addEventListener("pointerdown", (event) => {
@@ -4152,10 +4742,22 @@
     subtree: true
   });
   document.addEventListener("keyup", scheduleGraphicAutocompletePreviewUpdate, true);
-  window.addEventListener(
-    "smarttex:graphic-autocomplete-selection-change",
-    scheduleGraphicAutocompletePreviewUpdate
-  );
+  window.addEventListener("smarttex:graphic-autocomplete-selection-change", (event) => {
+    customGraphicAutocompleteSelectionPath = String(event?.detail?.path || "").trim();
+    customGraphicAutocompletePreviewSuppressed = event?.detail?.suppressPreview === true;
+    graphicAutocompleteClickPreview = event?.detail?.mode === "click";
+    graphicAutocompletePreview.classList.toggle(
+      "smarttex-graphic-autocomplete-click-preview",
+      graphicAutocompleteClickPreview
+    );
+    graphicAutocompleteClose.hidden = !graphicAutocompleteClickPreview;
+    scheduleGraphicAutocompletePreviewUpdate();
+  });
+  const noteEditorTextInput = (event) => {
+    if (editorSurface(event.target)) lastEditorTextInputAt = Date.now();
+  };
+  document.addEventListener("beforeinput", noteEditorTextInput, true);
+  document.addEventListener("input", noteEditorTextInput, true);
   document.addEventListener("pointermove", (event) => {
     const owner = nativeGraphicAutocompleteOwnerFromNode(event.target);
     const entry = hoveredNativeGraphicEntry(event.target, owner);
@@ -4170,6 +4772,7 @@
 
   window.addEventListener(RUNTIME_SETTINGS_EVENT, (event) => {
     const detail = event?.detail || {};
+    const figuresWereEnabled = enabledFeatures.figures;
     runtimeSettingsOverrideActive = detail.usingPresets === false;
     const features = detail.features || {};
     enabledFeatures.equations = features.equations !== false;
@@ -4181,7 +4784,12 @@
     environmentPopupTrigger = popupSettings.environmentTrigger === "hover" ? "hover" : "cursor";
     dispatchStructureHighlightSettings(detail.highlights || {});
 
-    hidePreview();
+    if (figuresWereEnabled && !enabledFeatures.figures) {
+      captionPreviewLock = null;
+      hidePreview({ force: true });
+    } else {
+      hidePreview();
+    }
     hideCaptionReferencePopup();
     hideNestedReferencePopupsFromDepth(1);
     if (!enabledFeatures.figures) hideGraphicAutocompletePreview();
@@ -4204,7 +4812,12 @@
       enabledFeatures.equations = features?.equations !== false;
       enabledFeatures.tables = features?.tables !== false;
       enabledFeatures.figures = features?.figures !== false;
-      hidePreview();
+      if (!enabledFeatures.figures) {
+        captionPreviewLock = null;
+        hidePreview({ force: true });
+      } else {
+        hidePreview();
+      }
       hideCaptionReferencePopup();
       hideNestedReferencePopupsFromDepth(1);
       if (!enabledFeatures.figures) hideGraphicAutocompletePreview();
@@ -4244,6 +4857,30 @@
   }, { passive: true });
   window.addEventListener("smarttex:editor-scroll-state", (event) => {
     if (event?.detail?.active === true) {
+      const activeCaptionEdit = Boolean(
+        !preview.hidden &&
+        captionContainerAtIndex(currentState) &&
+        stateContinuesActiveEnvironmentPreview(currentState)
+      );
+      const keepTypingOverlays = Boolean(
+        activeCaptionEdit ||
+        (
+          Date.now() - lastEditorTextInputAt < 350 &&
+          currentState?.focused !== false
+        )
+      );
+      if (keepTypingOverlays) {
+        popupsSuppressedAfterEditorScroll = false;
+        // An editor auto-scroll caused by typing belongs to the same editing
+        // interaction. Keep all active previews mounted and refresh only their
+        // content/position from the state updates already in flight.
+        window.requestAnimationFrame(() => {
+          positionPreview();
+          repositionReferencePopups();
+          scheduleGraphicAutocompletePreviewUpdate();
+        });
+        return;
+      }
       popupsSuppressedAfterEditorScroll = true;
       window.clearTimeout(editorReferenceHoverTimer);
       editorReferenceHoverGeneration += 1;
@@ -4314,7 +4951,7 @@
 
   window.addEventListener("pagehide", () => {
     hideCaptionReferencePopup();
-    hidePreview();
+    hidePreview({ force: true });
     for (const pending of pendingRequests.values()) {
       window.clearTimeout(pending.timeout);
       pending.reject(new Error("SmartTeX page closed."));

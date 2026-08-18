@@ -33,7 +33,8 @@ assert.match(tasks, /Math\.min\(32, requestedInterval\)/);
 
 assert.match(references, /runSync\(\s*"reference-target-index"/);
 assert.match(references, /runSync\(\s*"reference-list-filter"/);
-assert.match(references, /if \(!nextRecords\) return;/);
+assert.match(references, /if \(!nextRecords\) return false;/);
+assert.match(references, /if \(renderPopupNow\(\) === false\) scheduleListRenderRetry\(\)/);
 assert.match(figures, /runSync\(\s*"figure-list-filter"/);
 assert.match(figures, /const fragment = document\.createDocumentFragment\(\)/);
 assert.match(citations, /runSync\(\s*"citation-list-filter"/);

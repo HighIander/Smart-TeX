@@ -10,8 +10,8 @@ const toolbar = fs.readFileSync(path.join(root, "editor-toolbar.js"), "utf8");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 const css = fs.readFileSync(path.join(root, "content.css"), "utf8");
 
-assert.match(comments, /const SYNC_INTERVAL_MS = 20000;/);
-assert.match(comments, /const FULL_SYNC_FALLBACK_MS = 120000;/);
+assert.match(comments, /const SYNC_INTERVAL_MS = 5000;/);
+assert.match(comments, /const FULL_SYNC_FALLBACK_MS = 20000;/);
 assert.match(comments, /smarttex-comments-track-row/);
 assert.match(comments, /<option value="final">show final<\/option>/);
 assert.match(comments, /<option value="markup" selected>show markup<\/option>/);

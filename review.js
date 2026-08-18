@@ -20,10 +20,15 @@
   const RUNTIME_SETTINGS_EVENT = "smarttex:runtime-settings";
   const REVIEW_USER_KEY = "smarttex:review-user:v1";
   const COMMENT_PROFILE_KEY = globalThis.SmartTeXCommentProfile?.KEY || "smarttex:comment-profile:v1";
+  const AUTHOR_ID_KEY = "smarttex:comment-author-id:v1";
   const REVIEW_UI_KEY = "smarttex:review-ui:v1";
   const REVIEW_LOCAL_PREFIX = "smarttex:review-local:v1:";
   const REVIEW_PROJECT_FILE = ".smarttex-review.json";
   const REVIEW_HYDRATION_STATE_EVENT = "smarttex:review-hydration-state";
+  const COLLABORATION_PRESENCE_EVENT = "smarttex:collaboration-presence";
+  const COLLABORATION_PROFILE_EVENT = "smarttex:collaboration-local-profile";
+  const COLLABORATION_DIRTY_EVENT = "smarttex:collaboration-metadata-dirty";
+  const COLLABORATION_SIGNAL_EVENT = "smarttex:collaboration-signal";
   const LOCAL_INPUT_WINDOW_MS = 1400;
   const TYPE_GROUP_WINDOW_MS = 2200;
   const MOVE_PAIR_WINDOW_MS = 30000;
@@ -70,9 +75,12 @@
   let commentHighlightLayer = null;
   let markupLayer = null;
   let temporaryLayer = null;
+  let presenceLayer = null;
   let originalOverlay = null;
   let overlayFrame = 0;
   let overlayGeneration = 0;
+  const collaboratorPresence = new Map();
+  let presenceExpiryTimer = 0;
   let localSaveTimer = 0;
   let projectSaveTimer = 0;
   let projectPollTimer = 0;
@@ -83,6 +91,7 @@
   let lastFullRemoteReadAt = 0;
   let reviewActivated = false;
   let identity = { name: "anonymous", color: "#3b82f6" };
+  let identityAuthorId = "";
   let popupTrigger = "cursor";
   let localUi = {
     trackingEnabled: false,
@@ -153,6 +162,7 @@
       fileName: String(value.fileName),
       type,
       author: String(value.author || "anonymous"),
+      authorId: String(value.authorId || ""),
       color: validColor(value.color, "#94a3b8"),
       start: Math.max(0, Number(value.start) || 0),
       end: Math.max(0, Number(value.end) || 0),
@@ -176,6 +186,7 @@
       start: Math.max(0, Number(value.start) || 0),
       end: Math.max(0, Number(value.end) || 0),
       author: String(value.author || "anonymous"),
+      authorId: String(value.authorId || ""),
       color: validColor(value.color),
       kind: value.kind === "highlight" ? "highlight" : "comment",
       linkedChangeId: value.linkedChangeId ? String(value.linkedChangeId) : "",
@@ -186,6 +197,7 @@
       thread: (Array.isArray(value.thread) ? value.thread : []).map((reply) => ({
         id: String(reply?.id || randomId("reply")),
         author: String(reply?.author || "anonymous"),
+        authorId: String(reply?.authorId || ""),
         color: validColor(reply?.color),
         text: String(reply?.text || ""),
         createdAt: String(reply?.createdAt || nowIso())
@@ -457,6 +469,7 @@
 
   function saveState({ project = true, render = true } = {}) {
     reviewState.updatedAt = nowIso();
+    broadcastReviewRealtime();
     scheduleLocalSave();
     if (project) scheduleProjectSave();
     if (render) {
@@ -466,8 +479,26 @@
     dispatchReviewState();
   }
 
-  async function readRemoteReviewState() {
-    const response = await bridgeRequest("readProjectMetadataFile", { path: REVIEW_PROJECT_FILE }, 9000);
+  function broadcastReviewRealtime() {
+    const state = normalizeReviewState({
+      ...reviewState,
+      comments: reviewState.comments.filter((comment) => !comment.draft)
+    });
+    window.dispatchEvent(new CustomEvent(COLLABORATION_DIRTY_EVENT, {
+      detail: JSON.stringify({
+        kind: "review-live",
+        nonce: `${state.updatedAt}:${state.changes.length}`,
+        payload: { state }
+      })
+    }));
+  }
+
+  async function readRemoteReviewState(options = {}) {
+    const response = await bridgeRequest("readProjectMetadataFile", {
+      path: REVIEW_PROJECT_FILE,
+      fileId: String(options.fileId || ""),
+      entityType: String(options.entityType || "")
+    }, 9000);
     const file = response?.file;
     if (!file?.exists || !String(file.value || "").trim()) return emptyReviewState();
     return normalizeReviewState(JSON.parse(String(file.value)));
@@ -511,11 +542,20 @@
       // edit happens while the write itself is pending, scheduleProjectSave()
       // sets projectSyncPending and the finally block performs another sync.
       const payload = serializableReviewState();
-      await bridgeRequest("writeProjectMetadataFile", {
+      const writeResponse = await bridgeRequest("writeProjectMetadataFile", {
         path: REVIEW_PROJECT_FILE,
         text: JSON.stringify(payload, null, 2) + "\n"
       }, 14000);
       projectFileKnown = true;
+      window.dispatchEvent(new CustomEvent(COLLABORATION_DIRTY_EVENT, {
+        detail: JSON.stringify({
+          kind: "review",
+          nonce: `${payload.updatedAt}:${payload.changes.length}`,
+          path: REVIEW_PROJECT_FILE,
+          fileId: String(writeResponse?.result?.fileId || ""),
+          entityType: String(writeResponse?.result?.entityType || "")
+        })
+      }));
       scheduleLocalSave(0);
       hideMetadataTreeItem();
       if (mergeChangedVisibleState) {
@@ -547,7 +587,7 @@
     }
     if (!shouldRead) return;
     try {
-      const remote = await readRemoteReviewState();
+      const remote = await readRemoteReviewState(options);
       lastFullRemoteReadAt = Date.now();
       const merged = mergeReviewStates(reviewState, remote);
       let changed = JSON.stringify(merged) !== JSON.stringify(normalizeReviewState(reviewState));
@@ -884,7 +924,7 @@
   }
 
   function matchingMoveDeletion(fileName, splice, localAuthor) {
-    if (!splice.added || splice.removed || !String(splice.added).trim()) return null;
+    if (!splice.added || splice.removed || !moveSized(splice.added)) return null;
     const added = comparableMoveText(splice.added);
     const preferredAuthor = localAuthor ? identity.name : "";
     const now = Date.now();
@@ -918,7 +958,7 @@
   function promoteExistingDeleteInsertPairToMove(fileName) {
     const candidates = reviewState.changes.filter((change) => change.fileName === fileName);
     const deletions = candidates
-      .filter((change) => change.type === "delete" && change.retained && String(change.originalText || "").trim())
+      .filter((change) => change.type === "delete" && change.retained && moveSized(change.originalText))
       .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
     const insertions = candidates.filter((change) => change.type === "insert");
 
@@ -951,6 +991,7 @@
       const namedColor = namedAuthor === insertion.author ? insertion.color : deletion.color;
       deletion.type = "move";
       deletion.author = namedAuthor || "anonymous";
+      deletion.authorId = deletion.authorId || insertion.authorId || "";
       deletion.color = namedColor || deletion.color;
       deletion.text = insertion.text;
       deletion.fromStart = deletion.start;
@@ -1100,12 +1141,11 @@
   }
 
   function moveSized(text) {
-    const clean = String(text || "").trim();
-    if (clean.length < 12) return false;
-    const wholeEnvironment = /\\begin\s*\{/.test(clean) && /\\end\s*\{/.test(clean);
-    const multiLineBlock = /\n/.test(clean) && clean.length >= 20;
-    const wholeSentence = clean.length >= 20 && /[.!?]["')\]}]*$/.test(clean);
-    return wholeEnvironment || multiLineBlock || wholeSentence;
+    const clean = String(text || "").replace(/\s+/g, " ").trim();
+    // Moves are intentionally limited to complete prose sentences (or several
+    // sentences). Short fragments, clauses, words, and bare LaTeX blocks stay
+    // represented as a deletion plus an addition.
+    return /[\p{L}\p{N}][\s\S]*[.!?](?:["'’”\)\]}]+)?$/u.test(clean);
   }
 
   function trackedSpliceType(splice) {
@@ -1212,6 +1252,7 @@
         candidate.author = localAuthor
           ? identity.name
           : (candidate.author && candidate.author !== "anonymous" ? candidate.author : author);
+        if (localAuthor) candidate.authorId = identityAuthorId;
         candidate.color = candidate.author === identity.name ? identity.color : candidate.color || color;
         candidate.text = splice.added;
         candidate.fromStart = sourceStart;
@@ -1262,6 +1303,7 @@
       fileName,
       type,
       author,
+      authorId: localAuthor ? identityAuthorId : "",
       color,
       start: splice.start,
       end: type === "delete" && retainedDeletion
@@ -2459,6 +2501,7 @@
       start: Math.max(0, start),
       end: Math.max(start, end),
       author: identity.name,
+      authorId: identityAuthorId,
       color: identity.color,
       kind: "comment",
       linkedChangeId,
@@ -2494,11 +2537,13 @@
     comment.thread = [{
       id: randomId("reply"),
       author: identity.name,
+      authorId: identityAuthorId,
       color: identity.color,
       text,
       createdAt: nowIso()
     }];
     comment.author = identity.name;
+    comment.authorId = identityAuthorId;
     comment.color = identity.color;
     comment.draft = false;
     comment.updatedAt = nowIso();
@@ -2521,6 +2566,7 @@
       start,
       end,
       author: identity.name,
+      authorId: identityAuthorId,
       color: identity.color,
       kind: "highlight",
       linkedChangeId: "",
@@ -2575,6 +2621,7 @@
     comment.thread.push({
       id: randomId("reply"),
       author: identity.name,
+      authorId: identityAuthorId,
       color: identity.color,
       text,
       createdAt: nowIso()
@@ -2653,6 +2700,11 @@
       temporaryLayer.id = "smarttex-review-temporary-layer";
       document.documentElement.appendChild(temporaryLayer);
     }
+    if (!presenceLayer?.isConnected) {
+      presenceLayer = document.createElement("div");
+      presenceLayer.id = "smarttex-collaboration-presence-layer";
+      document.documentElement.appendChild(presenceLayer);
+    }
   }
 
   function scheduleOverlayRender() {
@@ -2678,9 +2730,24 @@
     node.style.top = `${rect.top}px`;
     node.style.width = `${Math.max(2, rect.right - rect.left)}px`;
     node.style.height = `${Math.max(2, rect.bottom - rect.top)}px`;
-    Object.assign(node.style, styles);
+    for (const [property, value] of Object.entries(styles)) {
+      if (property.startsWith("--")) node.style.setProperty(property, value);
+      else node.style[property] = value;
+    }
     layer.appendChild(node);
     return node;
+  }
+
+  function clipPresenceRect(rect, bounds) {
+    if (!rect || !bounds) return null;
+    const clipped = {
+      left: Math.max(Number(bounds.left), Number(rect.left)),
+      right: Math.min(Number(bounds.right), Number(rect.right)),
+      top: Math.max(Number(bounds.top), Number(rect.top)),
+      bottom: Math.min(Number(bounds.bottom), Number(rect.bottom))
+    };
+    if (!Object.values(clipped).every(Number.isFinite)) return null;
+    return clipped.right > clipped.left && clipped.bottom > clipped.top ? clipped : null;
   }
 
   function installChangeHitTarget(rect, change) {
@@ -2716,6 +2783,11 @@
   async function renderChangeMarkup(change, mode, generation) {
     const range = changeVisibleRange(change);
     if (mode === "final" || mode === "original") return;
+    const authorColor = validColor(change.color, "#64748b");
+    const authorStyles = {
+      "--smarttex-review-author-color": authorColor,
+      "--smarttex-review-author-soft": rgba(authorColor, 0.14)
+    };
     const response = await bridgeRequest("getRangeRects", range, 3000).catch(() => ({ rects: [] }));
     if (generation !== overlayGeneration) return;
     const rects = response.rects || [];
@@ -2724,20 +2796,20 @@
     const activeClass = change.type === "move" ? "smarttex-review-active-move"
       : change.type === "delete" ? "smarttex-review-active-delete" : "smarttex-review-active-add";
     if (active) {
-      for (const rect of rects) addRect(markupLayer, rect, `smarttex-review-active-change ${activeClass}`);
-      if (!rects.length && pointRect) addRect(markupLayer, pointRect, `smarttex-review-active-change ${activeClass}`);
+      for (const rect of rects) addRect(markupLayer, rect, `smarttex-review-active-change ${activeClass}`, authorStyles);
+      if (!rects.length && pointRect) addRect(markupLayer, pointRect, `smarttex-review-active-change ${activeClass}`, authorStyles);
     }
 
     if (mode === "markup") {
       if (["insert", "replace"].includes(change.type)) {
         for (const rect of lineRectsForStrike(rects, response.lineHeight)) {
-          addRect(markupLayer, rect, "smarttex-review-addition-line");
+          addRect(markupLayer, rect, "smarttex-review-addition-line", authorStyles);
           installChangeHitTarget(rect, change);
         }
       }
       if (change.type === "delete" && change.retained) {
         for (const rect of lineRectsForStrike(rects, response.lineHeight)) {
-          addRect(markupLayer, rect, "smarttex-review-deletion-line");
+          addRect(markupLayer, rect, "smarttex-review-deletion-line", authorStyles);
           installChangeHitTarget(rect, change);
         }
       } else if (["delete", "replace"].includes(change.type) && pointRect) {
@@ -2746,6 +2818,8 @@
         deletion.textContent = change.originalText;
         deletion.style.left = `${pointRect.left}px`;
         deletion.style.top = `${pointRect.top}px`;
+        deletion.style.setProperty("--smarttex-review-author-color", authorColor);
+        deletion.style.setProperty("--smarttex-review-author-soft", rgba(authorColor, 0.14));
         deletion.dataset.changeId = change.id;
         markupLayer.appendChild(deletion);
         const hitRect = {
@@ -2763,14 +2837,14 @@
         const fromRects = fromResponse.rects || [];
         if (change.retained && fromRects.length) {
           for (const rect of lineRectsForStrike(fromRects, fromResponse.lineHeight)) {
-            addRect(markupLayer, rect, "smarttex-review-move-deletion-line");
+            addRect(markupLayer, rect, "smarttex-review-move-deletion-line", authorStyles);
             installChangeHitTarget(rect, change);
-            if (active) addRect(markupLayer, rect, "smarttex-review-active-change smarttex-review-active-move");
+            if (active) addRect(markupLayer, rect, "smarttex-review-active-change smarttex-review-active-move", authorStyles);
           }
         } else {
           const from = fromRects[0];
           if (from) {
-            addRect(markupLayer, { ...from, right: from.left + 4 }, "smarttex-review-move-origin");
+            addRect(markupLayer, { ...from, right: from.left + 4 }, "smarttex-review-move-origin", authorStyles);
             installChangeHitTarget({ ...from, right: from.left + 12 }, change);
           }
         }
@@ -2791,19 +2865,22 @@
             right: markerLeft + 4,
             top: moveTargetBounds.top,
             bottom: moveTargetBounds.bottom
-          }, "smarttex-review-move-target");
-          for (const to of targetLineRects) installChangeHitTarget(to, change);
+          }, "smarttex-review-move-target", authorStyles);
+          for (const to of targetLineRects) {
+            addRect(markupLayer, to, "smarttex-review-move-destination", authorStyles);
+            installChangeHitTarget(to, change);
+          }
         }
       }
     } else if (mode === "simple") {
       if (["delete", "replace"].includes(change.type) && pointRect) {
-        addRect(markupLayer, { ...pointRect, right: pointRect.left + 4 }, "smarttex-review-simple-deletion");
+        addRect(markupLayer, { ...pointRect, right: pointRect.left + 4 }, "smarttex-review-simple-deletion", authorStyles);
         installChangeHitTarget({ ...pointRect, right: pointRect.left + 12 }, change);
       } else if (change.type === "move") {
         const fromResponse = await bridgeRequest("getRangeRects", changeMoveSourceRange(change), 3000).catch(() => ({ rects: [] }));
         const from = fromResponse.rects?.[0];
         if (from) {
-          addRect(markupLayer, { ...from, right: from.left + 4 }, "smarttex-review-simple-deletion");
+          addRect(markupLayer, { ...from, right: from.left + 4 }, "smarttex-review-simple-deletion", authorStyles);
           installChangeHitTarget({ ...from, right: from.left + 12 }, change);
         }
       } else {
@@ -2826,11 +2903,75 @@
     }
   }
 
+  async function renderCollaboratorPresence(presence, generation) {
+    if (!presence || Date.now() - Number(presence.updatedAt || 0) > 12000) return;
+    const currentDocumentId = String(currentState?.documentId || "");
+    if (presence.documentId && currentDocumentId && presence.documentId !== currentDocumentId) return;
+    const sourceLength = String(currentState?.value || "").length;
+    const anchor = Math.max(0, Math.min(sourceLength, Number(presence.selectionAnchor) || 0));
+    const head = Math.max(0, Math.min(sourceLength, Number(presence.selectionHead ?? presence.cursorIndex) || 0));
+    const color = validColor(presence.color, "#64748b");
+    const styles = {
+      "--smarttex-collaborator-color": color,
+      "--smarttex-collaborator-soft": rgba(color, 0.18)
+    };
+    if (anchor !== head) {
+      const response = await bridgeRequest("getRangeRects", {
+        start: Math.min(anchor, head),
+        end: Math.max(anchor, head)
+      }, 2500).catch(() => ({ rects: [] }));
+      if (generation !== overlayGeneration) return;
+      for (const rect of response.rects || []) {
+        const visibleRect = clipPresenceRect(rect, response.bounds);
+        if (visibleRect) {
+          addRect(presenceLayer, visibleRect, "smarttex-collaborator-selection", styles);
+        }
+      }
+    }
+    const response = await bridgeRequest("getCoordinates", { index: head }, 2500).catch(() => null);
+    if (generation !== overlayGeneration || !response?.screen || !response?.bounds) return;
+    const screen = response.screen;
+    const left = Number(screen.pageX) - window.scrollX;
+    const top = Number(screen.pageY) - window.scrollY;
+    const lineHeight = Math.max(14, Number(screen.lineHeight) || 16);
+    const visibleCursor = clipPresenceRect({
+      left,
+      right: left + 2,
+      top,
+      bottom: top + lineHeight
+    }, response.bounds);
+    // Some editor coordinate APIs return the nearest viewport edge for an
+    // off-screen document position. Never turn that into a cursor or a name
+    // badge outside the editor (for example in Overleaf's top navigation).
+    if (!visibleCursor) return;
+    // Always paint the SmartTeX caret and label, including a collapsed range.
+    // The host's native cursor remains a transport/fallback layer, but must not
+    // decide which identity is displayed: SmartTeX owns the selected name and
+    // colour for both a selection and a cursor-only presence update.
+    const cursor = addRect(
+      presenceLayer,
+      visibleCursor,
+      "smarttex-collaborator-cursor",
+      styles
+    );
+    cursor.dataset.collaboratorId = presence.id;
+    const label = document.createElement("div");
+    label.className = "smarttex-collaborator-label";
+    label.textContent = presence.name || "Anonymous";
+    label.style.left = `${Math.max(Number(response.bounds.left), visibleCursor.right)}px`;
+    label.style.top = `${Math.max(Number(response.bounds.top), visibleCursor.top - 18)}px`;
+    for (const [property, value] of Object.entries(styles)) {
+      label.style.setProperty(property, value);
+    }
+    presenceLayer.appendChild(label);
+  }
+
   async function renderOverlays() {
     ensureOverlayLayers();
     const generation = ++overlayGeneration;
     markupLayer.replaceChildren();
     commentHighlightLayer.replaceChildren();
+    presenceLayer.replaceChildren();
     if (!currentState || !currentFile) {
       removeOriginalOverlay();
       return;
@@ -2838,7 +2979,11 @@
 
     const comments = reviewState.comments.filter((comment) => comment.fileName === currentFile);
     const changes = reviewState.changes.filter((change) => change.fileName === currentFile);
-    await Promise.all(comments.map((comment) => renderCommentHighlight(comment, generation)));
+    const collaborators = [...collaboratorPresence.values()];
+    await Promise.all([
+      ...comments.map((comment) => renderCommentHighlight(comment, generation)),
+      ...collaborators.map((presence) => renderCollaboratorPresence(presence, generation))
+    ]);
     if (generation !== overlayGeneration) return;
 
     if (localUi.markupMode === "original") {
@@ -2928,6 +3073,36 @@
     changePopup = null;
   }
 
+  function applyReviewAuthorProfile(authorIdValue, nextIdentity, legacyIdentity = null) {
+    const targetAuthorId = String(authorIdValue || "");
+    if (!targetAuthorId) return false;
+    const name = String(nextIdentity?.name || "anonymous").trim().slice(0, 80) || "anonymous";
+    const color = validColor(nextIdentity?.color);
+    const legacyName = String(legacyIdentity?.name || "");
+    const legacyColor = validColor(legacyIdentity?.color, "#000000");
+    const timestamp = nowIso();
+    let changed = false;
+    const matches = (record) => (
+      String(record?.authorId || "") === targetAuthorId ||
+      (!record?.authorId && legacyName && record?.author === legacyName && validColor(record?.color, "#000000") === legacyColor)
+    );
+    const update = (record) => {
+      if (!matches(record)) return;
+      if (record.author === name && record.color === color && record.authorId === targetAuthorId) return;
+      record.author = name;
+      record.authorId = targetAuthorId;
+      record.color = color;
+      if ("updatedAt" in record) record.updatedAt = timestamp;
+      changed = true;
+    };
+    for (const change of reviewState.changes) update(change);
+    for (const comment of reviewState.comments) {
+      update(comment);
+      for (const reply of comment.thread || []) update(reply);
+    }
+    return changed;
+  }
+
   function scrollChangeCardIntoView(changeId) {
     const card = pane?.querySelector(`[data-change-card="${CSS.escape(changeId)}"]`);
     card?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
@@ -2969,12 +3144,19 @@
   }
 
   async function loadInitialState() {
-    const stored = await extensionApi.storage.local.get([COMMENT_PROFILE_KEY, REVIEW_USER_KEY, REVIEW_UI_KEY, localReviewKey]);
+    const stored = await extensionApi.storage.local.get([
+      COMMENT_PROFILE_KEY, REVIEW_USER_KEY, REVIEW_UI_KEY, localReviewKey, AUTHOR_ID_KEY
+    ]);
     identity = normalizedIdentity(stored?.[COMMENT_PROFILE_KEY] || stored?.[REVIEW_USER_KEY]);
+    identityAuthorId = String(stored?.[AUTHOR_ID_KEY] || "");
+    window.dispatchEvent(new CustomEvent(COLLABORATION_PROFILE_EVENT, {
+      detail: JSON.stringify({ name: identity.name, color: identity.color, authorId: identityAuthorId })
+    }));
     popupTrigger = stored?.[REVIEW_UI_KEY]?.popupTrigger === "click" ? "click" : "hover";
     const local = stored?.[localReviewKey] || {};
     localUi = normalizedLocalUi(local.ui);
     reviewState = normalizeReviewState(local.shared);
+    applyReviewAuthorProfile(identityAuthorId, identity, identity);
     reviewActivated = true;
     createPane();
     renderPane();
@@ -2992,6 +3174,7 @@
     try {
       const remote = await readRemoteReviewState();
       reviewState = mergeReviewStates(reviewState, remote);
+      applyReviewAuthorProfile(identityAuthorId, identity, identity);
       projectFileKnown = true;
       lastFullRemoteReadAt = Date.now();
       scheduleLocalSave(0);
@@ -3025,6 +3208,64 @@
     ensureProjectPolling();
   }
 
+  window.addEventListener(COLLABORATION_PRESENCE_EVENT, (event) => {
+    let detail = {};
+    try { detail = JSON.parse(String(event.detail || "{}")); } catch (_error) { return; }
+    const id = String(detail.id || "");
+    if (!id) return;
+    if (detail.disconnected) collaboratorPresence.delete(id);
+    else collaboratorPresence.set(id, {
+      id,
+      name: String(detail.name || "Anonymous").slice(0, 80),
+      color: validColor(detail.color, "#64748b"),
+      documentId: String(detail.documentId || ""),
+      cursorIndex: Math.max(0, Number(detail.cursorIndex) || 0),
+      selectionAnchor: Math.max(0, Number(detail.selectionAnchor) || 0),
+      selectionHead: Math.max(0, Number(detail.selectionHead) || 0),
+      updatedAt: Number(detail.updatedAt) || Date.now()
+    });
+    if (!detail.disconnected && applyReviewAuthorProfile(String(detail.authorId || ""), {
+      name: detail.name,
+      color: detail.color
+    })) {
+      scheduleLocalSave(0);
+      renderPane();
+      dispatchReviewState();
+    }
+    scheduleOverlayRender();
+  });
+
+  window.addEventListener(COLLABORATION_SIGNAL_EVENT, (event) => {
+    let detail = {};
+    try { detail = JSON.parse(String(event.detail || "{}")); } catch (_error) { return; }
+    if (detail.kind === "review-live") {
+      const remote = normalizeReviewState(detail.payload?.state);
+      const merged = mergeReviewStates(reviewState, remote);
+      if (remote.sharedTracking.updatedAt) {
+        merged.sharedTracking = { ...remote.sharedTracking };
+      }
+      if (JSON.stringify(merged) !== JSON.stringify(normalizeReviewState(reviewState))) {
+        reviewState = merged;
+        reviewActivated = true;
+        scheduleLocalSave(0);
+        ensureProjectPolling();
+        renderPane();
+        scheduleOverlayRender();
+        updateCursorChange();
+        dispatchReviewState();
+      }
+      return;
+    }
+    if (detail.kind !== "review") return;
+    for (const delay of [0, 500, 1500]) {
+      window.setTimeout(() => refreshProjectState({
+        force: true,
+        fileId: String(detail.fileId || ""),
+        entityType: String(detail.entityType || "")
+      }).catch(() => {}), delay);
+    }
+  });
+
   window.addEventListener(RUNTIME_SETTINGS_EVENT, (event) => {
     const detail = event.detail && typeof event.detail === "object" ? event.detail : {};
     if (detail.review?.popupTrigger) {
@@ -3036,15 +3277,21 @@
 
   extensionApi.storage?.onChanged?.addListener?.((changes, area) => {
     if (area !== "local") return;
+    const previousIdentity = identity;
     if (changes[COMMENT_PROFILE_KEY]?.newValue) {
       identity = normalizedIdentity(changes[COMMENT_PROFILE_KEY].newValue);
     } else if (changes[REVIEW_USER_KEY]?.newValue) {
       identity = normalizedIdentity(changes[REVIEW_USER_KEY].newValue);
     }
+    if (changes[AUTHOR_ID_KEY]?.newValue) identityAuthorId = String(changes[AUTHOR_ID_KEY].newValue || "");
     if (changes[REVIEW_UI_KEY]?.newValue) {
       popupTrigger = changes[REVIEW_UI_KEY].newValue.popupTrigger === "click" ? "click" : "hover";
     }
-    scheduleOverlayRender();
+    window.dispatchEvent(new CustomEvent(COLLABORATION_PROFILE_EVENT, {
+      detail: JSON.stringify({ name: identity.name, color: identity.color, authorId: identityAuthorId })
+    }));
+    if (applyReviewAuthorProfile(identityAuthorId, identity, previousIdentity)) saveState();
+    else scheduleOverlayRender();
   });
 
   const uiObserver = new MutationObserver(() => syncPaneTheme());
@@ -3065,15 +3312,28 @@
   }, { passive: true });
   window.addEventListener("scroll", scheduleOverlayRender, true);
 
+  presenceExpiryTimer = window.setInterval(() => {
+    const cutoff = Date.now() - 12000;
+    let changed = false;
+    for (const [id, presence] of collaboratorPresence) {
+      if (Number(presence.updatedAt || 0) >= cutoff) continue;
+      collaboratorPresence.delete(id);
+      changed = true;
+    }
+    if (changed) scheduleOverlayRender();
+  }, 2000);
+
   window.addEventListener("pagehide", () => {
     window.clearTimeout(localSaveTimer);
     window.clearTimeout(projectSaveTimer);
     window.clearInterval(projectPollTimer);
+    window.clearInterval(presenceExpiryTimer);
     if (overlayFrame) cancelAnimationFrame(overlayFrame);
     uiObserver.disconnect();
     commentHighlightLayer?.remove();
     markupLayer?.remove();
     temporaryLayer?.remove();
+    presenceLayer?.remove();
     removeOriginalOverlay();
     removeSelectionPopup();
     hideChangePopup();

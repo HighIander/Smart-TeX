@@ -24,12 +24,16 @@
   const REVIEW_STATE_EVENT = "smarttex:review-state";
   const ADD_RANGE_COMMENT_EVENT = "smarttex:comments-add-range";
   const INITIALIZATION_STATE_EVENT = "smarttex:comments-initialization-state";
+  const COLLABORATION_PROFILE_EVENT = "smarttex:collaboration-local-profile";
+  const COLLABORATION_PRESENCE_EVENT = "smarttex:collaboration-presence";
+  const COLLABORATION_DIRTY_EVENT = "smarttex:collaboration-metadata-dirty";
+  const COLLABORATION_SIGNAL_EVENT = "smarttex:collaboration-signal";
   const METADATA_FILE = ".smarttex-comments.json";
   const LOCAL_UI_KEY_PREFIX = "smarttex:comments-ui:v1:";
   const LOCAL_PENDING_KEY_PREFIX = "smarttex:comments-pending:v1:";
   const SCHEMA_VERSION = 1;
-  const SYNC_INTERVAL_MS = 20000;
-  const FULL_SYNC_FALLBACK_MS = 120000;
+  const SYNC_INTERVAL_MS = 5000;
+  const FULL_SYNC_FALLBACK_MS = 20000;
   const WRITE_DELAY_MS = 1600;
   const CONTEXT_SIZE = 36;
 
@@ -94,6 +98,7 @@
   let reviewUiState = { tracking: false, markupMode: "markup", totalChangeCount: 0, changes: [] };
   let trackSectionCollapsed = false;
   let commentsSectionCollapsed = false;
+  let showResolvedThreads = false;
   let reviewSplitRatio = 0.5;
   let reviewSplitterDragging = false;
   let paneAwaitingInitialReviewState = false;
@@ -105,6 +110,19 @@
 
   function now() {
     return Date.now();
+  }
+
+  function nextMutationStamp(...records) {
+    let stamp = now();
+    for (const record of records.flat().filter(Boolean)) {
+      stamp = Math.max(
+        stamp,
+        Number(record.updatedAt) || 0,
+        Number(record.deletedAt) || 0,
+        Number(record.resolvedUpdatedAt) || 0
+      );
+    }
+    return stamp + 1;
   }
 
   function uid(prefix) {
@@ -251,6 +269,7 @@
       }
       trackSectionCollapsed = value.trackSectionCollapsed === true;
       commentsSectionCollapsed = value.commentsSectionCollapsed === true;
+      showResolvedThreads = value.showResolvedThreads === true;
       reviewSplitRatio = Math.max(0.2, Math.min(0.8, Number(value.reviewSplitRatio) || 0.5));
       for (const id of Array.isArray(value.collapsedThreads) ? value.collapsedThreads : []) {
         collapsedThreads.add(String(id));
@@ -272,6 +291,7 @@
         collapsedThreads: [...collapsedThreads].slice(0, 1000),
         trackSectionCollapsed,
         commentsSectionCollapsed,
+        showResolvedThreads,
         reviewSplitRatio
       }
     }).catch?.(() => {});
@@ -287,7 +307,8 @@
       text: String(value.text || ""),
       createdAt,
       updatedAt: Number(value.updatedAt) || createdAt,
-      deletedAt: Number(value.deletedAt) || 0
+      deletedAt: Number(value.deletedAt) || 0,
+      permanentlyDeleted: Boolean(value.permanentlyDeleted)
     };
   }
 
@@ -306,7 +327,8 @@
       color: validColor(value.color, "#268bd2"),
       createdAt,
       updatedAt: Number(value.updatedAt) || createdAt,
-      deletedAt: Number(value.deletedAt) || 0
+      deletedAt: Number(value.deletedAt) || 0,
+      permanentlyDeleted: Boolean(value.permanentlyDeleted)
     };
     if (kind === "thread") {
       const comments = {};
@@ -315,7 +337,15 @@
         const cleaned = cleanComment({ ...comment, id: comment?.id || id });
         comments[cleaned.id] = cleaned;
       }
-      return { ...base, comments };
+      return {
+        ...base,
+        authorName: String(value.authorName || "Anonymous").slice(0, 80),
+        authorId: String(value.authorId || ""),
+        resolved: Boolean(value.resolved),
+        resolvedAt: Number(value.resolvedAt) || 0,
+        resolvedUpdatedAt: Number(value.resolvedUpdatedAt) || Number(value.resolvedAt) || 0,
+        comments
+      };
     }
     return {
       ...base,
@@ -346,7 +376,14 @@
     if (!right) return structuredCloneSafe(left);
     const leftStamp = Math.max(Number(left.updatedAt) || 0, Number(left.deletedAt) || 0);
     const rightStamp = Math.max(Number(right.updatedAt) || 0, Number(right.deletedAt) || 0);
-    return structuredCloneSafe(rightStamp >= leftStamp ? right : left);
+    const result = structuredCloneSafe(rightStamp >= leftStamp ? right : left);
+    // Explicit UI deletion is a permanent tombstone. A delayed profile update,
+    // stale metadata upload, or clock-skewed peer must never resurrect it.
+    if (left.permanentlyDeleted || right.permanentlyDeleted) {
+      result.permanentlyDeleted = true;
+      result.deletedAt = Math.max(Number(left.deletedAt) || 0, Number(right.deletedAt) || 0, 1);
+    }
+    return result;
   }
 
   function structuredCloneSafe(value) {
@@ -372,13 +409,20 @@
       ])) {
         base.comments[commentId] = latestRecord(l?.comments?.[commentId], r?.comments?.[commentId]);
       }
+      const resolvedSource = (Number(r?.resolvedUpdatedAt) || 0) >= (Number(l?.resolvedUpdatedAt) || 0)
+        ? r
+        : l;
+      base.resolved = Boolean(resolvedSource?.resolved);
+      base.resolvedAt = Number(resolvedSource?.resolvedAt) || 0;
+      base.resolvedUpdatedAt = Number(resolvedSource?.resolvedUpdatedAt) || 0;
       merged.threads[id] = base;
     }
     return merged;
   }
 
   function alive(record) {
-    return record && (!record.deletedAt || record.deletedAt < record.updatedAt);
+    return Boolean(record) && !record.permanentlyDeleted &&
+      (!record.deletedAt || record.deletedAt < record.updatedAt);
   }
 
   function fileMatches(left, right) {
@@ -394,6 +438,77 @@
     if (actor && authorId) return actor === authorId;
     return String(name || "") === String(profile.name || "") &&
       validColor(color, "#268bd2") === validColor(profile.color, "#268bd2");
+  }
+
+  function ownsComment(comment) {
+    return Boolean(comment && isOwnActivity(comment.authorName, comment.authorColor, comment.authorId));
+  }
+
+  function ownsThread(thread) {
+    if (!thread) return false;
+    if (thread.authorId) return thread.authorId === authorId;
+    const first = Object.values(thread.comments || {})
+      .filter(alive)
+      .sort((left, right) => left.createdAt - right.createdAt)[0];
+    return ownsComment(first);
+  }
+
+  function applyCommentsAuthorProfile(authorIdValue, nextProfile, legacyProfile = null) {
+    const targetAuthorId = String(authorIdValue || "");
+    if (!targetAuthorId) return false;
+    const name = String(nextProfile?.name || "Anonymous").trim().slice(0, 80) || "Anonymous";
+    const color = validColor(nextProfile?.color);
+    const legacyName = String(legacyProfile?.name || "");
+    const legacyColor = validColor(legacyProfile?.color, "#000000");
+    const stamp = nextMutationStamp(Object.values(data.threads), Object.values(data.marks));
+    let changed = false;
+    const matches = (record, colorField) => (
+      String(record?.authorId || "") === targetAuthorId ||
+      (!record?.authorId && legacyName && record?.authorName === legacyName &&
+        validColor(record?.[colorField], "#000000") === legacyColor)
+    );
+    for (const thread of Object.values(data.threads)) {
+      if (!alive(thread)) continue;
+      let threadChanged = false;
+      if (String(thread.authorId || "") === targetAuthorId && (
+        thread.authorName !== name || thread.color !== color
+      )) {
+        thread.authorName = name;
+        thread.authorId = targetAuthorId;
+        thread.color = color;
+        threadChanged = true;
+      }
+      for (const comment of Object.values(thread.comments || {})) {
+        if (!alive(comment) || !matches(comment, "authorColor")) continue;
+        if (comment.authorName === name && comment.authorColor === color && comment.authorId === targetAuthorId) continue;
+        comment.authorName = name;
+        comment.authorColor = color;
+        comment.authorId = targetAuthorId;
+        comment.updatedAt = stamp;
+        threadChanged = true;
+      }
+      if (threadChanged) {
+        const first = Object.values(thread.comments || {}).filter(alive)
+          .sort((left, right) => left.createdAt - right.createdAt)[0];
+        if (first?.authorId === targetAuthorId) {
+          thread.authorName = name;
+          thread.authorId = targetAuthorId;
+          thread.color = color;
+        }
+        thread.updatedAt = stamp;
+        changed = true;
+      }
+    }
+    for (const mark of Object.values(data.marks)) {
+      if (!alive(mark) || !matches(mark, "color")) continue;
+      if (mark.authorName === name && mark.color === color && mark.authorId === targetAuthorId) continue;
+      mark.authorName = name;
+      mark.authorId = targetAuthorId;
+      mark.color = color;
+      mark.updatedAt = stamp;
+      changed = true;
+    }
+    return changed;
   }
 
   function commentActivityKey(threadId, commentId) {
@@ -798,8 +913,12 @@
     updatePaneStatus();
   }
 
-  async function readRemote() {
-    const response = await bridgeRequest("readProjectMetadataFile", { path: METADATA_FILE }, 8000);
+  async function readRemote(options = {}) {
+    const response = await bridgeRequest("readProjectMetadataFile", {
+      path: METADATA_FILE,
+      fileId: String(options.fileId || ""),
+      entityType: String(options.entityType || "")
+    }, 8000);
     const file = response?.file;
     if (!file?.exists || !String(file.value || "").trim()) return emptyData();
     try { return normalizeData(JSON.parse(String(file.value))); }
@@ -836,9 +955,10 @@
     }
     if (!shouldRead) return true;
     try {
-      const remote = await readRemote();
+      const remote = await readRemote(options);
       lastFullRemoteReadAt = now();
       data = mergeData(data, remote);
+      const ownProfileChanged = applyCommentsAuthorProfile(authorId, profile, profile);
       if (currentState?.value) {
         let reattached = false;
         for (const record of allCurrentFileRecords()) if (reattachRecord(record, currentState.value)) reattached = true;
@@ -846,6 +966,7 @@
       }
       setSyncStatus("");
       renderAll();
+      if (ownProfileChanged) markDirty(250);
       if (initialSyncComplete) maybeAutoOpenForCurrentDocument();
       return true;
     } catch (error) {
@@ -855,11 +976,40 @@
     }
   }
 
-  function markDirty(delay = WRITE_DELAY_MS) {
+  function markDirty(delay = WRITE_DELAY_MS, realtimeData = null) {
     mutationRevision += 1;
+    broadcastCommentsRealtime(realtimeData);
     persistPendingDataSnapshot();
     clearTimeout(writeTimer);
     writeTimer = window.setTimeout(() => flushProjectData(), Math.max(250, delay));
+  }
+
+  function realtimeDataForRecords(...records) {
+    const patch = emptyData();
+    patch.updatedAt = now();
+    for (const record of records.flat().filter(Boolean)) {
+      if (record.comments && typeof record.comments === "object") patch.threads[record.id] = record;
+      else patch.marks[record.id] = record;
+    }
+    return normalizeData(patch);
+  }
+
+  function currentFileRealtimeData() {
+    const fileName = String(currentState?.fileName || "");
+    return realtimeDataForRecords(
+      Object.values(data.threads).filter((thread) => fileMatches(thread.fileName, fileName)),
+      Object.values(data.marks).filter((mark) => fileMatches(mark.fileName, fileName))
+    );
+  }
+
+  function broadcastCommentsRealtime(realtimeData = null) {
+    window.dispatchEvent(new CustomEvent(COLLABORATION_DIRTY_EVENT, {
+      detail: JSON.stringify({
+        kind: "comments-live",
+        nonce: `${mutationRevision}:${now()}`,
+        payload: { data: realtimeData ? normalizeData(realtimeData) : currentFileRealtimeData() }
+      })
+    }));
   }
 
   async function flushProjectData() {
@@ -875,13 +1025,22 @@
       try { remote = await readRemote(); } catch (_error) { /* a new metadata file is valid */ }
       data = mergeData(remote, data);
       data.updatedAt = now();
-      await bridgeRequest("writeProjectMetadataFile", {
+      const writeResponse = await bridgeRequest("writeProjectMetadataFile", {
         path: METADATA_FILE,
         text: serializeData(data)
       }, 15000);
       lastSavedRevision = targetRevision;
       setSyncStatus("");
       clearPendingDataThrough(targetRevision);
+      window.dispatchEvent(new CustomEvent(COLLABORATION_DIRTY_EVENT, {
+        detail: JSON.stringify({
+          kind: "comments",
+          nonce: `${targetRevision}:${now()}`,
+          path: METADATA_FILE,
+          fileId: String(writeResponse?.result?.fileId || ""),
+          entityType: String(writeResponse?.result?.entityType || "")
+        })
+      }));
       if (mutationRevision !== targetRevision) markDirty(500);
     } catch (error) {
       const transientRoot = isTransientProjectRootError(error);
@@ -981,6 +1140,7 @@
     const stamp = now();
     createMarkFromAnchor({ ...thread, authorName: profile.name }, stamp);
     thread.deletedAt = stamp;
+    thread.permanentlyDeleted = true;
     thread.updatedAt = Math.max(Number(thread.updatedAt) || 0, stamp - 1);
     editingComment = null;
     markDirty();
@@ -1019,19 +1179,26 @@
       id: uid("comment"), authorName: profile.name, authorColor: profile.color, authorId,
       text, createdAt: stamp, updatedAt: stamp
     });
-    const thread = cleanAnchorRecord({ ...draftThread, updatedAt: stamp, comments: { [comment.id]: comment } }, "thread");
+    const thread = cleanAnchorRecord({
+      ...draftThread,
+      authorName: profile.name,
+      authorId,
+      updatedAt: stamp,
+      comments: { [comment.id]: comment }
+    }, "thread");
     const convertedFromMarkId = String(draftThread.convertedFromMarkId || "");
     data.threads[thread.id] = thread;
     if (convertedFromMarkId) {
       const mark = activeMarkById(convertedFromMarkId);
       if (mark) {
         mark.deletedAt = stamp;
+        mark.permanentlyDeleted = true;
         mark.updatedAt = Math.max(mark.updatedAt || 0, stamp - 1);
       }
     }
     const threadId = thread.id;
     draftThread = null;
-    markDirty();
+    markDirty(WRITE_DELAY_MS, realtimeDataForRecords(thread));
     renderAll();
     requestAnimationFrame(() => scrollThreadIntoView(threadId));
   }
@@ -1056,9 +1223,10 @@
     const existing = Object.values(data.marks).find((mark) => (
       alive(mark) && fileMatches(mark.fileName, currentState?.fileName) && mark.start === start && mark.end === end
     ));
-    const stamp = now();
+    const stamp = existing ? nextMutationStamp(existing) : now();
     if (existing) {
       existing.deletedAt = stamp;
+      existing.permanentlyDeleted = true;
       existing.updatedAt = Math.max(existing.updatedAt || 0, stamp - 1);
     } else {
       const anchor = makeAnchor(start, end);
@@ -1080,8 +1248,9 @@
   function deleteMark(markId) {
     const mark = activeMarkById(markId);
     if (!mark) return;
-    const stamp = now();
+    const stamp = nextMutationStamp(mark);
     mark.deletedAt = stamp;
+    mark.permanentlyDeleted = true;
     mark.updatedAt = Math.max(mark.updatedAt || 0, stamp - 1);
     markDirty();
     renderAll();
@@ -1107,7 +1276,7 @@
   function beginEditComment(threadId, commentId) {
     const thread = data.threads[String(threadId || "")];
     const comment = thread?.comments?.[String(commentId || "")];
-    if (!alive(thread) || !alive(comment)) return;
+    if (!alive(thread) || !alive(comment) || !ownsComment(comment)) return;
     editingComment = {
       threadId: thread.id,
       commentId: comment.id,
@@ -1123,7 +1292,7 @@
     const thread = data.threads[String(threadId || "")];
     const comment = thread?.comments?.[String(commentId || "")];
     const body = String(text || "").trim();
-    if (!alive(thread) || !alive(comment)) return false;
+    if (!alive(thread) || !alive(comment) || !ownsComment(comment)) return false;
     if (!body) {
       const aliveComments = Object.values(thread.comments || {}).filter(alive);
       if (aliveComments.length === 1 && aliveComments[0].id === comment.id) {
@@ -1132,10 +1301,10 @@
       return false;
     }
     comment.text = body;
-    comment.updatedAt = now();
+    comment.updatedAt = nextMutationStamp(comment, thread);
     thread.updatedAt = comment.updatedAt;
     editingComment = null;
-    markDirty();
+    markDirty(WRITE_DELAY_MS, realtimeDataForRecords(thread));
     renderAll();
     return true;
   }
@@ -1144,22 +1313,45 @@
     const thread = data.threads[threadId];
     const comment = thread?.comments?.[commentId];
     if (!thread || !comment) return;
-    const stamp = now();
+    const aliveComments = Object.values(thread.comments || {}).filter(alive)
+      .sort((left, right) => left.createdAt - right.createdAt);
+    const deletingRootComment = aliveComments[0]?.id === comment.id;
+    const stamp = nextMutationStamp(comment, thread, aliveComments);
     comment.deletedAt = stamp;
+    comment.permanentlyDeleted = true;
     comment.updatedAt = Math.max(comment.updatedAt || 0, stamp - 1);
     thread.updatedAt = stamp;
-    if (!Object.values(thread.comments).some(alive)) thread.deletedAt = stamp;
-    markDirty();
+    // The root comment owns the editor anchor/marking. Removing it removes the
+    // complete anchored thread; replies cannot leave an orphaned highlight.
+    if (deletingRootComment || !Object.values(thread.comments).some(alive)) {
+      thread.deletedAt = stamp;
+      thread.permanentlyDeleted = true;
+    }
+    markDirty(WRITE_DELAY_MS, realtimeDataForRecords(thread));
     renderAll();
   }
 
   function deleteThread(threadId) {
     const thread = data.threads[threadId];
     if (!thread) return;
-    const stamp = now();
+    const stamp = nextMutationStamp(thread, Object.values(thread.comments || {}));
     thread.deletedAt = stamp;
+    thread.permanentlyDeleted = true;
     thread.updatedAt = Math.max(thread.updatedAt || 0, stamp - 1);
-    markDirty();
+    markDirty(WRITE_DELAY_MS, realtimeDataForRecords(thread));
+    renderAll();
+  }
+
+  function toggleThreadResolved(threadId) {
+    const thread = data.threads[String(threadId || "")];
+    if (!alive(thread)) return;
+    const stamp = nextMutationStamp(thread);
+    thread.resolved = !thread.resolved;
+    thread.resolvedAt = thread.resolved ? stamp : 0;
+    thread.resolvedUpdatedAt = stamp;
+    thread.updatedAt = stamp;
+    collapsedThreads.delete(thread.id);
+    markDirty(250, realtimeDataForRecords(thread));
     renderAll();
   }
 
@@ -1167,7 +1359,7 @@
     const thread = data.threads[threadId];
     const body = String(text || "").trim();
     if (!thread || !body) return false;
-    const stamp = now();
+    const stamp = nextMutationStamp(thread, Object.values(thread.comments || {}));
     const comment = cleanComment({
       id: uid("comment"), authorName: profile.name, authorColor: profile.color, authorId,
       text: body, createdAt: stamp, updatedAt: stamp
@@ -1175,7 +1367,7 @@
     thread.comments[comment.id] = comment;
     thread.updatedAt = stamp;
     replyDrafts.delete(threadId);
-    markDirty();
+    markDirty(WRITE_DELAY_MS, realtimeDataForRecords(thread));
     renderAll();
     return true;
   }
@@ -1339,7 +1531,10 @@
   function activeThreads() {
     const fileName = currentState?.fileName || "";
     return Object.values(data.threads)
-      .filter((thread) => alive(thread) && fileMatches(thread.fileName, fileName))
+      .filter((thread) => (
+        alive(thread) && fileMatches(thread.fileName, fileName) &&
+        (showResolvedThreads || !thread.resolved)
+      ))
       .sort((a, b) => a.start - b.start || a.createdAt - b.createdAt);
   }
 
@@ -1430,7 +1625,8 @@
         dispatchUnreadState();
       });
     }
-    const isEditing = editingComment?.threadId === thread.id && editingComment?.commentId === comment.id;
+    const editable = ownsComment(comment);
+    const isEditing = editable && editingComment?.threadId === thread.id && editingComment?.commentId === comment.id;
     if (isEditing) {
       const textarea = document.createElement("textarea");
       textarea.rows = 3;
@@ -1464,15 +1660,17 @@
       const text = document.createElement("div");
       text.className = "smarttex-comment-text";
       text.textContent = comment.text;
-      text.title = "Double-click to edit";
+      if (editable) text.title = "Double-click to edit";
       row.append(heading, text);
-      row.title = "Double-click to edit";
-      row.addEventListener("dblclick", (event) => {
-        if (event.target.closest("button, textarea, input")) return;
-        event.preventDefault();
-        event.stopPropagation();
-        beginEditComment(thread.id, comment.id);
-      });
+      if (editable) {
+        row.title = "Double-click to edit";
+        row.addEventListener("dblclick", (event) => {
+          if (event.target.closest("button, textarea, input")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          beginEditComment(thread.id, comment.id);
+        });
+      }
     }
     return row;
   }
@@ -1515,6 +1713,7 @@
     card.classList.toggle("smarttex-comment-thread-icon-active", iconFocusedThreadId === thread.id);
     card.dataset.threadId = thread.id;
     card.style.setProperty("--smarttex-thread-color", validColor(thread.color));
+    card.classList.toggle("smarttex-comment-thread-resolved", Boolean(thread.resolved));
     const collapsed = collapsedThreads.has(thread.id);
     card.classList.toggle("smarttex-comment-thread-collapsed", collapsed);
 
@@ -1549,7 +1748,16 @@
       saveLocalUi();
       renderAll();
     });
+    const resolve = document.createElement("button");
+    resolve.type = "button";
+    resolve.className = "smarttex-comment-thread-action smarttex-comment-resolve-toggle";
+    resolve.textContent = thread.resolved ? "↺" : "✓";
+    resolve.title = thread.resolved ? "Reopen comment thread" : "Resolve comment thread";
+    resolve.setAttribute("aria-label", resolve.title);
+    resolve.setAttribute("aria-pressed", thread.resolved ? "true" : "false");
+    bindImmediateButtonAction(resolve, () => toggleThreadResolved(thread.id));
     const palette = attachColorPicker(header, thread, card, "Change comment color");
+    palette.button.hidden = !ownsThread(thread);
     const trash = document.createElement("button");
     trash.type = "button";
     trash.className = "smarttex-comment-thread-action smarttex-comment-thread-trash";
@@ -1563,7 +1771,7 @@
         onConfirm: () => deleteThread(thread.id)
       });
     });
-    header.append(location, spacer, collapse, palette.button, trash);
+    header.append(location, spacer, resolve, collapse, palette.button, trash);
     card.appendChild(header);
 
     const comments = Object.values(thread.comments || {}).filter(alive).sort((a, b) => a.createdAt - b.createdAt);
@@ -1636,6 +1844,7 @@
     const spacer = document.createElement("span");
     spacer.className = "smarttex-comment-thread-spacer";
     const palette = attachColorPicker(header, mark, card, "Change marking color");
+    palette.button.hidden = !isOwnActivity(mark.authorName, mark.color, mark.authorId);
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "smarttex-comment-thread-action smarttex-comment-thread-trash";
@@ -1731,6 +1940,11 @@
       fragment.appendChild(empty);
     }
     list.replaceChildren(fragment);
+    const showResolved = pane.querySelector(".smarttex-comments-show-resolved");
+    if (showResolved) {
+      showResolved.textContent = showResolvedThreads ? "Hide resolved" : "Show resolved";
+      showResolved.setAttribute("aria-pressed", showResolvedThreads ? "true" : "false");
+    }
     updatePaneStatus();
     if (activeWasTextarea) {
       let replacement = null;
@@ -2364,6 +2578,7 @@
         const card = document.createElement("article");
         card.className = `smarttex-track-change-card smarttex-track-change-${change.type || "replace"}`;
         card.dataset.changeId = String(change.id || "");
+        card.style.setProperty("--smarttex-change-author-color", validColor(change.color, "#64748b"));
         const timestamp = new Date(change.updatedAt || change.createdAt || Date.now());
         const when = Number.isNaN(timestamp.getTime()) ? "" : timestamp.toLocaleString();
         card.innerHTML = `
@@ -2606,6 +2821,7 @@
             <div class="smarttex-comments-list"></div>
             <footer class="smarttex-comments-footer">
               <button type="button" class="smarttex-comments-minimize-all">Minimize all comments</button>
+              <button type="button" class="smarttex-comments-show-resolved" aria-pressed="false">Show resolved</button>
             </footer>
           </div>
         </section>
@@ -2735,6 +2951,11 @@
     markOpacitySlider?.addEventListener("change", () => saveLocalUi());
     pane.querySelector(".smarttex-comments-minimize-all")?.addEventListener("click", () => {
       for (const thread of activeThreads()) collapsedThreads.add(thread.id);
+      saveLocalUi();
+      renderAll();
+    });
+    pane.querySelector(".smarttex-comments-show-resolved")?.addEventListener("click", () => {
+      showResolvedThreads = !showResolvedThreads;
       saveLocalUi();
       renderAll();
     });
@@ -3103,11 +3324,52 @@
     startCommentAt(start, end);
   });
 
+  window.addEventListener(COLLABORATION_SIGNAL_EVENT, (event) => {
+    let detail = {};
+    try { detail = JSON.parse(String(event.detail || "{}")); } catch (_error) { return; }
+    if (detail.kind === "comments-live") {
+      const remote = normalizeData(detail.payload?.data);
+      const merged = mergeData(data, remote);
+      if (JSON.stringify(merged) !== JSON.stringify(normalizeData(data))) {
+        data = merged;
+        renderAll();
+        if (initialSyncComplete) maybeAutoOpenForCurrentDocument();
+      }
+      return;
+    }
+    if (detail.kind !== "comments") return;
+    // The realtime packet is only an invalidation hint. The mergeable project
+    // file remains authoritative. A pair of short retries covers the host file
+    // tree's delete/re-upload propagation window without continuous reads.
+    for (const delay of [0, 500, 1500]) {
+      window.setTimeout(() => syncFromProject({
+        force: true,
+        fileId: String(detail.fileId || ""),
+        entityType: String(detail.entityType || "")
+      }).catch(() => {}), delay);
+    }
+  });
+
+  window.addEventListener(COLLABORATION_PRESENCE_EVENT, (event) => {
+    let detail = {};
+    try { detail = JSON.parse(String(event.detail || "{}")); } catch (_error) { return; }
+    if (detail.disconnected) return;
+    if (applyCommentsAuthorProfile(String(detail.authorId || ""), {
+      name: detail.name,
+      color: detail.color
+    })) renderAll();
+  });
+
   extensionApi?.storage?.onChanged?.addListener?.((changes, areaName) => {
     if (areaName !== "local" || !changes[PROFILE_KEY]) return;
+    const previousProfile = profile;
     profile = normalizeProfile(changes[PROFILE_KEY].newValue, profile);
     if (draftThread) draftThread.color = profile.color;
-    renderAll();
+    window.dispatchEvent(new CustomEvent(COLLABORATION_PROFILE_EVENT, {
+      detail: JSON.stringify({ name: profile.name, color: profile.color, authorId })
+    }));
+    if (applyCommentsAuthorProfile(authorId, profile, previousProfile)) markDirty(250);
+    else renderAll();
   });
 
   const themeObserver = new MutationObserver(() => {
@@ -3174,6 +3436,9 @@
       await loadPendingDataSnapshot();
       await ensureAuthorId();
       profile = normalizeProfile(await globalThis.SmartTeXCommentProfile?.ensure?.(extensionApi?.storage?.local), profile);
+      window.dispatchEvent(new CustomEvent(COLLABORATION_PROFILE_EVENT, {
+        detail: JSON.stringify({ name: profile.name, color: profile.color, authorId })
+      }));
       try {
         const response = await bridgeRequest("getState", {}, 4000);
         if (response?.state) {

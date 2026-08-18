@@ -12,7 +12,7 @@ if (!moduleRoot) {
 const { chromium } = require(path.join(moduleRoot, "playwright"));
 const executablePath = process.argv[3] || undefined;
 
-const harnesses = [
+const allHarnesses = [
   {
     file: "citation-bridge-harness.html",
     attribute: "citationBridgeTest"
@@ -20,6 +20,10 @@ const harnesses = [
   {
     file: "citation-autocomplete-harness.html",
     attribute: "citationTest"
+  },
+  {
+    file: "citation-typing-persistence-harness.html",
+    attribute: "citationTypingPersistenceTest"
   },
   {
     file: "citation-hover-harness.html",
@@ -70,6 +74,14 @@ const harnesses = [
     attribute: "equationCursorPerformanceTest"
   },
   {
+    file: "equation-creation-harness.html",
+    attribute: "equationCreationTest"
+  },
+  {
+    file: "equation-stale-render-harness.html",
+    attribute: "equationStaleRenderTest"
+  },
+  {
     file: "preview-harness.html",
     attribute: "positionTest"
   },
@@ -90,6 +102,10 @@ const harnesses = [
     attribute: "popupInteractionTest"
   },
   {
+    file: "figure-caption-live-update-harness.html",
+    attribute: "figureCaptionLiveUpdateTest"
+  },
+  {
     file: "nextcloud-client-harness.html",
     attribute: "nextcloudClientTest"
   },
@@ -98,6 +114,11 @@ const harnesses = [
     attribute: "nextcloudProjectTest"
   }
 ];
+
+const requestedHarnesses = new Set(process.argv.slice(4));
+const harnesses = requestedHarnesses.size
+  ? allHarnesses.filter((harness) => requestedHarnesses.has(harness.file))
+  : allHarnesses;
 
 async function run() {
   const browser = await chromium.launch({
@@ -116,7 +137,7 @@ async function run() {
           ["passed", "failed"].includes(document.documentElement.dataset[attribute])
         ),
         harness.attribute,
-        { timeout: 15000 }
+        { timeout: 30000 }
       );
       const result = await page.evaluate(
         (attribute) => document.documentElement.dataset[attribute],

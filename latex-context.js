@@ -95,70 +95,307 @@
     return result;
   }
 
+  function lowerRomanNumber(value) {
+    return romanNumber(value).toLocaleLowerCase();
+  }
+
+  function lowerAlphaNumber(value) {
+    return alphaNumber(value).toLocaleLowerCase();
+  }
+
   function sectionNumbering(sourceValue) {
-    const source = String(sourceValue || "");
-    const masked = maskIgnoredLatex(source);
-    const revtex = /\\documentclass(?:\s*\[[^\]]*\])?\s*\{[^{}]*revtex/i.test(masked);
-    const counters = [0, 0, 0, 0];
-    const sections = [];
-    let appendix = false;
-    const tokenPattern = /\\appendix\b|\\(section|subsection|subsubsection|paragraph)(\*)?\s*\{([^{}]*)\}/g;
+    return documentCounterAnalysis(sourceValue).sections;
+  }
+
+  let documentCounterCacheSource = null;
+  let documentCounterCache = null;
+  let equationCounterCacheSource = null;
+  let equationCounterCache = null;
+
+  function counterCommandEvents(source, masked) {
+    const events = [];
+    const simplePattern = /\\appendix\b|\\(section|subsection|subsubsection|paragraph)(\*)?|\\(setcounter|addtocounter)\s*\{([^{}]+)\}\s*\{\s*(-?\d+)\s*\}|\\(numberwithin|counterwithin|counterwithout)(\*)?\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g;
     let match;
-
-    while ((match = tokenPattern.exec(masked))) {
-      taskCheckpoint(tokenPattern.lastIndex);
+    while ((match = simplePattern.exec(masked))) {
+      taskCheckpoint(simplePattern.lastIndex);
       if (match[0].startsWith("\\appendix")) {
-        appendix = true;
-        counters.fill(0);
-        continue;
-      }
-
-      const level = [
-        "section",
-        "subsection",
-        "subsubsection",
-        "paragraph"
-      ].indexOf(match[1]);
-      const starred = Boolean(match[2]);
-      let number = "";
-      if (!starred) {
-        counters[level] += 1;
-        for (let index = level + 1; index < counters.length; index += 1) {
-          counters[index] = 0;
+        events.push({ index: match.index, kind: "appendix" });
+      } else if (match[1]) {
+        let position = skipWhitespace(masked, match.index + match[0].length);
+        let title = "";
+        if (masked[position] === "{") {
+          const argument = readBalanced(masked, position, "{", "}");
+          if (argument) title = source.slice(position + 1, argument.end - 1).trim();
         }
-
-        if (appendix) {
-          const parts = [];
-          if (counters[0]) parts.push(alphaNumber(counters[0]));
-          for (let index = 1; index <= level; index += 1) {
-            if (counters[index]) parts.push(String(counters[index]));
-          }
-          number = parts.join(".");
-        } else if (revtex) {
-          const parts = [];
-          if (counters[0]) parts.push(romanNumber(counters[0]));
-          if (level >= 1 && counters[1]) parts.push(alphaNumber(counters[1]));
-          for (let index = 2; index <= level; index += 1) {
-            if (counters[index]) parts.push(String(counters[index]));
-          }
-          number = parts.join(".");
-        } else {
-          number = counters.slice(0, level + 1).filter(Boolean).join(".");
-        }
+        events.push({
+          index: match.index,
+          kind: "section",
+          counter: match[1],
+          starred: Boolean(match[2]),
+          title
+        });
+      } else if (match[3]) {
+        events.push({
+          index: match.index,
+          kind: match[3],
+          counter: String(match[4] || "").trim(),
+          value: Number(match[5]) || 0
+        });
+      } else if (match[6]) {
+        events.push({
+          index: match.index,
+          kind: match[6],
+          starred: Boolean(match[7]),
+          counter: String(match[8] || "").trim(),
+          parent: String(match[9] || "").trim()
+        });
       }
-
-      sections.push({
-        command: match[1],
-        level,
-        starred,
-        appendix,
-        number,
-        title: String(match[3] || "").trim(),
-        sourceIndex: match.index
-      });
     }
 
-    return sections;
+    const definitionPattern = /\\(?:renewcommand|providecommand)\*?|\\def\b/g;
+    while ((match = definitionPattern.exec(masked))) {
+      let position = skipWhitespace(masked, match.index + match[0].length);
+      let command = "";
+      if (masked[position] === "{") {
+        const argument = readBalanced(masked, position, "{", "}");
+        if (!argument) continue;
+        command = source.slice(position + 1, argument.end - 1).trim();
+        position = skipWhitespace(masked, argument.end);
+      } else {
+        const commandMatch = /^\\[A-Za-z@]+/.exec(masked.slice(position));
+        if (!commandMatch) continue;
+        command = commandMatch[0];
+        position = skipWhitespace(masked, position + commandMatch[0].length);
+      }
+      const counterMatch = /^\\the([A-Za-z@]+)$/.exec(command);
+      if (!counterMatch || masked[position] !== "{") continue;
+      const definition = readBalanced(masked, position, "{", "}");
+      if (!definition) continue;
+      events.push({
+        index: match.index,
+        kind: "format",
+        counter: counterMatch[1],
+        template: source.slice(position + 1, definition.end - 1).trim()
+      });
+    }
+    return events;
+  }
+
+  function documentCounterAnalysis(
+    sourceValue,
+    parsedEquations = null,
+    includeFloats = true
+  ) {
+    const source = String(sourceValue || "");
+    if (includeFloats) {
+      if (source === documentCounterCacheSource && documentCounterCache) {
+        return documentCounterCache;
+      }
+    } else {
+      if (source === documentCounterCacheSource && documentCounterCache) {
+        return documentCounterCache;
+      }
+      if (source === equationCounterCacheSource && equationCounterCache) {
+        return equationCounterCache;
+      }
+    }
+    const masked = maskIgnoredLatex(source);
+    const revtex = /\\documentclass(?:\s*\[[^\]]*\])?\s*\{[^{}]*revtex/i.test(masked);
+    const counters = Object.create(null);
+    const parents = new Map([
+      ["subsection", "section"],
+      ["subsubsection", "subsection"],
+      ["paragraph", "subsubsection"]
+    ]);
+    const templates = new Map([
+      ["section", revtex ? "\\Roman{section}" : "\\arabic{section}"],
+      ["subsection", revtex
+        ? "\\thesection.\\Alph{subsection}"
+        : "\\thesection.\\arabic{subsection}"],
+      ["subsubsection", "\\thesubsection.\\arabic{subsubsection}"],
+      ["paragraph", "\\thesubsubsection.\\arabic{paragraph}"],
+      ["equation", "\\arabic{equation}"],
+      ["figure", "\\arabic{figure}"],
+      ["table", "\\arabic{table}"]
+    ]);
+    const sectionLevels = ["section", "subsection", "subsubsection", "paragraph"];
+    sectionLevels.forEach((name) => { counters[name] = 0; });
+    counters.equation = 0;
+    counters.figure = 0;
+    counters.table = 0;
+    let appendix = false;
+
+    const resetChildren = (parent) => {
+      for (const [child, candidateParent] of parents) {
+        if (candidateParent !== parent) continue;
+        counters[child] = 0;
+        resetChildren(child);
+      }
+    };
+    const formatCounter = (name, stack = new Set()) => {
+      if (stack.has(name)) return String(counters[name] || 0);
+      const nextStack = new Set(stack);
+      nextStack.add(name);
+      const template = templates.get(name) || `\\arabic{${name}}`;
+      let rendered = String(template);
+      rendered = rendered.replace(/\\the([A-Za-z@]+)/g, (_whole, nested) => (
+        formatCounter(nested, nextStack)
+      ));
+      rendered = rendered.replace(
+        /\\(arabic|roman|Roman|alph|Alph)\s*\{([^{}]+)\}/g,
+        (_whole, style, counterName) => {
+          const value = Math.max(0, Number(counters[String(counterName).trim()]) || 0);
+          if (style === "roman") return lowerRomanNumber(value);
+          if (style === "Roman") return romanNumber(value);
+          if (style === "alph") return value > 0 ? lowerAlphaNumber(value) : "";
+          if (style === "Alph") return value > 0 ? alphaNumber(value) : "";
+          return String(value);
+        }
+      );
+      return rendered
+        .replace(/\\protect\b/g, "")
+        .replace(/[{}]/g, "")
+        .trim();
+    };
+    const increment = (name) => {
+      counters[name] = Math.max(0, Number(counters[name]) || 0) + 1;
+      resetChildren(name);
+      return formatCounter(name);
+    };
+
+    const parsed = parsedEquations || equationContexts(source);
+    const equations = parsed.contexts;
+    const figures = includeFloats
+      ? figureContexts(source).sort((left, right) => left.openStart - right.openStart)
+      : [];
+    const tables = includeFloats
+      ? genericEnvironmentContexts(source, ["table", "table*"])
+        .sort((left, right) => left.openStart - right.openStart)
+      : [];
+    const events = counterCommandEvents(source, masked);
+    equations.forEach((context) => events.push({
+      index: context.openStart,
+      kind: "equation",
+      context
+    }));
+    for (const [kind, contexts] of [["figure", figures], ["table", tables]]) {
+      contexts.forEach((context) => {
+        const body = source.slice(context.contentStart, context.contentEnd);
+        const captionMatch = /\\caption(?!\*)\s*(?:\[[^\]\r\n]*\]\s*)?\{/.exec(
+          maskIgnoredLatex(body)
+        );
+        events.push({
+          index: captionMatch ? context.contentStart + captionMatch.index : context.openStart,
+          kind,
+          context,
+          numbered: Boolean(captionMatch)
+        });
+      });
+    }
+    events.sort((left, right) => left.index - right.index);
+
+    const equationNumberingByOpenStart = new Map();
+    const figureNumbersByOpenStart = new Map();
+    const tableNumbersByOpenStart = new Map();
+    const sections = [];
+    for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+      taskCheckpoint(eventIndex, 32);
+      const event = events[eventIndex];
+      if (event.kind === "appendix") {
+        appendix = true;
+        if (revtex) {
+          parents.set("equation", "section");
+          templates.set("equation", "\\thesection\\arabic{equation}");
+        }
+        counters.section = 0;
+        resetChildren("section");
+        templates.set("section", "\\Alph{section}");
+        templates.set("subsection", "\\thesection.\\arabic{subsection}");
+        continue;
+      }
+      if (event.kind === "format") {
+        templates.set(event.counter, event.template);
+        continue;
+      }
+      if (event.kind === "setcounter" || event.kind === "addtocounter") {
+        const current = Number(counters[event.counter]) || 0;
+        counters[event.counter] = event.kind === "setcounter"
+          ? event.value
+          : current + event.value;
+        continue;
+      }
+      if (["numberwithin", "counterwithin", "counterwithout"].includes(event.kind)) {
+        if (event.kind === "counterwithout") {
+          if (parents.get(event.counter) === event.parent) parents.delete(event.counter);
+        } else {
+          parents.set(event.counter, event.parent);
+          if (!event.starred) {
+            templates.set(
+              event.counter,
+              `\\the${event.parent}.\\arabic{${event.counter}}`
+            );
+          }
+        }
+        continue;
+      }
+      if (event.kind === "section") {
+        const level = sectionLevels.indexOf(event.counter);
+        const number = event.starred ? "" : increment(event.counter);
+        sections.push({
+          command: event.counter,
+          level,
+          starred: event.starred,
+          appendix,
+          number,
+          title: event.title,
+          sourceIndex: event.index
+        });
+        continue;
+      }
+      if (event.kind === "equation") {
+        const completeContext = {
+          ...event.context,
+          source: source.slice(event.context.contentStart, event.context.contentEnd)
+        };
+        const result = equationPreviewNumberingAtCounter(
+          completeContext,
+          counters.equation,
+          (value) => {
+            counters.equation = value;
+            return formatCounter("equation");
+          }
+        );
+        counters.equation = result.counter;
+        equationNumberingByOpenStart.set(event.context.openStart, result.numbering);
+        continue;
+      }
+      if ((event.kind === "figure" || event.kind === "table") && event.numbered) {
+        const number = increment(event.kind);
+        const targetMap = event.kind === "figure"
+          ? figureNumbersByOpenStart
+          : tableNumbersByOpenStart;
+        targetMap.set(event.context.openStart, number);
+      }
+    }
+
+    const analysis = {
+      ...parsed,
+      equations,
+      figures,
+      tables,
+      sections,
+      equationNumberingByOpenStart,
+      figureNumbersByOpenStart,
+      tableNumbersByOpenStart
+    };
+    if (includeFloats) {
+      documentCounterCacheSource = source;
+      documentCounterCache = analysis;
+    } else {
+      equationCounterCacheSource = source;
+      equationCounterCache = analysis;
+    }
+    return analysis;
   }
 
   function blankRange(characters, start, end) {
@@ -348,6 +585,30 @@
     return { contexts, masked };
   }
 
+  function autoClosedInlineEquationContext(source, cursor, masked) {
+    const opening = cursor - 1;
+    if (
+      opening < 0 ||
+      source[opening] !== "$" ||
+      source[cursor] !== "$" ||
+      isEscaped(masked, opening) ||
+      isEscaped(masked, cursor)
+    ) return null;
+    return {
+      kind: "delimiter",
+      delimiter: "$",
+      display: false,
+      openStart: opening,
+      contentStart: cursor,
+      close: "$",
+      contentEnd: cursor,
+      closeEnd: cursor + 1,
+      complete: true,
+      source: "",
+      cursorOffset: 0
+    };
+  }
+
   function findEquationContext(sourceValue, cursorValue) {
     const source = String(sourceValue || "");
     const cursor = Math.max(0, Math.min(Number(cursorValue) || 0, source.length));
@@ -358,6 +619,8 @@
     ) {
       return null;
     }
+    const autoClosedInline = autoClosedInlineEquationContext(source, cursor, masked);
+    if (autoClosedInline) return autoClosedInline;
     const context = contexts.find((candidate) => (
       cursor >= candidate.contentStart && cursor <= candidate.contentEnd
     ));
@@ -1168,7 +1431,11 @@
     return rows.filter((row) => !row.suppressed).length;
   }
 
-  function equationPreviewNumberingAtCounter(context, counterValue = 0) {
+  function equationPreviewNumberingAtCounter(
+    context,
+    counterValue = 0,
+    formatNumber = (value) => String(value)
+  ) {
     const environment = String(context?.environment || "");
     const starred = environment.endsWith("*");
     const directives = equationLineDirectives(context);
@@ -1195,7 +1462,7 @@
       const numberIndex = tagIndex >= 0 ? tagIndex : directives.rows.length - 1;
       const tag = tagIndex >= 0 ? directives.rows[tagIndex].tag : null;
       if (tag || (automaticallyNumbered && !suppressed)) {
-        numbers[numberIndex] = tag || { value: String(counter), starred: false };
+        numbers[numberIndex] = tag || { value: formatNumber(counter), starred: false };
       }
     } else {
       directives.rows.forEach((row, index) => {
@@ -1203,7 +1470,7 @@
         if (row.tag) {
           numbers[index] = row.tag;
         } else if (automaticallyNumbered && !row.suppressed) {
-          numbers[index] = { value: String(counter), starred: false };
+          numbers[index] = { value: formatNumber(counter), starred: false };
         }
       });
     }
@@ -1220,25 +1487,17 @@
   function analyzeEquations(sourceValue) {
     const source = String(sourceValue || "");
     const parsed = equationContexts(source);
-    const numberingByOpenStart = new Map();
-    let counter = 0;
-
-    for (let candidateIndex = 0; candidateIndex < parsed.contexts.length; candidateIndex += 1) {
-      taskCheckpoint(candidateIndex, 32);
-      const candidate = parsed.contexts[candidateIndex];
-      const completeContext = {
-        ...candidate,
-        source: source.slice(candidate.contentStart, candidate.contentEnd)
-      };
-      const result = equationPreviewNumberingAtCounter(completeContext, counter);
-      counter = result.counter;
-      numberingByOpenStart.set(candidate.openStart, result.numbering);
-    }
+    const counters = documentCounterAnalysis(source, parsed, false);
 
     return {
       ...parsed,
-      numberingByOpenStart,
-      finalCounter: counter
+      numberingByOpenStart: counters.equationNumberingByOpenStart,
+      finalCounter: parsed.contexts.reduce((total, context) => (
+        total + equationCounterIncrement({
+          ...context,
+          source: source.slice(context.contentStart, context.contentEnd)
+        })
+      ), 0)
     };
   }
 
@@ -1248,6 +1507,8 @@
     const analysis = analysisValue || analyzeEquations(source);
     const masked = String(analysis?.masked || "");
     if (cursor < source.length && masked[cursor] === MASK_CHARACTER) return null;
+    const autoClosedInline = autoClosedInlineEquationContext(source, cursor, masked);
+    if (autoClosedInline) return autoClosedInline;
     const contexts = Array.isArray(analysis?.contexts) ? analysis.contexts : [];
     let context = null;
     let low = 0;
@@ -1274,8 +1535,8 @@
 
   function equationPreviewNumbering(sourceValue, context) {
     const source = String(sourceValue || "");
-    const analysis = analyzeEquations(source);
-    const cached = analysis.numberingByOpenStart.get(context?.openStart);
+    const analysis = documentCounterAnalysis(source, null, false);
+    const cached = analysis.equationNumberingByOpenStart.get(context?.openStart);
     if (cached) return cached;
 
     let counter = 0;
@@ -1427,17 +1688,9 @@
   }
 
   function figurePreviewNumber(sourceValue, context) {
-    const source = String(sourceValue || "");
-    let number = 0;
-    for (const figure of figureContexts(source).sort(
-      (left, right) => left.openStart - right.openStart
-    )) {
-      const body = source.slice(figure.contentStart, figure.contentEnd);
-      const numbered = hasNumberedCaption(body);
-      if (numbered) number += 1;
-      if (figure.openStart === context?.openStart) return numbered ? number : null;
-    }
-    return null;
+    const number = documentCounterAnalysis(sourceValue)
+      .figureNumbersByOpenStart.get(context?.openStart) ?? null;
+    return /^\d+$/.test(String(number ?? "")) ? Number(number) : number;
   }
 
   function hasNumberedCaption(sourceValue) {
@@ -1447,8 +1700,8 @@
 
   function tablePreviewNumber(sourceValue, context) {
     const source = String(sourceValue || "");
-    const floats = genericEnvironmentContexts(source, ["table", "table*"])
-      .sort((left, right) => left.openStart - right.openStart);
+    const analysis = documentCounterAnalysis(source);
+    const floats = analysis.tables;
     const enclosing = floats
       .filter((candidate) => (
         candidate.openStart <= context.openStart &&
@@ -1460,11 +1713,8 @@
     if (!enclosing) return null;
     const enclosingSource = source.slice(enclosing.contentStart, enclosing.contentEnd);
     if (!hasNumberedCaption(enclosingSource)) return null;
-    const earlierNumberedTables = floats.filter((candidate) => (
-      candidate.openStart < enclosing.openStart &&
-      hasNumberedCaption(source.slice(candidate.contentStart, candidate.contentEnd))
-    )).length;
-    return earlierNumberedTables + 1;
+    const number = analysis.tableNumbersByOpenStart.get(enclosing.openStart) ?? null;
+    return /^\d+$/.test(String(number ?? "")) ? Number(number) : number;
   }
 
   function floatCaption(sourceValue, context, kindValue) {
@@ -1508,6 +1758,8 @@
     return {
       text: renderedText.trim(),
       starred: Boolean(match[1]),
+      rawStart,
+      rawEnd,
       start: rawStart + leadingWhitespace,
       end: Math.max(
         rawStart + leadingWhitespace,

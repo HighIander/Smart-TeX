@@ -18,7 +18,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "u
 assert.doesNotMatch(background, /analysis-worker\.js|analysis-client\.js|editor-state-client\.js/);
 assert.match(background, /js:\s*\["interaction-tasks\.js",\s*"latex-context\.js",\s*"page-bridge\.js"\]/);
 assert.match(background, /"interaction-tasks\.js",\s*\n\s*"font-loader\.js"/);
-assert.equal(manifest.version, "2.0.2");
+assert.equal(manifest.version, "2.1.0");
 assert.match(content, /activeStrength/);
 assert.match(bridge, /activeAlpha/);
 assert.match(content, /popup-preview-render/);

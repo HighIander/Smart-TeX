@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX live figure-caption update regression harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+</head>
+<body>
+  <div id="ide-redesign-panel-source-editor"><div class="cm-editor"></div></div>
+  <output id="figure-caption-live-update-test-result">Figure caption update test running</output>
+  <script>
+    globalThis.browser = {
+      storage: {
+        local: { async get() { return {}; } },
+        onChanged: { addListener() {} }
+      },
+      runtime: { async sendMessage() { return { ok: true }; } }
+    };
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    let failFirstFigureFetch = true;
+    globalThis.fetch = (url, options) => {
+      if (failFirstFigureFetch && String(url).startsWith("data:image/svg+xml,")) {
+        failFirstFigureFetch = false;
+        return Promise.reject(new TypeError("Simulated transient first figure fetch failure"));
+      }
+      return nativeFetch(url, options);
+    };
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(event.detail);
+      const payload = request.type === "resolveProjectFile"
+        ? {
+          file: {
+            path: request.path,
+            url: "data:image/svg+xml," + encodeURIComponent(
+              '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#5c8fd6"/></svg>'
+            )
+          }
+        }
+        : { screen: { pageX: 420, pageY: 280, lineHeight: 20 } };
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({
+          requestId: request.requestId,
+          ok: true,
+          ...payload
+        })
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    window.setTimeout(() => {
+      const script = document.createElement("script");
+      script.src = "../figure-renderer.js";
+      document.head.appendChild(script);
+    }, 120);
+
+    let source = String.raw`\begin{document}
+\begin{figure}
+\centering
+\includegraphics{fig/first-load.svg}
+\caption{Alpha beta}
+\label{fig:live-caption}
+\end{figure}
+\end{document}`;
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const caretSelector = [
+      ".smarttex-table-rendered-caret",
+      ".smarttex-rendered-caret",
+      ".smarttex-rendered-operator-caret"
+    ].join(", ");
+
+    function sendState(cursorIndex, options = {}) {
+      const focused = options.focused !== false;
+      const screen = options.screen === null
+        ? null
+        : { pageX: 420, pageY: 280, lineHeight: 20 };
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value: source,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          selectionAnchor: cursorIndex,
+          selectionHead: cursorIndex,
+          screen,
+          fileName: "main.tex",
+          focused,
+          editorKind: "harness"
+        })
+      }));
+    }
+
+    async function waitFor(check, timeout = 2500) {
+      const end = performance.now() + timeout;
+      while (performance.now() < end) {
+        const value = check();
+        if (value) return value;
+        await delay(20);
+      }
+      return null;
+    }
+
+    function textBeforeNode(root, node) {
+      const range = document.createRange();
+      range.setStart(root, 0);
+      range.setEndBefore(node);
+      return range.toString();
+    }
+
+    async function run() {
+      const checks = {};
+      const initialCursor = source.indexOf("Alpha beta") + "Alpha".length;
+      await delay(25);
+      sendState(initialCursor);
+      // The real page bridge polls editor state, so publish it again after the
+      // deliberately delayed figure renderer becomes available.
+      await delay(180);
+      sendState(initialCursor);
+      const preview = await waitFor(() => (
+        document.querySelector("#smarttex-equation-preview:not([hidden])")
+      ));
+      const figure = await waitFor(() => preview?.querySelector(".smarttex-figure-popup"));
+      const viewport = figure?.querySelector(":scope > .smarttex-figure-popup-viewport");
+      const caption = figure?.querySelector(":scope > .smarttex-float-popup-caption");
+      const firstCaret = caption?.querySelector(caretSelector);
+      checks.coldPlaceholderVisible = Boolean(
+        viewport?.querySelector(".smarttex-figure-popup-placeholder") &&
+        viewport.getBoundingClientRect().height >= 80
+      );
+      const firstImage = await waitFor(() => viewport?.querySelector(
+        ".smarttex-figure-popup-image"
+      ));
+      checks.initialCaret = Boolean(
+        preview && figure && viewport && caption && firstCaret &&
+        textBeforeNode(caption, firstCaret).includes("Alpha")
+      );
+      checks.firstAttemptContainsFigure = Boolean(firstImage);
+      let hiddenMutationCount = 0;
+      const visibilityObserver = new MutationObserver((mutations) => {
+        hiddenMutationCount += mutations.filter(
+          (mutation) => mutation.attributeName === "hidden"
+        ).length;
+      });
+      visibilityObserver.observe(preview, {
+        attributes: true,
+        attributeFilter: ["hidden"]
+      });
+
+      const editedSource = source
+        .replace("Alpha beta", "Alphas beta")
+        .replace("fig:live-caption", "fig:live-caption-updated");
+      window.dispatchEvent(new CustomEvent("smarttex:editor-scroll-state", {
+        detail: { active: true }
+      }));
+      checks.editorAutoScrollKeepsCaptionPreview = Boolean(
+        !preview.hidden &&
+        preview.querySelector(".smarttex-figure-popup") === figure
+      );
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-active", {
+        detail: JSON.stringify({ active: true })
+      }));
+      checks.innerAutocompleteCannotCloseCaptionPreview = Boolean(
+        !preview.hidden &&
+        preview.querySelector(".smarttex-figure-popup") === figure
+      );
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-active", {
+        detail: JSON.stringify({ active: false })
+      }));
+      document.querySelector(".cm-editor")?.dispatchEvent(new InputEvent("beforeinput", {
+        bubbles: true,
+        inputType: "insertText",
+        data: "s"
+      }));
+      source = source.replace("\\end{figure}", "");
+      sendState(initialCursor, { focused: false, screen: null });
+      checks.survivesIntermediateParserState = Boolean(
+        !preview.hidden &&
+        preview.querySelector(".smarttex-figure-popup") === figure &&
+        figure.querySelector(":scope > .smarttex-figure-popup-viewport") === viewport
+      );
+
+      source = editedSource;
+      const typedCursor = source.indexOf("Alphas beta") + "Alphas".length;
+      sendState(typedCursor, { focused: false, screen: null });
+      checks.neverClosedWhileTyping = Boolean(
+        !preview.hidden &&
+        preview.querySelector(".smarttex-figure-popup") === figure &&
+        figure.querySelector(":scope > .smarttex-figure-popup-viewport") === viewport
+      );
+      const updatedCaret = await waitFor(() => {
+        const node = caption?.querySelector(caretSelector);
+        return caption?.textContent.includes("Alphas beta") && node;
+      });
+      checks.captionUpdatedInPlace = Boolean(
+        updatedCaret &&
+        preview.querySelector(".smarttex-figure-popup") === figure &&
+        figure.querySelector(":scope > .smarttex-figure-popup-viewport") === viewport &&
+        figure.querySelector(":scope > .smarttex-float-popup-caption") === caption &&
+        textBeforeNode(caption, updatedCaret).includes("Alphas")
+      );
+      window.dispatchEvent(new CustomEvent("smarttex:runtime-settings", {
+        detail: {
+          usingPresets: true,
+          features: { equations: true, tables: true, figures: true },
+          referencePopups: { trigger: "cursor", environmentTrigger: "cursor" },
+          highlights: {}
+        }
+      }));
+      await delay(80);
+      checks.delayedSettingsCannotCloseCaptionPreview = Boolean(
+        !preview.hidden &&
+        preview.querySelector(".smarttex-figure-popup") === figure &&
+        figure.querySelector(":scope > .smarttex-figure-popup-viewport") === viewport &&
+        figure.querySelector(":scope > .smarttex-float-popup-caption") === caption
+      );
+
+      const movedCursor = source.indexOf("Alphas beta") + "Alphas beta".length;
+      sendState(movedCursor);
+      const movedCaret = await waitFor(() => {
+        const node = caption?.querySelector(caretSelector);
+        return node && textBeforeNode(caption, node).includes("Alphas beta") ? node : null;
+      });
+      checks.caretMovedInPlace = Boolean(
+        movedCaret &&
+        preview.querySelector(".smarttex-figure-popup") === figure &&
+        figure.querySelector(":scope > .smarttex-figure-popup-viewport") === viewport &&
+        figure.querySelector(":scope > .smarttex-float-popup-caption") === caption
+      );
+      await delay(0);
+      visibilityObserver.disconnect();
+      checks.popupWasNeverHidden = hiddenMutationCount === 0;
+
+      const passed = Object.values(checks).every(Boolean);
+      document.querySelector("#figure-caption-live-update-test-result").textContent = passed
+        ? "Figure caption live-update test passed"
+        : `Figure caption live-update test failed: ${JSON.stringify(checks)}`;
+      document.documentElement.dataset.figureCaptionLiveUpdateTest = passed
+        ? "passed"
+        : "failed";
+    }
+
+    run().catch((error) => {
+      document.querySelector("#figure-caption-live-update-test-result").textContent = error.message;
+      document.documentElement.dataset.figureCaptionLiveUpdateTest = "failed";
+    });
+  </script>
+</body>
+</html>

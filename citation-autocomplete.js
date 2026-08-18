@@ -70,6 +70,7 @@
   let lastOpenedFileName = "";
   let backgroundParseTimer = null;
   let scrollSuppressed = false;
+  let lastTextInputAt = 0;
   const pendingRequests = new Map();
 
   const popup = document.createElement("aside");
@@ -507,8 +508,8 @@
     const screen = currentState?.screen;
     if (!screen) return;
     const margin = 9;
-    const width = Math.min(540, window.innerWidth - margin * 2);
-    popup.style.width = `${Math.max(280, width)}px`;
+    const width = Math.max(1, Math.min(540, window.innerWidth - margin * 2));
+    popup.style.width = `${width}px`;
     const cursorLeft = Number(screen.pageX) - window.scrollX;
     const cursorTop = Number(screen.pageY) - window.scrollY;
     const lineHeight = Math.max(14, Number(screen.lineHeight) || 18);
@@ -517,7 +518,7 @@
     const aboveSpace = cursorTop - gap - margin;
     const availableSideSpace = Math.max(belowSpace, aboveSpace);
     const popupMaxHeight = Math.max(
-      130,
+      48,
       Math.min(460, window.innerHeight - margin * 2, availableSideSpace)
     );
     popup.style.maxHeight = `${Math.round(popupMaxHeight)}px`;
@@ -556,9 +557,11 @@
     if (!lastPopupPosition || blocksCursor || outsideViewport) {
       const fitsBelow =
         cursorTop + lineHeight + gap + rect.height <= window.innerHeight - margin;
-      const proposedTop = fitsBelow
-        ? cursorTop + lineHeight + gap
-        : cursorTop - gap - rect.height;
+      const fitsAbove = cursorTop - gap - rect.height >= margin;
+      const placeAbove = !fitsBelow && (fitsAbove || aboveSpace > belowSpace);
+      const proposedTop = placeAbove
+        ? cursorTop - gap - rect.height
+        : cursorTop + lineHeight + gap;
       const left = Math.max(
         margin,
         Math.min(cursorLeft, window.innerWidth - rect.width - margin)
@@ -568,6 +571,7 @@
         Math.min(proposedTop, window.innerHeight - rect.height - margin)
       );
       lastPopupPosition = { left, top };
+      popup.dataset.smarttexPlacement = placeAbove ? "above" : "below";
     }
 
     popup.style.left = `${Math.round(lastPopupPosition.left)}px`;
@@ -1075,8 +1079,12 @@
     }
   }, true);
 
-  document.addEventListener("beforeinput", () => { scrollSuppressed = false; }, true);
-  document.addEventListener("input", () => { scrollSuppressed = false; }, true);
+  const noteTextInput = () => {
+    lastTextInputAt = Date.now();
+    scrollSuppressed = false;
+  };
+  document.addEventListener("beforeinput", noteTextInput, true);
+  document.addEventListener("input", noteTextInput, true);
 
   document.addEventListener("mousedown", (event) => {
     scrollSuppressed = false;
@@ -1088,6 +1096,11 @@
   window.addEventListener("resize", positionPopup, { passive: true });
   window.addEventListener("smarttex:editor-scroll-state", (event) => {
     if (event?.detail?.active !== true) return;
+    if (currentContext && Date.now() - lastTextInputAt < 350) {
+      scrollSuppressed = false;
+      positionPopup();
+      return;
+    }
     scrollSuppressed = true;
     hidePopup();
   });

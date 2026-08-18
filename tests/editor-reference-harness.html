@@ -51,14 +51,18 @@
       data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='100'%3E%3Crect width='240' height='100' fill='%233158b8'/%3E%3C/svg%3E"
     ></div>
   </div>
-  <div class="cm-content">See Figure \ref{fig:test}.</div>
+  <div class="editor-pane"><div class="cm-editor"><div class="cm-content">See Figure \ref{fig:test}.</div></div></div>
   <output id="editor-reference-test-result">Editor reference test running</output>
 
   <script>
     globalThis.browser = {
       storage: {
         local: {
-          async get() { return {}; },
+          async get(key) {
+            return key === "smarttex:reference-popups:v1"
+              ? { [key]: { trigger: "hover" } }
+              : {};
+          },
           async set() {}
         }
       }
@@ -295,6 +299,10 @@ E = mc^2 + \frac{a_{1}^4+b_{1}^4}{1+x_{1}^2} + \frac{a_{2}^4+b_{2}^4}{1+x_{2}^2}
       const equationScroller = autocompletePopup?.querySelector(
         ".smarttex-reference-popup-equation"
       );
+      const equationHeading = autocompletePopup?.querySelector(
+        ".smarttex-reference-popup-heading"
+      );
+      const equationHeadingLeft = equationHeading?.getBoundingClientRect().left;
       const scrollableEquation = Boolean(
         equationScroller && equationScroller.scrollWidth > equationScroller.clientWidth
       );
@@ -304,6 +312,12 @@ E = mc^2 + \frac{a_{1}^4+b_{1}^4}{1+x_{1}^2} + \frac{a_{2}^4+b_{2}^4}{1+x_{2}^2}
           Math.max(1, equationScroller.scrollWidth - equationScroller.clientWidth)
         );
       }
+      const equationHeaderOutsideHorizontalScroll = Boolean(
+        equationHeading &&
+        Math.abs(equationHeading.getBoundingClientRect().left - equationHeadingLeft) < 1 &&
+        getComputedStyle(autocompletePopup).overflowX === "hidden" &&
+        ["auto", "scroll"].includes(getComputedStyle(equationScroller).overflowX)
+      );
       const scrollBeforeRepeat = Number(equationScroller?.scrollLeft) || 0;
       window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-preview", {
         detail: JSON.stringify({
@@ -329,6 +343,84 @@ E = mc^2 + \frac{a_{1}^4+b_{1}^4}{1+x_{1}^2} + \frac{a_{2}^4+b_{2}^4}{1+x_{2}^2}
       ));
       await delay(20);
       const autocompleteHidden = Boolean(autocompletePopup?.hidden);
+
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-preview", {
+        detail: JSON.stringify({
+          owner: "reference-autocomplete",
+          mode: "click",
+          zoomable: true,
+          label: "eq:nested",
+          command: "eqref",
+          anchorRect: { left: 420, right: 700, top: 180, bottom: 210 },
+          ownerRect: { left: 180, right: 710, top: 120, bottom: 420 }
+        })
+      }));
+      await delay(120);
+      const zoomPopup = document.querySelector(
+        ".smarttex-reference-popup-click-preview:not([hidden])"
+      );
+      const zoomIn = zoomPopup?.querySelector(
+        ".smarttex-equation-popup-zoom-controls button:last-of-type"
+      );
+      const zoomOutput = zoomPopup?.querySelector(
+        ".smarttex-equation-popup-zoom-controls output"
+      );
+      const zoomSurface = zoomPopup?.querySelector(
+        ".smarttex-equation-popup-zoom-surface"
+      );
+      zoomIn?.click();
+      await delay(40);
+      const clickedPreviewZooms = Boolean(
+        zoomPopup &&
+        zoomOutput?.textContent === "125%" &&
+        zoomSurface?.style.transform.includes("1.25")
+      );
+      zoomSurface?.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        deltaY: -120
+      }));
+      await delay(40);
+      const clickedPreviewWheelZooms = Boolean(
+        zoomOutput?.textContent === "150%" &&
+        zoomSurface?.style.transform.includes("1.5")
+      );
+      const autocompleteList = document.createElement("aside");
+      autocompleteList.id = "smarttex-reference-autocomplete-popup";
+      document.body.appendChild(autocompleteList);
+      const clickedPreviewIsInForeground = Boolean(
+        zoomPopup &&
+        Number(getComputedStyle(zoomPopup).zIndex) >
+          Number(getComputedStyle(autocompleteList).zIndex)
+      );
+      autocompleteList.remove();
+      const popupClose = zoomPopup?.querySelector(
+        ".smarttex-reference-popup-close"
+      );
+      popupClose?.click();
+      await delay(30);
+      const clickedPreviewClosesWithX = Boolean(zoomPopup?.hidden);
+
+      window.dispatchEvent(new CustomEvent("smarttex:reference-autocomplete-preview", {
+        detail: JSON.stringify({
+          owner: "reference-autocomplete",
+          mode: "click",
+          zoomable: true,
+          label: "eq:nested",
+          command: "eqref",
+          anchorRect: { left: 420, right: 700, top: 180, bottom: 210 },
+          ownerRect: { left: 180, right: 710, top: 120, bottom: 420 }
+        })
+      }));
+      await delay(120);
+      const mouseoutPopup = document.querySelector(
+        ".smarttex-reference-popup-click-preview:not([hidden])"
+      );
+      mouseoutPopup?.dispatchEvent(new PointerEvent("pointerleave", {
+        bubbles: false
+      }));
+      await delay(320);
+      const clickedPreviewClosesOnMouseout = Boolean(mouseoutPopup?.hidden);
 
       const checks = {
         popupSpinnerShown,
@@ -362,7 +454,16 @@ E = mc^2 + \frac{a_{1}^4+b_{1}^4}{1+x_{1}^2} + \frac{a_{2}^4+b_{2}^4}{1+x_{2}^2}
         autocompleteAllowsDifferentTarget: differentTargetAllowed,
         autocompleteAvoidsDuplicateTarget: sameTargetNotDuplicated,
         wideEquationScrollable: scrollableEquation,
-        popupScrollPositionPreserved: scrollPositionPreserved
+        equationHeaderOutsideHorizontalScroll,
+        popupScrollPositionPreserved: scrollPositionPreserved,
+        clickedPreviewHasZoomAndClose: Boolean(
+          zoomPopup && zoomIn && zoomOutput && zoomSurface && popupClose
+        ),
+        clickedPreviewZooms,
+        clickedPreviewWheelZooms,
+        clickedPreviewIsInForeground,
+        clickedPreviewClosesWithX,
+        clickedPreviewClosesOnMouseout
       };
       const passed = Object.values(checks).every(Boolean);
       const output = document.querySelector("#editor-reference-test-result");

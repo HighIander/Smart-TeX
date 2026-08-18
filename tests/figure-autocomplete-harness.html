@@ -17,6 +17,7 @@
   </style>
 </head>
 <body>
+  <div id="ide-redesign-panel-source-editor"><div class="cm-editor"></div></div>
   <div class="file-tree-list" hidden>
     <div role="treeitem" data-path="fig/alpha.png"
       data-download-url="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='120'%3E%3Crect width='240' height='120' fill='%233158b8'/%3E%3C/svg%3E"></div>
@@ -29,14 +30,22 @@
   <script>
     const featureKey = "smarttex:features:v1";
     const popupKey = "smarttex:reference-popups:v1";
+    const figureViewKey = "smarttex:figure-list-view:v1";
+    let figureViewPreference = "list";
     globalThis.browser = {
       storage: {
         local: {
           async get() {
             return {
               [featureKey]: { equations: true, tables: true, figures: true },
-              [popupKey]: { trigger: "cursor", environmentTrigger: "cursor" }
+              [popupKey]: { trigger: "cursor", environmentTrigger: "cursor" },
+              [figureViewKey]: figureViewPreference
             };
+          },
+          async set(values) {
+            if (values && figureViewKey in values) {
+              figureViewPreference = values[figureViewKey];
+            }
           }
         },
         onChanged: { addListener() {} }
@@ -44,21 +53,60 @@
       runtime: { async sendMessage() { return { ok: true }; } }
     };
     globalThis.__insertedFigurePath = "";
+    const figureResolveAttempts = new Map();
+    let editorScreen = { pageX: 240, pageY: 170, lineHeight: 20 };
     window.addEventListener("smarttex:citation-editor-request", (event) => {
       const request = JSON.parse(String(event.detail || "{}"));
       const response = { requestId: request.requestId, ok: true };
       if (request.type === "listProjectFigures") {
-        response.figures = ["fig/zeta.png", "fig/beta.png", "fig/alpha.png"];
-        response.complete = request.full === true;
+        if (request.full === true) {
+          // Exercise the real fallback: project archive downloads are not
+          // always available, so quick tree results must remain usable.
+          response.ok = false;
+          response.error = "project archive unavailable";
+        } else {
+          response.figures = [
+            "fig/zeta.png",
+            "fig/beta.png",
+            "fig/alpha.png",
+            "plots/phase.png",
+            "plots/archive/old.png",
+            "root.png",
+            "alpha.png",
+            "phase.png",
+            "old.png"
+          ];
+          response.complete = false;
+        }
       } else if (request.type === "getCoordinates") {
-        response.screen = { pageX: 240, pageY: 170, lineHeight: 20 };
+        response.screen = editorScreen;
       } else if (request.type === "replaceFigureToken") {
         globalThis.__insertedFigurePath = request.text;
         response.token = { start: 0, end: 0, fragment: request.text };
       } else if (request.type === "resolveProjectFile") {
-        response.file = null;
-        response.ok = false;
-        response.error = "not needed";
+        const retryable = (
+          request.path === "fig/unlisted-existing.png" ||
+          request.path === "fig/first-load-a.png" ||
+          request.path === "fig/first-load-b.png" ||
+          request.path === "fig/zeta.png"
+        );
+        const attempts = (figureResolveAttempts.get(request.path) || 0) + 1;
+        figureResolveAttempts.set(request.path, attempts);
+        if (!retryable || attempts > 1) {
+          const fill = request.path.includes("beta")
+            ? "%235b3da5"
+            : request.path.includes("alpha")
+              ? "%233158b8"
+              : "%23518358";
+          response.file = {
+            path: request.path,
+            url: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='120'%3E%3Crect width='240' height='120' fill='${fill}'/%3E%3C/svg%3E`
+          };
+        } else {
+          response.file = null;
+          response.ok = false;
+          response.error = "not needed";
+        }
       } else {
         response.active = Boolean(request.active);
       }
@@ -72,20 +120,40 @@
   <script src="../table-renderer.js"></script>
   <script src="../figure-renderer.js"></script>
   <script src="../content.js"></script>
+  <script>
+    globalThis.__abortNextFigureFilter = false;
+    globalThis.SmartTeXInteractionTasks = {
+      checkpoint() {},
+      subscribe() {},
+      runSync(name, callback) {
+        if (name === "figure-list-filter" && globalThis.__abortNextFigureFilter) {
+          globalThis.__abortNextFigureFilter = false;
+          const error = new Error("superseded figure filter");
+          error.name = "AbortError";
+          throw error;
+        }
+        return callback();
+      },
+      isAbortError(error) { return error?.name === "AbortError"; }
+    };
+  </script>
   <script src="../figure-autocomplete.js"></script>
   <script>
     const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-    function sendState() {
-      const value = String.raw`\includegraphics{fig/beta.png}\n\includegraphics{fig/}`;
-      const cursorIndex = value.length - 1;
+    function sendState(
+      value = String.raw`\includegraphics{fig/beta.png}\n\includegraphics{fig/}`,
+      cursorIndex = value.length - 1,
+      screen = { pageX: 240, pageY: 170, lineHeight: 20 }
+    ) {
+      editorScreen = screen;
       window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
         detail: JSON.stringify({
           value,
           cursorIndex,
           selectionFrom: cursorIndex,
           selectionTo: cursorIndex,
-          screen: { pageX: 240, pageY: 170, lineHeight: 20 },
+          screen,
           fileName: "main.tex",
           focused: true,
           editorKind: "codemirror"
@@ -123,7 +191,386 @@
         beta.querySelector(".smarttex-figure-autocomplete-check")?.textContent === "✓"
       );
 
-      const zeta = items?.find((item) => item.textContent.includes("fig/zeta.png"));
+      const rootValue = String.raw`\includegraphics{}`;
+      sendState(rootValue, rootValue.length - 1);
+      const rootEntries = await waitFor(() => {
+        const values = [...document.querySelectorAll(
+          ".smarttex-figure-autocomplete-item"
+        )];
+        return values.length === 3 ? values : null;
+      });
+      checks.rootDirectoriesBeforeFiles = Boolean(
+        rootEntries &&
+        rootEntries[0].dataset.smarttexFigureKind === "directory" &&
+        rootEntries[0].querySelector("code")?.textContent === "fig/" &&
+        rootEntries[1].dataset.smarttexFigureKind === "directory" &&
+        rootEntries[1].querySelector("code")?.textContent === "plots/" &&
+        rootEntries[2].dataset.smarttexFigureKind === "file" &&
+        rootEntries[2].querySelector("code")?.textContent === "root.png"
+      );
+      checks.quickTreeFallbackSurvivesArchiveFailure = Boolean(
+        rootEntries && !document.querySelector(".smarttex-figure-autocomplete-empty")
+      );
+      rootEntries?.[1]?.click();
+      const plotsEntries = await waitFor(() => {
+        const values = [...document.querySelectorAll(
+          ".smarttex-figure-autocomplete-item"
+        )];
+        return values.length === 3 &&
+          values[0].dataset.smarttexFigureKind === "parent" &&
+          values[1].dataset.smarttexFigureKind === "directory"
+          ? values
+          : null;
+      });
+      checks.directoryClickNavigatesOneLayer = Boolean(
+        plotsEntries &&
+        plotsEntries[0].querySelector("code")?.textContent === ".." &&
+        plotsEntries[1].querySelector("code")?.textContent === "plots/archive/" &&
+        plotsEntries[2].querySelector("code")?.textContent === "plots/phase.png"
+      );
+      plotsEntries?.[1]?.click();
+      const archiveEntries = await waitFor(() => {
+        const values = [...document.querySelectorAll(
+          ".smarttex-figure-autocomplete-item"
+        )];
+        return values.length === 2 ? values : null;
+      });
+      checks.parentEntryRemainsAtTop = Boolean(
+        archiveEntries &&
+        archiveEntries[0].dataset.smarttexFigureKind === "parent" &&
+        archiveEntries[0].querySelector("code")?.textContent === ".." &&
+        archiveEntries[1].querySelector("code")?.textContent ===
+          "plots/archive/old.png"
+      );
+      archiveEntries?.[1]?.click();
+      await waitFor(() => globalThis.__insertedFigurePath === "plots/archive/old.png");
+      checks.nestedFileInsertsWholePath = (
+        globalThis.__insertedFigurePath === "plots/archive/old.png"
+      );
+
+      const basenameOnlyValue = String.raw`\includegraphics{alpha}`;
+      sendState(basenameOnlyValue, basenameOnlyValue.length - 1);
+      checks.substringSearchFindsNestedFileDirectly = Boolean(await waitFor(() => {
+        const values = [...document.querySelectorAll(
+          ".smarttex-figure-autocomplete-item"
+        )];
+        return values.length === 1 &&
+          values[0].dataset.smarttexFigureKind === "file" &&
+          values[0].dataset.smarttexFigurePath === "fig/alpha.png" &&
+          values[0].querySelector("code")?.textContent === "fig/alpha.png" &&
+          values[0].querySelector(".smarttex-autocomplete-match")?.textContent === "alpha"
+          ? values[0]
+          : null;
+      }));
+      const fullPrefixValue = String.raw`\includegraphics{fig/al}`;
+      sendState(fullPrefixValue, fullPrefixValue.length - 1);
+      checks.fullPathPrefixFiltersAndDisplaysWholePath = Boolean(await waitFor(() => {
+        const values = [...document.querySelectorAll(
+          ".smarttex-figure-autocomplete-item"
+        )];
+        return values.length === 1 &&
+          values[0].dataset.smarttexFigureKind === "file" &&
+          values[0].querySelector("code")?.textContent === "fig/alpha.png" &&
+          values[0].querySelector(".smarttex-autocomplete-match")?.textContent === "fig/al"
+          ? values[0]
+          : null;
+      }));
+      sendState();
+      await waitFor(() => document.querySelectorAll(
+        ".smarttex-figure-autocomplete-item"
+      ).length === 3);
+
+      const expandingFigureScreen = {
+        pageX: 240,
+        pageY: window.scrollY + window.innerHeight - 190,
+        lineHeight: 20
+      };
+      sendState("plain text", "plain text".length);
+      await delay(40);
+      const narrowFigureValue = String.raw`\includegraphics{fig/alpha}`;
+      sendState(narrowFigureValue, narrowFigureValue.length - 1, expandingFigureScreen);
+      await waitFor(() => document.querySelectorAll(
+        ".smarttex-figure-autocomplete-item"
+      ).length === 1);
+      const shortFigureRect = popup.getBoundingClientRect();
+      const shortFigureWasBelow = popup.dataset.smarttexPlacement === "below";
+      let expandingFigureHiddenMutations = 0;
+      const expandingFigureObserver = new MutationObserver((mutations) => {
+        expandingFigureHiddenMutations += mutations.filter((mutation) => (
+          mutation.type === "attributes" && mutation.attributeName === "hidden"
+        )).length;
+      });
+      expandingFigureObserver.observe(popup, {
+        attributes: true,
+        attributeFilter: ["hidden"]
+      });
+      const broadFigureValue = String.raw`\includegraphics{fig/}`;
+      sendState(broadFigureValue, broadFigureValue.length - 1, expandingFigureScreen);
+      const expandedFigureFits = await waitFor(() => {
+        if (document.querySelectorAll(
+          ".smarttex-figure-autocomplete-item"
+        ).length !== 3 || popup.hidden) return null;
+        const rect = popup.getBoundingClientRect();
+        return rect.top >= 8 && rect.bottom <= window.innerHeight - 8 ? rect : null;
+      });
+      expandingFigureObserver.disconnect();
+      checks.expandingFigureListRefitsInPlace = Boolean(
+        document.querySelector("#smarttex-figure-autocomplete-popup") === popup &&
+        shortFigureWasBelow &&
+        expandedFigureFits &&
+        expandingFigureHiddenMutations === 0 &&
+        popup.dataset.smarttexPlacement === "above" &&
+        expandedFigureFits.top < shortFigureRect.top
+      );
+      sendState();
+      await waitFor(() => document.querySelectorAll(
+        ".smarttex-figure-autocomplete-item"
+      ).length === 3);
+      const viewButton = document.querySelector(".smarttex-figure-autocomplete-view");
+      checks.gridActionIcon = Boolean(
+        viewButton?.querySelector(".smarttex-figure-autocomplete-view-grid-icon:not([hidden])") &&
+        viewButton.querySelectorAll(".smarttex-figure-autocomplete-view-grid-icon rect").length === 4 &&
+        viewButton.getAttribute("aria-label") === "Switch to thumbnail grid view"
+      );
+      viewButton?.click();
+      checks.figureViewPreferenceSavedIndependently = figureViewPreference === "grid";
+      checks.switchesToThumbnailGrid = Boolean(await waitFor(() => (
+        document.querySelector(".smarttex-figure-autocomplete-list.smarttex-figure-autocomplete-grid") &&
+        document.querySelector(".smarttex-figure-autocomplete-view-list-icon:not([hidden])") &&
+        document.querySelectorAll(".smarttex-figure-autocomplete-view-list-icon line").length === 3 &&
+        viewButton?.getAttribute("aria-label") === "Switch to list view"
+          ? viewButton
+          : null
+      )));
+      checks.gridLoadsThumbnails = Boolean(await waitFor(() => (
+        document.querySelectorAll(".smarttex-figure-autocomplete-thumbnail-image").length >= 2
+      )));
+      checks.gridSuppressesSeparatePreview = Boolean(await waitFor(() => (
+        document.querySelector("#smarttex-graphic-autocomplete-preview")?.hidden
+          ? popup
+          : null
+      )));
+      const alphaGridCell = document.querySelector(
+        '.smarttex-figure-autocomplete-item[data-smarttex-figure-path="fig/alpha.png"]'
+      )?.closest(".smarttex-figure-autocomplete-grid-cell");
+      const alphaPreviewButton = alphaGridCell?.querySelector(
+        ".smarttex-figure-autocomplete-thumbnail-open"
+      );
+      alphaPreviewButton?.click();
+      const clickedFigurePreview = await waitFor(() => {
+        const preview = document.querySelector(
+          "#smarttex-graphic-autocomplete-preview.smarttex-graphic-autocomplete-click-preview:not([hidden])"
+        );
+        return preview?.querySelector(".smarttex-graphic-autocomplete-image") &&
+          preview.querySelector(".smarttex-figure-zoom-controls")
+          ? preview
+          : null;
+      });
+      checks.thumbnailPlusOpensZoomablePreview = Boolean(
+        alphaPreviewButton &&
+        clickedFigurePreview?.querySelector(".smarttex-preview-meta")?.textContent ===
+          "fig/alpha.png"
+      );
+      checks.thumbnailPreviewIsInForeground = Boolean(
+        clickedFigurePreview &&
+        Number(getComputedStyle(clickedFigurePreview).zIndex) >
+          Number(getComputedStyle(popup).zIndex)
+      );
+      const figureZoomOutput = clickedFigurePreview?.querySelector(
+        ".smarttex-figure-zoom-output"
+      );
+      const figureZoomViewport = clickedFigurePreview?.querySelector(
+        ".smarttex-figure-popup-viewport"
+      );
+      const figureZoomBeforeWheel = figureZoomOutput?.textContent || "";
+      const figureZoomRect = figureZoomViewport?.getBoundingClientRect();
+      figureZoomViewport?.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        deltaY: -120,
+        clientX: (figureZoomRect?.left || 0) + (figureZoomRect?.width || 0) / 2,
+        clientY: (figureZoomRect?.top || 0) + (figureZoomRect?.height || 0) / 2
+      }));
+      checks.thumbnailPreviewZoomsWithWheel = Boolean(await waitFor(() => (
+        figureZoomOutput?.textContent &&
+        figureZoomOutput.textContent !== figureZoomBeforeWheel &&
+        Number.parseInt(figureZoomOutput.textContent, 10) > 100
+          ? figureZoomOutput
+          : null
+      )));
+      const clickedPreviewClose = clickedFigurePreview?.querySelector(
+        ".smarttex-graphic-autocomplete-close:not([hidden])"
+      );
+      clickedPreviewClose?.click();
+      checks.thumbnailPreviewClosesWithX = Boolean(await waitFor(() => (
+        document.querySelector("#smarttex-graphic-autocomplete-preview")?.hidden
+      )));
+      alphaPreviewButton?.click();
+      const mouseoutFigurePreview = await waitFor(() => document.querySelector(
+        "#smarttex-graphic-autocomplete-preview.smarttex-graphic-autocomplete-click-preview:not([hidden])"
+      ));
+      mouseoutFigurePreview?.dispatchEvent(new PointerEvent("pointerleave", {
+        bubbles: false
+      }));
+      checks.thumbnailPreviewClosesOnMouseout = Boolean(await waitFor(() => (
+        document.querySelector("#smarttex-graphic-autocomplete-preview")?.hidden
+      )));
+      const gridValue = String.raw`\includegraphics{fig/a}`;
+      sendState(gridValue, gridValue.length - 1);
+      checks.gridPersistsWhileFiltering = Boolean(await waitFor(() => (
+        document.querySelector(".smarttex-figure-autocomplete-list.smarttex-figure-autocomplete-grid") &&
+        document.querySelector(
+          '.smarttex-figure-autocomplete-item[data-smarttex-figure-path="fig/alpha.png"]'
+        )
+      )));
+      viewButton?.click();
+      checks.switchesBackToList = Boolean(await waitFor(() => (
+        !document.querySelector(".smarttex-figure-autocomplete-list")
+          ?.classList.contains("smarttex-figure-autocomplete-grid") &&
+        document.querySelector(".smarttex-figure-autocomplete-view-grid-icon:not([hidden])")
+          ? viewButton
+          : null
+      )));
+      sendState();
+      await waitFor(() => document.querySelectorAll(
+        ".smarttex-figure-autocomplete-item"
+      ).length === 3);
+
+      const lowerScreen = {
+        pageX: 240,
+        pageY: window.scrollY + window.innerHeight - 24,
+        lineHeight: 20
+      };
+      sendState("plain text", "plain text".length);
+      await delay(40);
+      sendState(undefined, undefined, lowerScreen);
+      await delay(80);
+      const lowerRect = popup.getBoundingClientRect();
+      checks.lowFigureListMovesAboveAndFits = (
+        popup.dataset.smarttexPlacement === "above" &&
+        lowerRect.top >= 8 &&
+        lowerRect.bottom <= window.innerHeight - 8 &&
+        lowerRect.bottom < lowerScreen.pageY - window.scrollY
+      );
+      sendState();
+      await delay(40);
+      checks.environmentPreviewSuppressedInArgument = document.querySelector(
+        "#smarttex-equation-preview"
+      )?.hidden === true;
+
+      const environmentValue = String.raw`\begin{figure}
+\centering
+\includegraphics[width=1\linewidth]{fig/first-load-a.png}
+\includegraphics[width=1\linewidth]{fig/first-load-b.png}
+\caption{Two figures}
+\end{figure}`;
+      sendState(environmentValue, environmentValue.indexOf("Two figures") + 4);
+      checks.environmentPreviewOpenedOutsideArgument = Boolean(await waitFor(() => (
+        document.querySelector("#smarttex-equation-preview:not([hidden])")
+      )));
+      checks.firstEntryEventuallyPopulatesFigureMedia = Boolean(await waitFor(() => (
+        document.querySelectorAll(
+          "#smarttex-equation-preview:not([hidden]) .smarttex-figure-popup-image"
+        ).length === 2
+      )));
+      const secondPathStart = environmentValue.lastIndexOf("fig/first-load-b.png");
+      sendState(environmentValue, secondPathStart + 5);
+      checks.openEnvironmentPreviewClosesInsideArgument = Boolean(await waitFor(() => (
+        document.querySelector("#smarttex-equation-preview")?.hidden &&
+        !document.querySelector("#smarttex-figure-autocomplete-popup")?.hidden
+      )));
+
+      const unlistedValue = String.raw`\includegraphics{fig/unlisted-existing.png}`;
+      sendState(unlistedValue, unlistedValue.length - 1);
+      checks.resolvedExistingFigureReplacesEmptyMessage = Boolean(await waitFor(() => (
+        document.querySelector(
+          '.smarttex-figure-autocomplete-item[data-smarttex-figure-path="fig/unlisted-existing.png"]'
+        )
+      )));
+
+      window.dispatchEvent(new CustomEvent("smarttex:editor-scroll-state", {
+        detail: { active: true, reason: "test" }
+      }));
+      checks.hiddenOnlyWhileScrolling = popup.hidden;
+      window.dispatchEvent(new CustomEvent("smarttex:editor-scroll-state", {
+        detail: { active: false, reason: "settled" }
+      }));
+      checks.reopensAfterScroll = Boolean(await waitFor(() => !popup.hidden && popup));
+
+      const completeValue = String.raw`\includegraphics{fig/beta.png}`;
+      const pathStart = completeValue.indexOf("fig/beta.png");
+      let exactBackground = "";
+      let exactPathColor = "";
+      for (const [name, cursorIndex] of [
+        ["exactAtStart", pathStart],
+        ["exactInMiddle", pathStart + 4],
+        ["exactAtEnd", pathStart + "fig/beta.png".length]
+      ]) {
+        sendState(completeValue, cursorIndex);
+        checks[name] = Boolean(await waitFor(() => {
+          const exact = document.querySelector(
+            ".smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact"
+          );
+          return !popup.hidden && exact?.dataset.smarttexFigurePath === "fig/beta.png"
+            ? exact
+            : null;
+        }));
+        const exact = document.querySelector(
+          ".smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact"
+        );
+        exactBackground = getComputedStyle(exact).backgroundColor;
+        exactPathColor = getComputedStyle(
+          exact.querySelector(".smarttex-figure-autocomplete-path")
+        ).color;
+      }
+
+      const partialValue = String.raw`\includegraphics{fig/be}`;
+      sendState(partialValue, partialValue.length - 1);
+      await delay(30);
+      checks.partialIsNeutral = !document.querySelector(
+        ".smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact"
+      );
+      const partialSelected = document.querySelector(
+        ".smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-selected"
+      );
+      checks.partialSelectionIsGrayNotBlue = Boolean(
+        partialSelected &&
+        getComputedStyle(partialSelected).backgroundColor !== exactBackground &&
+        getComputedStyle(
+          partialSelected.querySelector(".smarttex-figure-autocomplete-path")
+        ).color !== exactPathColor
+      );
+
+      const caseVariantValue = String.raw`\includegraphics{FIG/BETA.PNG}`;
+      sendState(caseVariantValue, caseVariantValue.length - 1);
+      await delay(30);
+      checks.caseVariantIsNotExactText = !document.querySelector(
+        ".smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact"
+      );
+
+      sendState(completeValue, completeValue.length - 1);
+      await waitFor(() => document.querySelector(
+        ".smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-exact"
+      ));
+      globalThis.__abortNextFigureFilter = true;
+      const invalidExtensionValue = String.raw`\includegraphics{fig/beta.np}`;
+      sendState(invalidExtensionValue, invalidExtensionValue.length - 1);
+      checks.invalidExtensionClearsStaleEntry = Boolean(await waitFor(() => {
+        const empty = document.querySelector(".smarttex-figure-autocomplete-empty");
+        return empty?.textContent.includes("No matching figure") &&
+          !document.querySelector(".smarttex-figure-autocomplete-item") &&
+          document.querySelector("#smarttex-graphic-autocomplete-preview")?.hidden
+          ? empty
+          : null;
+      }));
+
+      sendState();
+      await waitFor(() => document.querySelectorAll(
+        ".smarttex-figure-autocomplete-item"
+      ).length === 3);
+
+      const zeta = [...document.querySelectorAll(".smarttex-figure-autocomplete-item")]
+        .find((item) => item.textContent.includes("fig/zeta.png"));
       zeta?.dispatchEvent(new MouseEvent("mouseenter", {
         bubbles: false, clientX: 320, clientY: 230
       }));
@@ -135,20 +582,90 @@
         return preview?.querySelector(".smarttex-preview-meta")?.textContent === "fig/zeta.png"
           ? preview : null;
       }));
+      checks.hoverPreviewRetryFinishes = Boolean(await waitFor(() => {
+        const preview = document.querySelector("#smarttex-graphic-autocomplete-preview:not([hidden])");
+        return preview?.querySelector(".smarttex-graphic-autocomplete-image") &&
+          !preview.hasAttribute("aria-busy") &&
+          preview.querySelector(".smarttex-graphic-preview-spinner")?.hidden
+          ? preview
+          : null;
+      }));
+
+      const typingValue = String.raw`\includegraphics{fig/a}`;
+      document.querySelector(".cm-editor")?.dispatchEvent(new InputEvent("beforeinput", {
+        bubbles: true,
+        inputType: "insertText",
+        data: "a"
+      }));
+      sendState(typingValue, typingValue.length - 1);
+      checks.typingFiltersWithoutClosing = Boolean(await waitFor(() => {
+        const selected = document.querySelector(
+          ".smarttex-figure-autocomplete-item.smarttex-figure-autocomplete-selected"
+        );
+        const preview = document.querySelector("#smarttex-graphic-autocomplete-preview:not([hidden])");
+        return !popup.hidden &&
+          selected?.dataset.smarttexFigurePath === "fig/alpha.png" &&
+          !selected.classList.contains("smarttex-figure-autocomplete-exact") &&
+          preview?.querySelector(".smarttex-preview-meta")?.textContent === "fig/alpha.png"
+          ? preview
+          : null;
+      }));
+      document.querySelector(".cm-editor")?.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: "a"
+      }));
+      window.dispatchEvent(new CustomEvent("smarttex:editor-scroll-state", {
+        detail: { active: true, reason: "typing-auto-scroll" }
+      }));
+      checks.typingScrollKeepsListAndPreview = Boolean(
+        !popup.hidden &&
+        !document.querySelector("#smarttex-graphic-autocomplete-preview")?.hidden
+      );
+      window.dispatchEvent(new CustomEvent("smarttex:editor-scroll-state", {
+        detail: { active: false, reason: "settled" }
+      }));
+
+      sendState();
+      await waitFor(() => document.querySelectorAll(
+        ".smarttex-figure-autocomplete-item"
+      ).length === 3);
 
       document.querySelector(".smarttex-figure-autocomplete-unused")?.click();
       await delay(30);
       const filteredPaths = [...document.querySelectorAll(".smarttex-figure-autocomplete-item code")]
         .map((node) => node.textContent);
-      checks.unusedFilter = !filteredPaths.includes("fig/beta.png") && filteredPaths.length === 2;
+      checks.unusedFilter = (
+        !filteredPaths.includes("fig/beta.png") &&
+        ["fig/alpha.png", "fig/zeta.png", "fig/unlisted-existing.png"]
+          .every((path) => filteredPaths.includes(path))
+      );
       checks.filterLabel = document.querySelector(".smarttex-figure-autocomplete-unused")
         ?.textContent === "Only show figures not yet included";
 
-      const alpha = [...document.querySelectorAll(".smarttex-figure-autocomplete-item")]
-        .find((item) => item.textContent.includes("fig/alpha.png"));
-      alpha?.click();
+      const currentAlphaValue = String.raw`\includegraphics{fig/beta.png}
+\includegraphics{fig/alpha.png}`;
+      sendState(currentAlphaValue, currentAlphaValue.length - 1);
+      checks.currentCommandSurvivesUnusedFilter = Boolean(await waitFor(() => {
+        const currentAlpha = document.querySelector(
+          '.smarttex-figure-autocomplete-item[data-smarttex-figure-path="fig/alpha.png"]'
+        );
+        return !popup.hidden && currentAlpha ? currentAlpha : null;
+      }));
+      checks.environmentPreviewStillSuppressed = document.querySelector(
+        "#smarttex-equation-preview"
+      )?.hidden === true;
+
+      viewButton?.click();
+      const alphaGridItem = await waitFor(() => document.querySelector(
+        '.smarttex-figure-autocomplete-list.smarttex-figure-autocomplete-grid ' +
+        '.smarttex-figure-autocomplete-item[data-smarttex-figure-path="fig/alpha.png"]'
+      ));
+      alphaGridItem?.click();
       await delay(30);
-      checks.insertion = globalThis.__insertedFigurePath === "fig/alpha.png";
+      checks.gridTileClickStillInserts = (
+        globalThis.__insertedFigurePath === "fig/alpha.png"
+      );
 
       const passed = Object.values(checks).every(Boolean);
       const output = document.querySelector("#figure-autocomplete-test-result");

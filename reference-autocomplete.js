@@ -43,9 +43,10 @@
   const PREVIEW_HIDE_EVENT = "smarttex:reference-autocomplete-preview-hide";
   const ACTIVE_EVENT = "smarttex:reference-autocomplete-active";
   const SETTINGS_KEY = "smarttex:autocomplete:v1";
+  const EQUATION_VIEW_MODE_KEY = "smarttex:equation-reference-list-view:v1";
   const RUNTIME_SETTINGS_EVENT = "smarttex:runtime-settings";
   const OPEN_DELAY_MS = 70;
-  const MAX_RESULTS = 14;
+  const TYPING_CONTEXT_GRACE_MS = 900;
   const REFERENCE_COMMAND = /\\(eqref|ref|pageref|autoref|cref|Cref|vref|Vref|nameref)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/;
 
   function matchingArgumentClose(source, openIndex) {
@@ -78,6 +79,7 @@
   let selectedIndex = 0;
   let lastPopupPosition = null;
   let popupTimer = null;
+  let typingContextValidationTimer = null;
   let immediateOpenUntil = 0;
   let dismissedContextId = "";
   let requestCounter = 0;
@@ -85,9 +87,15 @@
   let targetCache = new Map();
   let configuredOrderMode = "document";
   let orderMode = "document";
+  let viewMode = "grid";
   let previewGeneration = 0;
   let listRenderGeneration = 0;
+  let listRenderRetryFrame = null;
+  let popupRefitFrame = null;
+  let targetHydrationFrame = null;
+  let targetHydrationQueue = [];
   let scrollSuppressed = false;
+  let lastTextInputAt = 0;
   let runtimeSettingsOverrideActive = false;
   const pendingRequests = new Map();
 
@@ -100,6 +108,21 @@
     <header class="smarttex-reference-autocomplete-header">
       <span class="smarttex-reference-autocomplete-query">Reference</span>
       <button type="button" class="smarttex-reference-autocomplete-order" aria-pressed="false">Sort alphabetically</button>
+      <button type="button" class="smarttex-reference-autocomplete-view" aria-pressed="false" aria-label="Switch to equation thumbnail grid view" title="Switch to equation thumbnail grid view" hidden>
+        <svg class="smarttex-reference-autocomplete-view-grid-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle>
+          <rect x="7" y="7" width="3" height="3" rx="0.45"></rect>
+          <rect x="14" y="7" width="3" height="3" rx="0.45"></rect>
+          <rect x="7" y="14" width="3" height="3" rx="0.45"></rect>
+          <rect x="14" y="14" width="3" height="3" rx="0.45"></rect>
+        </svg>
+        <svg class="smarttex-reference-autocomplete-view-list-icon" viewBox="0 0 24 24" aria-hidden="true" hidden>
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="7" y1="8" x2="17" y2="8"></line>
+          <line x1="7" y1="12" x2="17" y2="12"></line>
+          <line x1="7" y1="16" x2="17" y2="16"></line>
+        </svg>
+      </button>
       <button type="button" class="smarttex-reference-autocomplete-close" title="Close (Esc)" aria-label="Close reference suggestions">&times;</button>
     </header>
     <div class="smarttex-reference-autocomplete-list" role="listbox" aria-label="Reference suggestions"></div>`;
@@ -107,17 +130,41 @@
 
   const queryLabel = popup.querySelector(".smarttex-reference-autocomplete-query");
   const orderLabel = popup.querySelector(".smarttex-reference-autocomplete-order");
+  const viewButton = popup.querySelector(".smarttex-reference-autocomplete-view");
+  const gridViewIcon = viewButton.querySelector(".smarttex-reference-autocomplete-view-grid-icon");
+  const listViewIcon = viewButton.querySelector(".smarttex-reference-autocomplete-view-list-icon");
   const list = popup.querySelector(".smarttex-reference-autocomplete-list");
   const closeButton = popup.querySelector(".smarttex-reference-autocomplete-close");
+
+  function schedulePopupRefit() {
+    if (popup.hidden || popupRefitFrame !== null) return;
+    popupRefitFrame = window.requestAnimationFrame(() => {
+      popupRefitFrame = null;
+      if (!popup.hidden) positionPopup();
+    });
+  }
+
+  if (typeof ResizeObserver === "function") {
+    const popupResizeObserver = new ResizeObserver(schedulePopupRefit);
+    popupResizeObserver.observe(popup);
+  }
 
   function normalizeOrder(value) {
     return value === "alphabetical" ? "alphabetical" : "document";
   }
 
+  function normalizeViewMode(value) {
+    return value === "list" ? "list" : "grid";
+  }
+
   async function loadSettings() {
     try {
-      const stored = await extensionApi?.storage?.local?.get?.(SETTINGS_KEY);
-      configuredOrderMode = normalizeOrder(stored?.[SETTINGS_KEY]?.referenceOrder);
+      const [storedSettings, storedViewMode] = await Promise.all([
+        extensionApi?.storage?.local?.get?.(SETTINGS_KEY),
+        extensionApi?.storage?.local?.get?.(EQUATION_VIEW_MODE_KEY)
+      ]);
+      configuredOrderMode = normalizeOrder(storedSettings?.[SETTINGS_KEY]?.referenceOrder);
+      viewMode = normalizeViewMode(storedViewMode?.[EQUATION_VIEW_MODE_KEY]);
       const runtimeOrder = globalThis.SmartTeXRuntimeSettings?.autocomplete?.referenceOrder;
       runtimeSettingsOverrideActive = globalThis.SmartTeXRuntimeSettings?.usingPresets === false;
       if (runtimeOrder) configuredOrderMode = normalizeOrder(runtimeOrder);
@@ -125,7 +172,14 @@
     } catch (_error) {
       configuredOrderMode = "document";
       orderMode = configuredOrderMode;
+      viewMode = "grid";
     }
+  }
+
+  function persistEquationViewMode() {
+    Promise.resolve(extensionApi?.storage?.local?.set?.({
+      [EQUATION_VIEW_MODE_KEY]: viewMode
+    })).catch(() => {});
   }
 
   function contextId(context = currentContext) {
@@ -141,6 +195,15 @@
   function clearPopupTimer() {
     window.clearTimeout(popupTimer);
     popupTimer = null;
+  }
+
+  function clearTypingContextValidation() {
+    window.clearTimeout(typingContextValidationTimer);
+    typingContextValidationTimer = null;
+  }
+
+  function textInputIsRecent() {
+    return Date.now() - lastTextInputAt < TYPING_CONTEXT_GRACE_MS;
   }
 
   function bridgeRequest(type, payload = {}, timeoutMs = 1800) {
@@ -196,6 +259,12 @@
 
   function hidePopup({ dismiss = false } = {}) {
     listRenderGeneration += 1;
+    if (listRenderRetryFrame !== null) window.cancelAnimationFrame(listRenderRetryFrame);
+    listRenderRetryFrame = null;
+    if (targetHydrationFrame !== null) window.cancelAnimationFrame(targetHydrationFrame);
+    targetHydrationFrame = null;
+    targetHydrationQueue = [];
+    clearTypingContextValidation();
     popup.removeAttribute("aria-busy");
     clearPopupTimer();
     if (dismiss && currentContext) dismissedContextId = contextId();
@@ -347,6 +416,14 @@
     return title ? `${primary} — ${title}` : primary;
   }
 
+  function inlineLoadingSpinner(label = "Loading") {
+    const spinner = document.createElement("span");
+    spinner.className = "smarttex-inline-loading-spinner";
+    spinner.setAttribute("aria-label", label);
+    spinner.setAttribute("role", "status");
+    return spinner;
+  }
+
   function matchRank(record, fragment) {
     const query = String(fragment || "").trim().toLocaleLowerCase();
     if (!query) return 0;
@@ -385,9 +462,17 @@
         }
         return left.documentOrder - right.documentOrder;
       });
-      return matches.slice(0, MAX_RESULTS).map((record, index) => {
+      // Reference lists must remain complete. A hard result cap made labels
+      // beyond the first page appear only after the user typed enough text to
+      // move them into the truncated result set.
+      return matches.map((record, index) => {
         interactionTasks?.checkpoint?.(index, 8);
-        return { record, target: targetFor(record) };
+        return {
+          record,
+          // Populate expensive target metadata lazily after the complete label
+          // list is visible. Cached targets remain available immediately.
+          target: targetCache.has(record.label) ? targetCache.get(record.label) : null
+        };
       });
     };
     try {
@@ -404,10 +489,250 @@
     return list.querySelectorAll(".smarttex-reference-autocomplete-item")[selectedIndex] || null;
   }
 
+  function appendHighlightedLabel(container, value, queryValue) {
+    const text = String(value || "");
+    const query = String(queryValue || "").trim().toLocaleLowerCase();
+    if (!query) {
+      container.textContent = text;
+      return;
+    }
+    const searchable = text.toLocaleLowerCase();
+    let offset = 0;
+    let matchIndex = searchable.indexOf(query, offset);
+    if (matchIndex < 0) {
+      container.textContent = text;
+      return;
+    }
+    while (matchIndex >= 0) {
+      if (matchIndex > offset) {
+        container.appendChild(document.createTextNode(text.slice(offset, matchIndex)));
+      }
+      const match = document.createElement("strong");
+      match.className = "smarttex-autocomplete-match";
+      match.textContent = text.slice(matchIndex, matchIndex + query.length);
+      container.appendChild(match);
+      offset = matchIndex + query.length;
+      matchIndex = searchable.indexOf(query, offset);
+    }
+    if (offset < text.length) {
+      container.appendChild(document.createTextNode(text.slice(offset)));
+    }
+  }
+
+  function stopTargetHydration() {
+    if (targetHydrationFrame !== null) window.cancelAnimationFrame(targetHydrationFrame);
+    targetHydrationFrame = null;
+    targetHydrationQueue = [];
+  }
+
+  function applyHydratedTarget(task, target) {
+    if (
+      task.generation !== listRenderGeneration ||
+      !task.item.isConnected ||
+      renderedRecords[task.index] !== task.entry
+    ) return;
+    task.entry.target = target;
+    task.description.textContent = targetDescription(target);
+    task.description.title = task.description.textContent;
+    if (task.thumbnail?.isConnected) {
+      task.thumbnail.replaceWith(equationThumbnail(target));
+      fitEquationThumbnails();
+    }
+    if (task.index === selectedIndex) previewSelected();
+  }
+
+  function processTargetHydrationQueue() {
+    targetHydrationFrame = null;
+    const task = targetHydrationQueue.shift();
+    if (!task) return;
+    if (
+      task.generation === listRenderGeneration &&
+      task.item.isConnected &&
+      renderedRecords[task.index] === task.entry
+    ) {
+      try {
+        applyHydratedTarget(task, targetFor(task.entry.record));
+      } catch (error) {
+        if (!interactionTasks?.isAbortError?.(error)) throw error;
+        // A cooperative cancellation only means that foreground input won the
+        // current frame. Keep the still-current item in the queue; dropping it
+        // here leaves both of its loading indicators in the DOM forever.
+        if (
+          task.generation === listRenderGeneration &&
+          task.item.isConnected &&
+          renderedRecords[task.index] === task.entry
+        ) {
+          targetHydrationQueue.push(task);
+        }
+      }
+    }
+    if (targetHydrationQueue.length) {
+      targetHydrationFrame = window.requestAnimationFrame(processTargetHydrationQueue);
+    }
+  }
+
+  function queueTargetHydration(task, { priority = false } = {}) {
+    if (!task?.entry || task.entry.target) return;
+    const existingIndex = targetHydrationQueue.findIndex(
+      (candidate) => candidate.entry === task.entry
+    );
+    if (existingIndex >= 0) {
+      if (priority && existingIndex > 0) {
+        const [existing] = targetHydrationQueue.splice(existingIndex, 1);
+        targetHydrationQueue.unshift(existing);
+      }
+    } else if (priority) {
+      targetHydrationQueue.unshift(task);
+    } else {
+      targetHydrationQueue.push(task);
+    }
+    if (targetHydrationFrame === null) {
+      targetHydrationFrame = window.requestAnimationFrame(processTargetHydrationQueue);
+    }
+  }
+
+  function equationThumbnailMode() {
+    return currentContext?.command === "eqref" && viewMode === "grid";
+  }
+
+  function updateViewButton() {
+    const available = currentContext?.command === "eqref";
+    const gridActive = available && viewMode === "grid";
+    viewButton.toggleAttribute("hidden", !available);
+    list.classList.toggle("smarttex-reference-autocomplete-grid", gridActive);
+    viewButton.setAttribute("aria-pressed", gridActive ? "true" : "false");
+    viewButton.setAttribute(
+      "aria-label",
+      gridActive ? "Switch to list view" : "Switch to equation thumbnail grid view"
+    );
+    viewButton.title = viewButton.getAttribute("aria-label");
+    gridViewIcon.toggleAttribute("hidden", gridActive);
+    listViewIcon.toggleAttribute("hidden", !gridActive);
+  }
+
+  function equationThumbnail(target) {
+    const thumbnail = document.createElement("span");
+    thumbnail.className = "smarttex-reference-autocomplete-thumbnail";
+    thumbnail.setAttribute("aria-hidden", "true");
+    if (!target?.context || target.type !== "equation") {
+      thumbnail.textContent = "Equation preview unavailable";
+      return thumbnail;
+    }
+    try {
+      const surface = document.createElement("span");
+      surface.className = "smarttex-reference-autocomplete-thumbnail-surface";
+      const body = contextTools.previewBody(
+        target.context,
+        null,
+        null,
+        false
+      );
+      const prepared = contextTools.prepareDocumentCommands(
+        sourceCache || "",
+        target.sourceIndex,
+        body
+      );
+      globalThis.katex.render(prepared.body, surface, {
+        displayMode: true,
+        throwOnError: true,
+        strict: "ignore",
+        trust: false,
+        maxExpand: 1000,
+        maxSize: 25,
+        macros: {
+          ...prepared.macros,
+          "\\label": { tokens: [], numArgs: 1 },
+          "\\nonumber": "",
+          "\\notag": ""
+        }
+      });
+      thumbnail.appendChild(surface);
+    } catch (_error) {
+      thumbnail.textContent = `Equation ${target.number || target.label || ""}`.trim();
+    }
+    return thumbnail;
+  }
+
+  function fitEquationThumbnails() {
+    window.requestAnimationFrame(() => {
+      for (const thumbnail of list.querySelectorAll(
+        ".smarttex-reference-autocomplete-thumbnail"
+      )) {
+        const surface = thumbnail.querySelector(
+          ".smarttex-reference-autocomplete-thumbnail-surface"
+        );
+        if (!surface) continue;
+        surface.style.transform = "none";
+        const availableWidth = Math.max(1, thumbnail.clientWidth - 12);
+        const availableHeight = Math.max(1, thumbnail.clientHeight - 10);
+        const naturalRect = surface.getBoundingClientRect();
+        const naturalWidth = Math.max(1, surface.scrollWidth, naturalRect.width);
+        const naturalHeight = Math.max(1, surface.scrollHeight, naturalRect.height);
+        const scale = Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight);
+        // Long matrices and aligned equations still have to fit. A minimum
+        // scale clipped precisely the equations for which the grid is useful.
+        surface.style.transform = `translate(-50%, -50%) scale(${Math.max(0.01, scale)})`;
+      }
+    });
+  }
+
+  function openEquationThumbnailPreview(entry, item) {
+    if (!entry?.record || !item || popup.hidden) return;
+    const thumbnail = item.querySelector(
+      ".smarttex-reference-autocomplete-thumbnail"
+    );
+    if (!thumbnail) return;
+    const rect = thumbnail.getBoundingClientRect();
+    const ownerRect = popup.getBoundingClientRect();
+    window.dispatchEvent(new CustomEvent(PREVIEW_EVENT, {
+      detail: JSON.stringify({
+        owner: "reference-autocomplete",
+        mode: "click",
+        zoomable: true,
+        label: entry.record.label,
+        command: "eqref",
+        sourceIndex: Number(currentContext?.commandStart) || 0,
+        anchorRect: {
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom
+        },
+        ownerRect: {
+          left: ownerRect.left,
+          right: ownerRect.right,
+          top: ownerRect.top,
+          bottom: ownerRect.bottom
+        }
+      })
+    }));
+  }
+
   function previewSelected() {
+    if (equationThumbnailMode()) {
+      dispatchPreviewHide({ force: true });
+      return;
+    }
     const selected = renderedRecords[selectedIndex];
     const item = selectedItemElement();
     if (popup.hidden) return;
+    if (selected && !selected.target && item) {
+      const description = item.querySelector(
+        ".smarttex-reference-autocomplete-description"
+      );
+      if (description) {
+        queueTargetHydration({
+          generation: listRenderGeneration,
+          index: selectedIndex,
+          entry: selected,
+          item,
+          description,
+          thumbnail: item.querySelector(
+            ".smarttex-reference-autocomplete-thumbnail"
+          )
+        }, { priority: true });
+      }
+    }
     if (!selected?.target || !item) {
       dispatchPreviewHide({ force: true });
       return;
@@ -452,6 +777,8 @@
   }
 
   function renderPopupNow() {
+    stopTargetHydration();
+    updateViewButton();
     queryLabel.textContent = currentContext?.fragment
       ? `${currentContext.command} matching “${currentContext.fragment}”`
       : `Select a ${currentContext?.command || "ref"} target`;
@@ -466,7 +793,7 @@
       ? "Alphabetical sorting is enabled for this completion list"
       : "Sort this completion list alphabetically";
     const nextRecords = matchingRecords(currentContext);
-    if (!nextRecords) return;
+    if (!nextRecords) return false;
     const exactIndex = nextRecords.findIndex(
       (entry) => entry.record.label === currentContext?.currentLabel
     );
@@ -485,9 +812,11 @@
       renderedRecords = nextRecords;
       list.replaceChildren(fragment);
       dispatchPreviewHide({ force: true });
-      return;
+      schedulePopupRefit();
+      return true;
     }
 
+    const hydrationTasks = [];
     nextRecords.forEach((entry, index) => {
       interactionTasks?.checkpoint?.(index, 8);
       const item = document.createElement("button");
@@ -503,12 +832,35 @@
 
       const label = document.createElement("code");
       label.className = "smarttex-reference-autocomplete-label";
-      label.textContent = entry.record.label;
+      appendHighlightedLabel(label, entry.record.label, currentContext?.fragment);
       label.title = entry.record.label;
       const description = document.createElement("span");
       description.className = "smarttex-reference-autocomplete-description";
-      description.textContent = targetDescription(entry.target);
-      description.title = description.textContent;
+      if (entry.target) {
+        description.textContent = targetDescription(entry.target);
+        description.title = description.textContent;
+      } else {
+        description.appendChild(inlineLoadingSpinner("Loading reference details"));
+      }
+      let thumbnail = null;
+      let previewButton = null;
+      if (equationThumbnailMode()) {
+        thumbnail = entry.target
+          ? equationThumbnail(entry.target)
+          : document.createElement("span");
+        if (!entry.target) {
+          thumbnail.className = "smarttex-reference-autocomplete-thumbnail";
+          thumbnail.setAttribute("aria-hidden", "true");
+          thumbnail.appendChild(inlineLoadingSpinner("Rendering equation"));
+        }
+        item.appendChild(thumbnail);
+        previewButton = document.createElement("button");
+        previewButton.type = "button";
+        previewButton.className = "smarttex-reference-autocomplete-thumbnail-open";
+        previewButton.textContent = "+";
+        previewButton.setAttribute("aria-label", "Open zoomable equation preview");
+        previewButton.title = "Open zoomable equation preview";
+      }
       item.append(label, description);
       item.addEventListener("mouseenter", () => {
         if (selectedIndex === index) {
@@ -520,11 +872,45 @@
       });
       item.addEventListener("mousedown", (event) => event.preventDefault());
       item.addEventListener("click", () => insertRecord(entry.record));
-      fragment.appendChild(item);
+      if (previewButton) {
+        const gridCell = document.createElement("div");
+        gridCell.className = "smarttex-reference-autocomplete-grid-cell";
+        previewButton.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        previewButton.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          selectedIndex = index;
+          updateSelectedItem({ preview: false });
+          openEquationThumbnailPreview(entry, item);
+        });
+        gridCell.append(item, previewButton);
+        fragment.appendChild(gridCell);
+      } else {
+        fragment.appendChild(item);
+      }
+      if (!entry.target) {
+        hydrationTasks.push({
+          generation: listRenderGeneration,
+          index,
+          entry,
+          item,
+          description,
+          thumbnail
+        });
+      }
     });
     renderedRecords = nextRecords;
     list.replaceChildren(fragment);
+    if (equationThumbnailMode()) fitEquationThumbnails();
+    hydrationTasks.forEach((task) => queueTargetHydration(task, {
+      priority: task.index === selectedIndex
+    }));
     previewSelected();
+    schedulePopupRefit();
+    return true;
   }
 
   function loadingListContent() {
@@ -539,16 +925,35 @@
     return row;
   }
 
+  function scheduleListRenderRetry() {
+    if (listRenderRetryFrame !== null) return;
+    listRenderRetryFrame = window.requestAnimationFrame(() => {
+      listRenderRetryFrame = null;
+      if (currentContext && !popup.hidden) renderPopup();
+    });
+  }
+
   function renderPopup() {
     if (!currentContext || !currentState) return;
+    if (listRenderRetryFrame !== null) window.cancelAnimationFrame(listRenderRetryFrame);
+    listRenderRetryFrame = null;
+    stopTargetHydration();
     const generation = ++listRenderGeneration;
     popup.setAttribute("aria-busy", "true");
-    list.replaceChildren(loadingListContent());
+    // Preserve the existing rows while an open list is being filtered. The
+    // loading placeholder is only needed for the initial population.
+    if (popup.hidden || !list.children.length) {
+      list.replaceChildren(loadingListContent());
+      schedulePopupRefit();
+    }
     window.requestAnimationFrame(() => {
       if (generation !== listRenderGeneration || !currentContext || !currentState) return;
       try {
-        if (!rebuildRecords(currentState.value)) return;
-        renderPopupNow();
+        if (!rebuildRecords(currentState.value)) {
+          scheduleListRenderRetry();
+          return;
+        }
+        if (renderPopupNow() === false) scheduleListRenderRetry();
       } finally {
         if (generation === listRenderGeneration) {
           popup.removeAttribute("aria-busy");
@@ -578,8 +983,8 @@
     const screen = currentState?.screen;
     if (!screen) return;
     const margin = 9;
-    const width = Math.min(500, window.innerWidth - margin * 2);
-    popup.style.width = `${Math.max(300, width)}px`;
+    const width = Math.max(1, Math.min(500, window.innerWidth - margin * 2));
+    popup.style.width = `${width}px`;
     const cursorLeft = Number(screen.pageX) - window.scrollX;
     const cursorTop = Number(screen.pageY) - window.scrollY;
     const lineHeight = Math.max(14, Number(screen.lineHeight) || 18);
@@ -588,7 +993,7 @@
     const aboveSpace = cursorTop - gap - margin;
     const availableSideSpace = Math.max(belowSpace, aboveSpace);
     const popupMaxHeight = Math.max(
-      130,
+      48,
       Math.min(430, window.innerHeight - margin * 2, availableSideSpace)
     );
     popup.style.maxHeight = `${Math.round(popupMaxHeight)}px`;
@@ -613,14 +1018,23 @@
       currentRect.bottom < cursorRect.top ||
       currentRect.top > cursorRect.bottom
     );
+    const outsideViewport = currentRect && (
+      currentRect.left < margin ||
+      currentRect.top < margin ||
+      currentRect.right > window.innerWidth - margin ||
+      currentRect.bottom > window.innerHeight - margin
+    );
 
     // Keep an already-open list stationary while the cursor moves. Reposition
-    // it only when it would cover the caret or after the popup was newly opened.
-    if (!lastPopupPosition || blocksCursor) {
+    // it only when it would cover the caret, outgrow the viewport, or after the
+    // popup was newly opened.
+    if (!lastPopupPosition || blocksCursor || outsideViewport) {
       const fitsBelow = cursorTop + lineHeight + gap + rect.height <= window.innerHeight - margin;
-      const top = fitsBelow
-        ? cursorTop + lineHeight + gap
-        : cursorTop - gap - rect.height;
+      const fitsAbove = cursorTop - gap - rect.height >= margin;
+      const placeAbove = !fitsBelow && (fitsAbove || aboveSpace > belowSpace);
+      const top = placeAbove
+        ? cursorTop - gap - rect.height
+        : cursorTop + lineHeight + gap;
       const left = Math.max(
         margin,
         Math.min(cursorLeft, window.innerWidth - rect.width - margin)
@@ -630,6 +1044,7 @@
         Math.min(top, window.innerHeight - rect.height - margin)
       );
       lastPopupPosition = { left, top: boundedTop };
+      popup.dataset.smarttexPlacement = placeAbove ? "above" : "below";
     }
     popup.style.left = `${Math.round(lastPopupPosition.left)}px`;
     popup.style.top = `${Math.round(lastPopupPosition.top)}px`;
@@ -661,13 +1076,37 @@
       hidePopup();
       return;
     }
-    const nextContext = findReferenceContext(currentState);
+    const keepTypingPopup = !popup.hidden && textInputIsRecent();
+    const contextState = keepTypingPopup && currentState?.focused === false
+      ? { ...currentState, focused: true }
+      : currentState;
+    const nextContext = findReferenceContext(contextState);
     if (!nextContext) {
+      if (keepTypingPopup && currentContext) {
+        // Editors can publish a short-lived, syntactically incomplete state
+        // between beforeinput/input and their final document update. Preserve
+        // the existing list instead of tearing it down and reopening it.
+        setBridgeActive(true);
+        clearTypingContextValidation();
+        const remaining = Math.max(
+          40,
+          TYPING_CONTEXT_GRACE_MS - (Date.now() - lastTextInputAt)
+        );
+        typingContextValidationTimer = window.setTimeout(() => {
+          typingContextValidationTimer = null;
+          const settledContext = findReferenceContext(currentState);
+          if (!settledContext) hidePopup();
+          else updateFromState();
+        }, remaining);
+        positionPopup();
+        return;
+      }
       currentContext = null;
       dismissedContextId = "";
       hidePopup();
       return;
     }
+    clearTypingContextValidation();
     const previousId = contextId();
     currentContext = nextContext;
     const nextId = contextId();
@@ -743,6 +1182,16 @@
     positionPopup();
   });
 
+  viewButton.addEventListener("mousedown", (event) => event.preventDefault());
+  viewButton.addEventListener("click", () => {
+    if (popup.hidden || currentContext?.command !== "eqref") return;
+    viewMode = viewMode === "grid" ? "list" : "grid";
+    persistEquationViewMode();
+    if (viewMode === "grid") dispatchPreviewHide({ force: true });
+    renderPopup();
+    positionPopup();
+  });
+
   closeButton.addEventListener("mousedown", (event) => event.preventDefault());
   closeButton.addEventListener("click", () => {
     hidePopup({ dismiss: true });
@@ -789,8 +1238,12 @@
     }
   }, true);
 
-  document.addEventListener("beforeinput", () => { scrollSuppressed = false; }, true);
-  document.addEventListener("input", () => { scrollSuppressed = false; }, true);
+  const noteTextInput = () => {
+    lastTextInputAt = Date.now();
+    scrollSuppressed = false;
+  };
+  document.addEventListener("beforeinput", noteTextInput, true);
+  document.addEventListener("input", noteTextInput, true);
 
   document.addEventListener("mousedown", (event) => {
     if (popup.hidden || popup.contains(event.target)) return;
@@ -801,6 +1254,11 @@
   window.addEventListener("resize", positionPopup, { passive: true });
   window.addEventListener("smarttex:editor-scroll-state", (event) => {
     if (event?.detail?.active !== true) return;
+    if (currentContext && textInputIsRecent()) {
+      scrollSuppressed = false;
+      positionPopup();
+      return;
+    }
     // Keep the list closed for coordinate-only state updates after scrolling.
     // The next explicit keyboard or pointer interaction may open it again.
     scrollSuppressed = true;
@@ -819,10 +1277,22 @@
   });
 
   extensionApi?.storage?.onChanged?.addListener((changes, areaName) => {
-    if (areaName !== "local" || !changes?.[SETTINGS_KEY] || runtimeSettingsOverrideActive) return;
-    configuredOrderMode = normalizeOrder(
-      changes[SETTINGS_KEY].newValue?.referenceOrder
-    );
+    if (areaName !== "local") return;
+    if (changes?.[EQUATION_VIEW_MODE_KEY]) {
+      const nextMode = normalizeViewMode(changes[EQUATION_VIEW_MODE_KEY].newValue);
+      if (nextMode !== viewMode) {
+        viewMode = nextMode;
+        if (currentContext?.command === "eqref" && !popup.hidden) {
+          if (viewMode === "grid") dispatchPreviewHide({ force: true });
+          renderPopup();
+          positionPopup();
+        } else {
+          updateViewButton();
+        }
+      }
+    }
+    if (!changes?.[SETTINGS_KEY] || runtimeSettingsOverrideActive) return;
+    configuredOrderMode = normalizeOrder(changes[SETTINGS_KEY].newValue?.referenceOrder);
     // A setting change defines the initial state of the next list. It does not
     // overwrite a one-time choice while the current list is already open.
     if (popup.hidden) orderMode = configuredOrderMode;
@@ -832,6 +1302,7 @@
 
   window.addEventListener("pagehide", () => {
     clearPopupTimer();
+    clearTypingContextValidation();
     setBridgeActive(false);
     dispatchPreviewHide();
     pendingRequests.forEach((pending) => {

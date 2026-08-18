@@ -119,10 +119,27 @@ const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
 assert.match(content, /popupsSuppressedAfterEditorScroll = true/);
 assert.match(content, /Popups are intentionally not restored after scrolling/);
 assert.doesNotMatch(content, /active !== false[\s\S]{0,300}scheduleRender\(\)/);
-for (const file of ["reference-autocomplete.js", "citation-autocomplete.js", "figure-autocomplete.js"]) {
+for (const file of [
+  "citation-autocomplete.js",
+  "figure-autocomplete.js"
+]) {
   const source = fs.readFileSync(path.join(root, file), "utf8");
-  assert.match(source, /editor-scroll-state[\s\S]{0,260}scrollSuppressed = true[\s\S]{0,120}hidePopup\(\)/);
+  assert.match(
+    source,
+    /editor-scroll-state[\s\S]*currentContext && Date\.now\(\) - lastTextInputAt < 350[\s\S]*scrollSuppressed = true;[\s\S]*hidePopup\(\)/,
+    `${file} must survive typing-driven auto-scroll but hide for ordinary scrolling.`
+  );
 }
+assert.match(
+  fs.readFileSync(path.join(root, "reference-autocomplete.js"), "utf8"),
+  /editor-scroll-state[\s\S]*currentContext && textInputIsRecent\(\)[\s\S]*scrollSuppressed = true;[\s\S]*hidePopup\(\)/,
+  "Reference autocomplete must survive typing-driven auto-scroll for its full typing grace period."
+);
+assert.match(
+  content,
+  /keepTypingOverlays[\s\S]*popupsSuppressedAfterEditorScroll = false[\s\S]*positionPreview\(\)[\s\S]*popupsSuppressedAfterEditorScroll = true/,
+  "Environment and source-reference popups must survive typing-driven auto-scroll."
+);
 assert.match(fs.readFileSync(path.join(root, "page-bridge.js"), "utf8"), /smarttex:editor-scroll-state/);
 
 console.log("Actual editor-scroll overlay visibility tests passed.");

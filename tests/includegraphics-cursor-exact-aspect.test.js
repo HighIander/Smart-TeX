@@ -15,8 +15,8 @@ assert.match(
 );
 assert.match(
   autocomplete,
-  /function isExactCurrentPath\(path\)[\s\S]*normalizePath\(path\) === normalizePath\(currentContext\?\.currentPath/,
-  "Figure exact matching must compare normalized complete paths."
+  /function isExactCurrentPath\(path\)[\s\S]*String\(path \|\| ""\)\.trim\(\) === currentPath/,
+  "Figure exact matching must compare literal complete paths instead of accepting normalized partial equivalents."
 );
 assert.match(
   content,

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartTeX equation creation harness</title>
+  <link rel="stylesheet" href="../vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../content.css">
+</head>
+<body>
+  <div id="ide-redesign-panel-source-editor"><div class="cm-editor"></div></div>
+  <output id="equation-creation-test-result">running</output>
+  <script>
+    const featureKey = "smarttex:features:v1";
+    const popupKey = "smarttex:reference-popups:v1";
+    globalThis.browser = {
+      storage: {
+        local: {
+          async get() {
+            return {
+              [featureKey]: { equations: true, tables: true, figures: true },
+              [popupKey]: { trigger: "cursor", environmentTrigger: "hover" }
+            };
+          }
+        },
+        onChanged: { addListener() {} }
+      },
+      runtime: { async sendMessage() { return { ok: true }; } }
+    };
+    window.addEventListener("smarttex:citation-editor-request", (event) => {
+      const request = JSON.parse(String(event.detail || "{}"));
+      if (request.type !== "getCoordinates") return;
+      window.dispatchEvent(new CustomEvent("smarttex:citation-editor-response", {
+        detail: JSON.stringify({
+          requestId: request.requestId,
+          ok: true,
+          screen: { pageX: 360, pageY: 220, lineHeight: 20 }
+        })
+      }));
+    });
+  </script>
+  <script src="../vendor/katex/katex.min.js"></script>
+  <script src="../latex-context.js"></script>
+  <script src="../table-renderer.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+    const sendState = (
+      value,
+      cursorIndex,
+      screen = { pageX: 360, pageY: 220, lineHeight: 20 }
+    ) => {
+      window.dispatchEvent(new CustomEvent("smarttex:editor-state", {
+        detail: JSON.stringify({
+          value,
+          cursorIndex,
+          selectionFrom: cursorIndex,
+          selectionTo: cursorIndex,
+          screen,
+          fileName: "main.tex",
+          focused: true,
+          editorKind: "harness"
+        })
+      }));
+    };
+    const waitFor = async (predicate, attempts = 150) => {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const result = predicate();
+        if (result) return result;
+        await delay(20);
+      }
+      return null;
+    };
+
+    (async () => {
+      const checks = {};
+      sendState("$$", 1);
+      checks.emptyPair = Boolean(await waitFor(() => {
+        const popup = document.querySelector("#smarttex-equation-preview:not([hidden])");
+        return popup?.dataset.previewKind === "equation" ? popup : null;
+      }));
+
+      sendState("$1$", 2);
+      checks.typedValue = Boolean(await waitFor(() => {
+        const popup = document.querySelector("#smarttex-equation-preview:not([hidden])");
+        return popup?.querySelector(".katex")?.textContent?.includes("1") ? popup : null;
+      }));
+
+      const persistentPopup = document.querySelector("#smarttex-equation-preview");
+      document.querySelector(".cm-editor")?.dispatchEvent(new InputEvent("beforeinput", {
+        bubbles: true,
+        inputType: "insertText",
+        data: "2"
+      }));
+      sendState("$12$", 3);
+      document.querySelector(".cm-editor")?.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: "2"
+      }));
+      window.dispatchEvent(new CustomEvent("smarttex:editor-scroll-state", {
+        detail: { active: true, reason: "typing-auto-scroll" }
+      }));
+      checks.typingKeepsSamePopup = Boolean(await waitFor(() => {
+        const popup = document.querySelector("#smarttex-equation-preview:not([hidden])");
+        return popup === persistentPopup && popup.querySelector(".katex")?.textContent?.includes("12")
+          ? popup
+          : null;
+      }));
+
+      const stablePosition = `${persistentPopup.style.left}:${persistentPopup.style.top}`;
+      sendState("$12$", 1, { pageX: 800, pageY: 520, lineHeight: 20 });
+      await waitFor(() => !persistentPopup.hasAttribute("aria-busy"));
+      checks.distantCursorDoesNotMovePopup =
+        `${persistentPopup.style.left}:${persistentPopup.style.top}` === stablePosition;
+
+      const popupRect = persistentPopup.getBoundingClientRect();
+      sendState("$12$", 2, {
+        pageX: popupRect.left + 8 + window.scrollX,
+        pageY: popupRect.top + 8 + window.scrollY,
+        lineHeight: 20
+      });
+      checks.closeCursorMovesPopup = Boolean(await waitFor(() => (
+        `${persistentPopup.style.left}:${persistentPopup.style.top}` !== stablePosition
+      )));
+
+      const passed = Object.values(checks).every(Boolean);
+      document.documentElement.dataset.equationCreationTest = passed ? "passed" : "failed";
+      document.querySelector("#equation-creation-test-result").textContent =
+        passed ? "passed" : `failed: ${JSON.stringify(checks)}`;
+    })().catch((error) => {
+      document.documentElement.dataset.equationCreationTest = "failed";
+      document.querySelector("#equation-creation-test-result").textContent = error.message;
+    });
+  </script>
+</body>
+</html>

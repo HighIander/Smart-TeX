@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="../content.css">
 </head>
 <body>
+  <div class="editor-pane" hidden><div class="cm-editor"></div></div>
   <output id="equation-cursor-performance-test-result">running</output>
   <script>
     window.addEventListener("smarttex:citation-editor-request", (event) => {
@@ -68,10 +69,12 @@
         return popup && !popup.hidden && popup.querySelector(".smarttex-rendered-caret");
       });
 
-      const output = document.querySelector("#smarttex-equation-preview-output");
+      const output = document.querySelector(
+        "#smarttex-equation-preview .smarttex-equation-output"
+      );
       const latencies = [];
       for (let pass = 0; pass < 24; pass += 1) {
-        const cursor = positions[pass % positions.length];
+        const cursor = positions[(pass + 1) % positions.length];
         const latency = await new Promise((resolve, reject) => {
           const started = performance.now();
           const timeout = setTimeout(() => {

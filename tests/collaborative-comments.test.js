@@ -79,12 +79,16 @@ const read = (name) => fs.readFileSync(path.join(root, name), "utf8");
   assert.match(css, /smarttex-editor-scrolling #smarttex-comment-highlights/);
   assert.match(css, /smarttex-editor-scrolling #smarttex-comment-icons/);
 
-  // Collaboration refresh uses a cheap metadata probe frequently and a bounded
-  // full read fallback at 120 seconds.
-  assert.match(comments, /const SYNC_INTERVAL_MS = 20000/);
-  assert.match(comments, /const FULL_SYNC_FALLBACK_MS = 120000/);
+  // Realtime invalidation normally triggers the read immediately. The fallback
+  // probe/read loop remains quick enough for hosts where the socket cannot be
+  // discovered, without running on the typing path.
+  assert.match(comments, /const SYNC_INTERVAL_MS = 5000/);
+  assert.match(comments, /const FULL_SYNC_FALLBACK_MS = 20000/);
   assert.match(comments, /probeProjectMetadataFile/);
   assert.match(bridge, /function probeProjectMetadataFile\(pathValue\)/);
+  assert.match(comments, /smarttex:collaboration-signal/);
+  assert.match(bridge, /clientTracking\.updatePosition/);
+  assert.match(bridge, /clientTracking\.clientUpdated/);
 
   // Marker icons on text are toggle controls, and off-screen comment/marker icons
   // are not clamped to the editor viewport edges.

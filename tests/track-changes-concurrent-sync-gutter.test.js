@@ -21,7 +21,7 @@ assert.match(review, /finally \{[\s\S]*projectSyncInProgress = false;[\s\S]*if \
 assert.match(bridge, /function editorGutterBoundaryX\(\)/);
 assert.match(bridge, /\.cm-gutters/);
 assert.match(bridge, /\.ace_gutter/);
-assert.match(bridge, /\{ rects, lineHeight, gutterX \}/);
+assert.match(bridge, /\{ rects, lineHeight, gutterX, bounds \}/);
 assert.match(review, /const gutterX = Number\(response\.gutterX\)/);
 
 console.log("concurrent review sync and gutter marker regression checks passed");

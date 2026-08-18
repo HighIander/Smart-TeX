@@ -9,7 +9,7 @@ const bridge = fs.readFileSync(path.join(root, "page-bridge.js"), "utf8");
 // The bridge exposes the editor line height together with range rectangles so
 // multiline move-source strike-through markup can be repeated per visual line.
 assert.match(bridge, /const lineHeight = Math\.max\(2, Number\(anchor\?\.lineHeight\) \|\| 16\)/);
-assert.match(bridge, /\{ rects, lineHeight, gutterX \}/);
+assert.match(bridge, /\{ rects, lineHeight, gutterX, bounds \}/);
 assert.match(bridge, /function editorGutterBoundaryX\(\)/);
 assert.match(review, /function lineRectsForStrike\(rects, lineHeightValue\)/);
 assert.match(review, /for \(const rect of lineRectsForStrike\(fromRects, fromResponse\.lineHeight\)\)/);
