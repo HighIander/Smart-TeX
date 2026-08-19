@@ -2,7 +2,7 @@
 
 ## Key Features
 
-* choose citations from drop-down list, parsed from the connected bib file; support for smartCitations (an extension that provides a full-featured, supercharged refrence manager)
+* choose citations from drop-down list, parsed from the connected bib file; support for [SmartCitations](https://github.com/HighIander/Smart-Citations) (an extension that provides a full-featured, supercharged refrence manager)
 * choose references from lists with thumbnail previews, sort by alphabet or by order of appearance in document
 * show previews of equations, figures (zommable!) and tables in popups; even the current cursor position is shown
 * in the editor, environments are highlighted and numbered elements' numbers are displayed
