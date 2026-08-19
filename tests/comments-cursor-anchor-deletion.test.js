@@ -30,8 +30,11 @@ assert.match(comments, /const isFullRangeDeletion = \(record\)/);
 assert.match(comments, /if \(isFullRangeDeletion\(mark\)\)[\s\S]*mark\.deletedAt = stamp/);
 assert.match(comments, /if \(isFullRangeDeletion\(thread\)\)[\s\S]*thread\.start = point;[\s\S]*thread\.end = point/);
 
-// Cancelling a brand-new selection comment preserves it as a marking.
-assert.match(comments, /function cancelDraftThread\(\)[\s\S]*draft\.end > draft\.start[\s\S]*uid\("mark"\)/);
+// Cancelling a brand-new selection comment discards its temporary marking.
+const cancelStart = comments.indexOf("function cancelDraftThread()");
+const cancelEnd = comments.indexOf("function toggleMark", cancelStart);
+assert.ok(cancelStart >= 0 && cancelEnd > cancelStart);
+assert.doesNotMatch(comments.slice(cancelStart, cancelEnd), /createMarkFromAnchor|uid\("mark"\)/);
 
 // Legacy #editor and its Ace wrapper are explicitly constrained so the pane
 // reserves space immediately rather than waiting for a window resize.

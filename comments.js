@@ -31,7 +31,7 @@
   const METADATA_FILE = ".smarttex-comments.json";
   const LOCAL_UI_KEY_PREFIX = "smarttex:comments-ui:v1:";
   const LOCAL_PENDING_KEY_PREFIX = "smarttex:comments-pending:v1:";
-  const SCHEMA_VERSION = 1;
+  const SCHEMA_VERSION = 3;
   const SYNC_INTERVAL_MS = 5000;
   const FULL_SYNC_FALLBACK_MS = 20000;
   const WRITE_DELAY_MS = 1600;
@@ -57,6 +57,8 @@
   let draftThread = null;
   let editingComment = null;
   const replyDrafts = new Map();
+  const replyGiphyDrafts = new Map();
+  const giphyPendingAnalytics = new Map();
   const collapsedThreads = new Set();
   const lastSources = new Map();
   const anchorDeletionRecoveries = [];
@@ -103,6 +105,30 @@
   let reviewSplitterDragging = false;
   let paneAwaitingInitialReviewState = false;
   const readActivity = new Map();
+  const EMOJI_PICKER_VALUES = [
+    "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣",
+    "😊", "🙂", "😉", "😍", "🥰", "😘", "😎", "🤓",
+    "🤔", "🤗", "🤭", "😮", "😢", "😭", "😡", "🥳",
+    "🤩", "😴", "👍", "👎", "👏", "🙌", "👌", "✌️",
+    "🤞", "💪", "🙏", "❤️", "🧡", "💛", "💚", "💙",
+    "💜", "🖤", "💯", "✅", "🎉", "🚀", "🔥", "👀",
+    "💡", "✨", "🌟", "⚡", "🌈", "☀️", "🎯", "🏆"
+  ];
+  let emojiPicker = null;
+  let emojiPickerTarget = null;
+  let emojiPickerRestoreFocus = null;
+  let giphyPicker = null;
+  let giphyPickerTarget = null;
+  let giphyPickerRestoreFocus = null;
+  let giphySearchTimer = 0;
+  let giphySearchController = null;
+  let giphyResultObserver = null;
+  let giphyPaginationObserver = null;
+  let suppressGiphyAutoPrompt = false;
+  let reactionTooltip = null;
+  let reactionTooltipOwner = null;
+  let paneRenderDeferred = false;
+  let paneRenderFlushTimer = 0;
 
   function emptyData() {
     return { schemaVersion: SCHEMA_VERSION, updatedAt: 0, threads: {}, marks: {} };
@@ -139,6 +165,71 @@
       name: String(value?.name || fallback?.name || "Anonymous").trim().slice(0, 80) || "Anonymous",
       color: validColor(value?.color, fallback?.color || "#268bd2")
     };
+  }
+
+  function graphemeCount(value) {
+    const text = String(value || "").trim();
+    if (!text) return 0;
+    try {
+      if (typeof Intl?.Segmenter === "function") {
+        return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].length;
+      }
+    } catch (_error) {}
+    return [...text].length;
+  }
+
+  function isEmojiOnlyText(value) {
+    const text = String(value || "").trim();
+    if (!text || graphemeCount(text) !== 1) return false;
+    try {
+      return /\p{Extended_Pictographic}|\p{Regional_Indicator}|[0-9#*]\uFE0F?\u20E3/u.test(text);
+    } catch (_error) {
+      return EMOJI_PICKER_VALUES.includes(text);
+    }
+  }
+
+  function cleanGiphyAttachment(value) {
+    return globalThis.SmartTeXGiphyIntegration?.cleanAttachment?.(value) || null;
+  }
+
+  function safeObjectKey(value) {
+    const key = String(value || "").trim().slice(0, 220);
+    return key && !["__proto__", "prototype", "constructor"].includes(key) ? key : "";
+  }
+
+  function cleanReaction(value = {}, actorKey = "") {
+    const updatedAt = Number(value.updatedAt) || 0;
+    return {
+      actorKey: safeObjectKey(value.actorKey || actorKey),
+      authorId: String(value.authorId || "").slice(0, 180),
+      authorName: String(value.authorName || "Anonymous").trim().slice(0, 80) || "Anonymous",
+      authorColor: validColor(value.authorColor, "#268bd2"),
+      active: value.active !== false,
+      updatedAt
+    };
+  }
+
+  function cleanReactions(value) {
+    const result = {};
+    if (!value || typeof value !== "object") return result;
+    let emojiCount = 0;
+    for (const [emojiValue, actorsValue] of Object.entries(value)) {
+      const emoji = String(emojiValue || "").trim();
+      if (!isEmojiOnlyText(emoji) || !actorsValue || typeof actorsValue !== "object") continue;
+      if (emojiCount++ >= 64) break;
+      const actors = {};
+      let actorCount = 0;
+      for (const [actorKeyValue, reactionValue] of Object.entries(actorsValue)) {
+        const actorKey = safeObjectKey(actorKeyValue);
+        if (!actorKey || !reactionValue || typeof reactionValue !== "object") continue;
+        if (actorCount++ >= 500) break;
+        const reaction = cleanReaction(reactionValue, actorKey);
+        reaction.actorKey = actorKey;
+        actors[actorKey] = reaction;
+      }
+      if (Object.keys(actors).length) result[emoji] = actors;
+    }
+    return result;
   }
 
   function bridgeRequest(type, payload = {}, timeoutMs = 5000) {
@@ -305,6 +396,8 @@
       authorColor: validColor(value.authorColor, "#268bd2"),
       authorId: String(value.authorId || ""),
       text: String(value.text || ""),
+      giphy: cleanGiphyAttachment(value.giphy),
+      reactions: cleanReactions(value.reactions),
       createdAt,
       updatedAt: Number(value.updatedAt) || createdAt,
       deletedAt: Number(value.deletedAt) || 0,
@@ -386,6 +479,38 @@
     return result;
   }
 
+  function latestReaction(left, right) {
+    if (!left) return right ? structuredCloneSafe(right) : null;
+    if (!right) return structuredCloneSafe(left);
+    return structuredCloneSafe(
+      (Number(right.updatedAt) || 0) >= (Number(left.updatedAt) || 0) ? right : left
+    );
+  }
+
+  function mergeReactions(leftValue, rightValue) {
+    const left = cleanReactions(leftValue);
+    const right = cleanReactions(rightValue);
+    const merged = {};
+    for (const emoji of new Set([...Object.keys(left), ...Object.keys(right)])) {
+      const actors = {};
+      for (const actorKey of new Set([
+        ...Object.keys(left[emoji] || {}), ...Object.keys(right[emoji] || {})
+      ])) {
+        const reaction = latestReaction(left[emoji]?.[actorKey], right[emoji]?.[actorKey]);
+        if (reaction) actors[actorKey] = reaction;
+      }
+      if (Object.keys(actors).length) merged[emoji] = actors;
+    }
+    return merged;
+  }
+
+  function mergeComment(left, right) {
+    const merged = latestRecord(left, right);
+    if (!merged) return null;
+    merged.reactions = mergeReactions(left?.reactions, right?.reactions);
+    return merged;
+  }
+
   function structuredCloneSafe(value) {
     try { return structuredClone(value); } catch (_error) { return JSON.parse(JSON.stringify(value)); }
   }
@@ -407,7 +532,7 @@
       for (const commentId of new Set([
         ...Object.keys(l?.comments || {}), ...Object.keys(r?.comments || {})
       ])) {
-        base.comments[commentId] = latestRecord(l?.comments?.[commentId], r?.comments?.[commentId]);
+        base.comments[commentId] = mergeComment(l?.comments?.[commentId], r?.comments?.[commentId]);
       }
       const resolvedSource = (Number(r?.resolvedUpdatedAt) || 0) >= (Number(l?.resolvedUpdatedAt) || 0)
         ? r
@@ -418,6 +543,27 @@
       merged.threads[id] = base;
     }
     return merged;
+  }
+
+  function sameDataRecords(leftValue, rightValue) {
+    const left = normalizeData(leftValue);
+    const right = normalizeData(rightValue);
+    return JSON.stringify(left.threads) === JSON.stringify(right.threads) &&
+      JSON.stringify(left.marks) === JSON.stringify(right.marks);
+  }
+
+  function realtimeCorrectionForIncoming(remoteValue, mergedValue) {
+    const remote = normalizeData(remoteValue);
+    const merged = normalizeData(mergedValue);
+    const patch = emptyData();
+    patch.updatedAt = now();
+    for (const id of Object.keys(remote.threads)) {
+      if (merged.threads[id]) patch.threads[id] = merged.threads[id];
+    }
+    for (const id of Object.keys(remote.marks)) {
+      if (merged.marks[id]) patch.marks[id] = merged.marks[id];
+    }
+    return normalizeData(patch);
   }
 
   function alive(record) {
@@ -479,13 +625,27 @@
         threadChanged = true;
       }
       for (const comment of Object.values(thread.comments || {})) {
-        if (!alive(comment) || !matches(comment, "authorColor")) continue;
-        if (comment.authorName === name && comment.authorColor === color && comment.authorId === targetAuthorId) continue;
-        comment.authorName = name;
-        comment.authorColor = color;
-        comment.authorId = targetAuthorId;
-        comment.updatedAt = stamp;
-        threadChanged = true;
+        if (!alive(comment)) continue;
+        if (matches(comment, "authorColor") && !(
+          comment.authorName === name && comment.authorColor === color && comment.authorId === targetAuthorId
+        )) {
+          comment.authorName = name;
+          comment.authorColor = color;
+          comment.authorId = targetAuthorId;
+          comment.updatedAt = stamp;
+          threadChanged = true;
+        }
+        for (const actors of Object.values(comment.reactions || {})) {
+          for (const reaction of Object.values(actors || {})) {
+            if (!matches(reaction, "authorColor")) continue;
+            if (reaction.authorName === name && reaction.authorColor === color && reaction.authorId === targetAuthorId) continue;
+            reaction.authorName = name;
+            reaction.authorColor = color;
+            reaction.authorId = targetAuthorId;
+            reaction.updatedAt = stamp;
+            threadChanged = true;
+          }
+        }
       }
       if (threadChanged) {
         const first = Object.values(thread.comments || {}).filter(alive)
@@ -898,7 +1058,9 @@
     // immediate typing path and apply it after a short idle period instead.
     sourceChangeTimer = window.setTimeout(() => {
       flushPendingSourceChange();
-      renderAll();
+      // Source maintenance must not tear down an active comment editor or
+      // chooser. The pane refresh is deferred until the interaction ends.
+      renderAll({ preserveInteraction: true });
     }, 700);
   }
 
@@ -957,16 +1119,28 @@
     try {
       const remote = await readRemote(options);
       lastFullRemoteReadAt = now();
-      data = mergeData(data, remote);
+      const merged = mergeData(data, remote);
+      const recordsChanged = !sameDataRecords(merged, data);
+      const remoteNeedsRepair = !sameDataRecords(merged, remote);
+      data = merged;
       const ownProfileChanged = applyCommentsAuthorProfile(authorId, profile, profile);
+      let reattached = false;
       if (currentState?.value) {
-        let reattached = false;
         for (const record of allCurrentFileRecords()) if (reattachRecord(record, currentState.value)) reattached = true;
         if (reattached) markDirty(2200);
       }
       setSyncStatus("");
-      renderAll();
-      if (ownProfileChanged) markDirty(250);
+      // The 5 s probe / 20 s fallback used to rebuild the pane even when the
+      // remote records were identical. That destroyed focused inputs and open
+      // choosers. Only refresh records when something actually changed, and
+      // defer that refresh while the user is interacting with the pane.
+      if (recordsChanged || ownProfileChanged || reattached) {
+        renderAll({ preserveInteraction: true });
+      } else {
+        renderOverlays();
+        dispatchUnreadState();
+      }
+      if (ownProfileChanged || remoteNeedsRepair) markDirty(250);
       if (initialSyncComplete) maybeAutoOpenForCurrentDocument();
       return true;
     } catch (error) {
@@ -1082,6 +1256,26 @@
     return record;
   }
 
+  function ensureDraftCommentEditorVisible() {
+    const list = pane?.querySelector(".smarttex-comments-list");
+    const card = list?.querySelector?.("[data-smarttex-draft-thread]");
+    if (!list || !card) return;
+    const listRect = list.getBoundingClientRect?.();
+    const cardRect = card.getBoundingClientRect?.();
+    if (!listRect || !cardRect || !listRect.height || !cardRect.height) return;
+    const margin = 8;
+    const visibleTop = listRect.top + margin;
+    const visibleBottom = listRect.bottom - margin;
+    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+    let delta = 0;
+    if (cardRect.height > visibleHeight || cardRect.top < visibleTop) {
+      delta = cardRect.top - visibleTop;
+    } else if (cardRect.bottom > visibleBottom) {
+      delta = cardRect.bottom - visibleBottom;
+    }
+    if (Math.abs(delta) >= 1) list.scrollTop += delta;
+  }
+
   function focusDraftCommentEditor() {
     const focusOnce = () => {
       const textarea = pane?.querySelector("[data-smarttex-draft-thread] textarea");
@@ -1093,15 +1287,29 @@
       } catch (_error) {
         textarea.focus?.();
       }
+      ensureDraftCommentEditorVisible();
       return document.activeElement === textarea;
     };
     requestAnimationFrame(() => {
-      if (focusOnce()) return;
+      const focused = focusOnce();
       requestAnimationFrame(() => {
+        ensureDraftCommentEditorVisible();
+        if (focused) return;
         if (focusOnce()) return;
         window.setTimeout(focusOnce, 40);
       });
     });
+  }
+
+  function maybeShowFallbackNameNoticeForDraft() {
+    if (!draftThread || !paneOpen || !globalThis.SmartTeXCommentProfile?.isFallbackProfile?.(profile)) return;
+    const anchor = pane?.querySelector?.('[data-smarttex-draft-thread="true"] .smarttex-comment-draft-heading strong');
+    if (!anchor?.isConnected) return;
+    globalThis.SmartTeXCommentProfile?.maybeShowFallbackNotice?.(
+      extensionApi?.storage?.local,
+      profile,
+      anchor
+    ).catch?.(() => {});
   }
 
   function startCommentAt(start, end) {
@@ -1113,11 +1321,21 @@
       createdAt: now(),
       updatedAt: now(),
       comments: {},
-      draftText: ""
+      draftText: "",
+      giphy: null
     };
     openPane();
     renderAll();
     focusDraftCommentEditor();
+    // Re-run host identity discovery at the moment the feature is used, then
+    // give it a brief chance to replace the generated fallback before the
+    // one-time explanation is shown.
+    if (globalThis.SmartTeXCommentProfile?.isFallbackProfile?.(profile)) {
+      window.dispatchEvent(new CustomEvent(
+        globalThis.SmartTeXCommentProfile?.IDENTITY_REFRESH_EVENT || "smarttex:collabtex-identity-refresh"
+      ));
+    }
+    window.setTimeout(maybeShowFallbackNameNoticeForDraft, 300);
   }
 
   function createMarkFromAnchor(anchor, stamp = now()) {
@@ -1152,7 +1370,8 @@
     if (!draftThread) return;
     const textarea = pane?.querySelector("[data-smarttex-draft-thread] textarea");
     const text = String(textarea?.value || draftThread.draftText || "").trim();
-    if (!text) {
+    const giphy = cleanGiphyAttachment(draftThread.giphy);
+    if (!text && !giphy) {
       const draft = draftThread;
       const convertedFromMarkId = String(draft.convertedFromMarkId || "");
       draftThread = null;
@@ -1177,7 +1396,7 @@
     const stamp = now();
     const comment = cleanComment({
       id: uid("comment"), authorName: profile.name, authorColor: profile.color, authorId,
-      text, createdAt: stamp, updatedAt: stamp
+      text, giphy, createdAt: stamp, updatedAt: stamp
     });
     const thread = cleanAnchorRecord({
       ...draftThread,
@@ -1197,6 +1416,7 @@
       }
     }
     const threadId = thread.id;
+    registerGiphySend(giphy);
     draftThread = null;
     markDirty(WRITE_DELAY_MS, realtimeDataForRecords(thread));
     renderAll();
@@ -1205,17 +1425,11 @@
 
   function cancelDraftThread() {
     if (!draftThread) return;
-    const draft = draftThread;
     draftThread = null;
 
-    // A comment started on selected text degrades to a plain marking when its
-    // initial edit is cancelled. If this draft originated from an existing
-    // mark, that mark is already still alive and needs no duplicate. Point
-    // comments have no text range to preserve as a marking.
-    if (!draft.convertedFromMarkId && draft.end > draft.start) {
-      createMarkFromAnchor({ ...draft, authorName: profile.name });
-      markDirty();
-    }
+    // Cancelling a newly created comment discards its temporary range
+    // highlight as well. A draft converted from an already existing marking
+    // leaves that pre-existing marking untouched.
     renderAll();
   }
 
@@ -1266,6 +1480,7 @@
       updatedAt: now(),
       comments: {},
       draftText: "",
+      giphy: null,
       convertedFromMarkId: mark.id
     };
     openPane();
@@ -1280,7 +1495,8 @@
     editingComment = {
       threadId: thread.id,
       commentId: comment.id,
-      draftText: String(comment.text || "")
+      draftText: String(comment.text || ""),
+      draftGiphy: cleanGiphyAttachment(comment.giphy)
     };
     renderAll();
     requestAnimationFrame(() => {
@@ -1288,12 +1504,13 @@
     });
   }
 
-  function commitEditedComment(threadId, commentId, text) {
+  function commitEditedComment(threadId, commentId, text, giphyValue = null) {
     const thread = data.threads[String(threadId || "")];
     const comment = thread?.comments?.[String(commentId || "")];
     const body = String(text || "").trim();
+    const giphy = cleanGiphyAttachment(giphyValue);
     if (!alive(thread) || !alive(comment) || !ownsComment(comment)) return false;
-    if (!body) {
+    if (!body && !giphy) {
       const aliveComments = Object.values(thread.comments || {}).filter(alive);
       if (aliveComments.length === 1 && aliveComments[0].id === comment.id) {
         return convertThreadToMark(thread);
@@ -1301,6 +1518,8 @@
       return false;
     }
     comment.text = body;
+    comment.giphy = giphy;
+    registerGiphySend(giphy);
     comment.updatedAt = nextMutationStamp(comment, thread);
     thread.updatedAt = comment.updatedAt;
     editingComment = null;
@@ -1355,21 +1574,918 @@
     renderAll();
   }
 
-  function addReply(threadId, text) {
+  function addReply(threadId, text, giphyValue = null) {
     const thread = data.threads[threadId];
     const body = String(text || "").trim();
-    if (!thread || !body) return false;
+    const giphy = cleanGiphyAttachment(giphyValue);
+    if (!thread || (!body && !giphy)) return false;
     const stamp = nextMutationStamp(thread, Object.values(thread.comments || {}));
     const comment = cleanComment({
       id: uid("comment"), authorName: profile.name, authorColor: profile.color, authorId,
-      text: body, createdAt: stamp, updatedAt: stamp
+      text: body, giphy, createdAt: stamp, updatedAt: stamp
     });
     thread.comments[comment.id] = comment;
+    registerGiphySend(giphy);
     thread.updatedAt = stamp;
     replyDrafts.delete(threadId);
+    replyGiphyDrafts.delete(threadId);
     markDirty(WRITE_DELAY_MS, realtimeDataForRecords(thread));
     renderAll();
     return true;
+  }
+
+  function smileyIconSvg() {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 10h.01M15.5 10h.01M8.5 14.2c1 1.2 2.1 1.8 3.5 1.8s2.5-.6 3.5-1.8"/></svg>';
+  }
+
+  function reactionActorKey() {
+    return safeObjectKey(authorId || `legacy:${profile.name}:${validColor(profile.color)}`);
+  }
+
+  function activeReactionGroups(comment) {
+    const groups = [];
+    for (const [emoji, actorsValue] of Object.entries(comment?.reactions || {})) {
+      const actors = Object.values(actorsValue || {}).filter((reaction) => reaction?.active !== false);
+      if (!actors.length) continue;
+      actors.sort((left, right) => (
+        String(left.authorName || "").localeCompare(String(right.authorName || ""), undefined, { sensitivity: "base" })
+      ));
+      groups.push({
+        emoji,
+        actors,
+        firstAt: Math.min(...actors.map((reaction) => Number(reaction.updatedAt) || 0))
+      });
+    }
+    return groups.sort((left, right) => left.firstAt - right.firstAt || left.emoji.localeCompare(right.emoji));
+  }
+
+  function toggleCommentReaction(threadIdValue, commentIdValue, emojiValue) {
+    const thread = data.threads[String(threadIdValue || "")];
+    const comment = thread?.comments?.[String(commentIdValue || "")];
+    const emoji = String(emojiValue || "").trim();
+    const actorKey = reactionActorKey();
+    if (!alive(thread) || !alive(comment) || !actorKey || !isEmojiOnlyText(emoji)) return false;
+    if (!comment.reactions || typeof comment.reactions !== "object") comment.reactions = {};
+    if (!comment.reactions[emoji] || typeof comment.reactions[emoji] !== "object") {
+      comment.reactions[emoji] = {};
+    }
+    const current = comment.reactions[emoji][actorKey];
+    const stamp = nextMutationStamp(thread, comment, Object.values(comment.reactions[emoji]));
+    comment.reactions[emoji][actorKey] = cleanReaction({
+      actorKey,
+      authorId,
+      authorName: profile.name,
+      authorColor: profile.color,
+      active: current?.active === false || !current,
+      updatedAt: stamp
+    }, actorKey);
+    thread.updatedAt = stamp;
+    markDirty(250, realtimeDataForRecords(thread));
+    renderAll();
+    return true;
+  }
+
+  function closeEmojiPicker({ restoreFocus = true } = {}) {
+    if (!emojiPicker) return;
+    emojiPicker.hidden = true;
+    emojiPicker.setAttribute("aria-hidden", "true");
+    const restore = emojiPickerTarget?.textarea?.isConnected
+      ? emojiPickerTarget.textarea
+      : emojiPickerRestoreFocus;
+    emojiPickerTarget = null;
+    emojiPickerRestoreFocus = null;
+    if (restoreFocus && restore?.isConnected) {
+      requestAnimationFrame(() => {
+        try { restore.focus({ preventScroll: true }); } catch (_error) { restore.focus?.(); }
+      });
+    }
+    scheduleDeferredPaneRenderFlush();
+  }
+
+  function choosePickerEmoji(emoji) {
+    const target = emojiPickerTarget;
+    if (!target) return;
+    if (target.kind === "input" && target.textarea?.isConnected) {
+      const textarea = target.textarea;
+      const start = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : textarea.value.length;
+      const end = Number.isFinite(textarea.selectionEnd) ? textarea.selectionEnd : start;
+      textarea.setRangeText(emoji, start, end, "end");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      closeEmojiPicker({ restoreFocus: false });
+      try { textarea.focus({ preventScroll: true }); } catch (_error) { textarea.focus?.(); }
+      return;
+    }
+    if (target.kind === "reaction") {
+      const { threadId, commentId } = target;
+      closeEmojiPicker({ restoreFocus: false });
+      toggleCommentReaction(threadId, commentId, emoji);
+    }
+  }
+
+  function ensureEmojiPicker() {
+    if (emojiPicker?.isConnected) return emojiPicker;
+    const picker = document.createElement("div");
+    picker.id = "smarttex-comment-emoji-picker";
+    picker.hidden = true;
+    picker.setAttribute("aria-hidden", "true");
+    picker.setAttribute("role", "dialog");
+    picker.setAttribute("aria-label", "Choose emoji");
+    const heading = document.createElement("div");
+    heading.className = "smarttex-comment-emoji-picker-heading";
+    heading.textContent = "Emoji";
+    const grid = document.createElement("div");
+    grid.className = "smarttex-comment-emoji-grid";
+    grid.setAttribute("role", "listbox");
+    for (const emoji of EMOJI_PICKER_VALUES) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "smarttex-comment-emoji-option";
+      button.textContent = emoji;
+      button.dataset.emoji = emoji;
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-label", `Choose ${emoji}`);
+      grid.appendChild(button);
+    }
+    grid.addEventListener("click", (event) => {
+      const button = event.target.closest(".smarttex-comment-emoji-option");
+      if (button?.dataset?.emoji) choosePickerEmoji(button.dataset.emoji);
+    });
+    grid.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+      const buttons = [...grid.querySelectorAll(".smarttex-comment-emoji-option")];
+      const current = Math.max(0, buttons.indexOf(document.activeElement));
+      const columns = 8;
+      const delta = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 :
+        event.key === "ArrowUp" ? -columns : columns;
+      event.preventDefault();
+      buttons[(current + delta + buttons.length) % buttons.length]?.focus?.();
+    });
+    picker.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeEmojiPicker();
+    });
+    picker.append(heading, grid);
+    document.body.appendChild(picker);
+    document.addEventListener("pointerdown", (event) => {
+      if (picker.hidden || picker.contains(event.target) || emojiPickerRestoreFocus?.contains?.(event.target)) return;
+      closeEmojiPicker({ restoreFocus: false });
+    }, true);
+    emojiPicker = picker;
+    return picker;
+  }
+
+  function openEmojiPicker(button, target) {
+    const picker = ensureEmojiPicker();
+    if (!picker || !button || !target) return;
+    if (!picker.hidden) closeEmojiPicker({ restoreFocus: false });
+    emojiPickerTarget = target;
+    emojiPickerRestoreFocus = button;
+    picker.hidden = false;
+    picker.setAttribute("aria-hidden", "false");
+    picker.classList.toggle("smarttex-comments-dark", Boolean(pane?.classList?.contains("smarttex-comments-dark")));
+    const rect = button.getBoundingClientRect();
+    const width = 284;
+    picker.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width))}px`;
+    picker.style.top = `${Math.max(8, rect.bottom + 6)}px`;
+    requestAnimationFrame(() => {
+      const pickerRect = picker.getBoundingClientRect();
+      if (pickerRect.bottom > window.innerHeight - 8) {
+        picker.style.top = `${Math.max(8, rect.top - pickerRect.height - 6)}px`;
+      }
+      picker.querySelector(".smarttex-comment-emoji-option")?.focus?.();
+    });
+  }
+
+  function giphyBrandElement() {
+    const link = document.createElement("a");
+    link.className = "smarttex-comment-giphy-brand";
+    link.href = globalThis.SmartTeXGiphyIntegration?.GIPHY_URL || "https://giphy.com/";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.title = "Open GIPHY";
+    const asset = globalThis.SmartTeXGiphyIntegration?.attributionAssetUrl?.();
+    if (asset) {
+      const img = document.createElement("img");
+      img.src = asset;
+      img.alt = "Powered by GIPHY";
+      link.appendChild(img);
+    } else {
+      link.textContent = "Powered by GIPHY";
+    }
+    link.addEventListener("click", (event) => event.stopPropagation());
+    return link;
+  }
+
+  function giphyAttributionElement(attachmentValue) {
+    const attachment = cleanGiphyAttachment(attachmentValue);
+    const row = document.createElement("div");
+    row.className = "smarttex-comment-giphy-attribution";
+    row.appendChild(giphyBrandElement());
+    if (!attachment) return row;
+
+    const view = document.createElement("a");
+    view.className = "smarttex-comment-giphy-credit";
+    view.href = attachment.url;
+    view.target = "_blank";
+    view.rel = "noopener noreferrer";
+    view.textContent = "View on GIPHY";
+    view.addEventListener("click", (event) => event.stopPropagation());
+    row.appendChild(view);
+
+    const creatorLabel = String(attachment.username || "").trim();
+    if (creatorLabel) {
+      const creator = document.createElement("a");
+      creator.className = "smarttex-comment-giphy-credit";
+      creator.href = attachment.userUrl || attachment.url;
+      creator.target = "_blank";
+      creator.rel = "noopener noreferrer";
+      creator.textContent = `GIF by ${creatorLabel.startsWith("@") ? creatorLabel : `@${creatorLabel}`}`;
+      creator.addEventListener("click", (event) => event.stopPropagation());
+      row.appendChild(creator);
+    }
+
+    if (attachment.sourceTld) {
+      const source = document.createElement(attachment.sourcePostUrl ? "a" : "span");
+      source.className = "smarttex-comment-giphy-credit";
+      source.textContent = `Source: ${attachment.sourceTld}`;
+      if (attachment.sourcePostUrl) {
+        source.href = attachment.sourcePostUrl;
+        source.target = "_blank";
+        source.rel = "noopener noreferrer";
+        source.addEventListener("click", (event) => event.stopPropagation());
+      }
+      row.appendChild(source);
+    }
+    return row;
+  }
+
+  function renderGiphyAttachment(attachmentValue, { allowRemove = false, onRemove = null } = {}) {
+    const attachment = cleanGiphyAttachment(attachmentValue);
+    if (!attachment) return null;
+    const integration = globalThis.SmartTeXGiphyIntegration;
+    const wrapper = document.createElement("div");
+    wrapper.className = "smarttex-comment-giphy-attachment";
+    wrapper.dataset.giphyId = attachment.id;
+
+    const media = document.createElement("div");
+    media.className = "smarttex-comment-giphy-media";
+    wrapper.appendChild(media);
+
+    const showBlocked = () => {
+      media.replaceChildren();
+      const blocked = document.createElement("button");
+      blocked.type = "button";
+      blocked.className = "smarttex-comment-giphy-blocked";
+      blocked.innerHTML = "<strong>GIPHY GIF</strong><span>Allow GIPHY to load this GIF</span>";
+      blocked.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const allowed = await integration?.requestConsent?.({ reason: "view" });
+        if (allowed) showEmbed();
+      });
+      media.appendChild(blocked);
+    };
+
+    const showEmbed = () => {
+      media.replaceChildren();
+      const frame = document.createElement("iframe");
+      frame.className = "smarttex-comment-giphy-frame";
+      frame.src = attachment.embedUrl;
+      frame.title = attachment.title || "GIPHY GIF";
+      frame.loading = "lazy";
+      frame.referrerPolicy = "no-referrer";
+      frame.setAttribute("allowfullscreen", "");
+      frame.setAttribute("allow", "fullscreen");
+      if (attachment.width > 0 && attachment.height > 0) {
+        const ratio = Math.max(0.45, Math.min(2.4, attachment.width / attachment.height));
+        frame.style.aspectRatio = String(ratio);
+      }
+      media.appendChild(frame);
+    };
+
+    showBlocked();
+    const allowAutomaticConsentPrompt = !suppressGiphyAutoPrompt;
+    Promise.resolve(integration?.hasConsent?.()).then((allowed) => {
+      if (allowed) {
+        showEmbed();
+        return;
+      }
+      if (!allowAutomaticConsentPrompt) return false;
+      return integration?.maybeRequestViewingConsent?.().then((granted) => {
+        if (granted) showEmbed();
+        return granted;
+      });
+    }).catch(() => {});
+
+    wrapper.appendChild(giphyAttributionElement(attachment));
+    if (allowRemove) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "smarttex-comment-giphy-remove";
+      remove.textContent = "×";
+      remove.title = "Remove GIPHY GIF";
+      remove.setAttribute("aria-label", "Remove GIPHY GIF");
+      remove.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onRemove?.();
+      });
+      wrapper.appendChild(remove);
+    }
+    return wrapper;
+  }
+
+  function closeGiphyPicker({ restoreFocus = true } = {}) {
+    window.clearTimeout(giphySearchTimer);
+    giphySearchTimer = 0;
+    giphySearchController?.abort?.();
+    giphySearchController = null;
+    giphyResultObserver?.disconnect?.();
+    giphyResultObserver = null;
+    giphyPaginationObserver?.disconnect?.();
+    giphyPaginationObserver = null;
+    if (!giphyPicker) return;
+    giphyPicker.hidden = true;
+    giphyPicker.setAttribute("aria-hidden", "true");
+    const restore = giphyPickerTarget?.textarea?.isConnected
+      ? giphyPickerTarget.textarea
+      : giphyPickerRestoreFocus;
+    giphyPickerTarget = null;
+    giphyPickerRestoreFocus = null;
+    if (restoreFocus && restore?.isConnected) {
+      requestAnimationFrame(() => {
+        try { restore.focus({ preventScroll: true }); } catch (_error) { restore.focus?.(); }
+      });
+    }
+    scheduleDeferredPaneRenderFlush();
+  }
+
+  function positionGiphyPicker(button) {
+    if (!giphyPicker || !button?.isConnected) return;
+    const rect = button.getBoundingClientRect();
+    const width = Math.min(386, Math.max(300, window.innerWidth - 16));
+    giphyPicker.style.width = `${width}px`;
+    giphyPicker.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width))}px`;
+    giphyPicker.style.top = `${Math.max(8, rect.bottom + 6)}px`;
+    requestAnimationFrame(() => {
+      if (!giphyPicker || giphyPicker.hidden) return;
+      const pickerRect = giphyPicker.getBoundingClientRect();
+      if (pickerRect.bottom > window.innerHeight - 8) {
+        giphyPicker.style.top = `${Math.max(8, rect.top - pickerRect.height - 6)}px`;
+      }
+    });
+  }
+
+  function setGiphyForTextarea(textarea, attachment) {
+    if (!textarea?.isConnected) return;
+    textarea.__smarttexGiphySet?.(cleanGiphyAttachment(attachment));
+    textarea.__smarttexGiphyRefresh?.();
+  }
+
+  function rememberGiphyAnalytics(result) {
+    const id = String(result?.attachment?.id || "");
+    if (!id) return;
+    const analytics = result?.analytics && typeof result.analytics === "object"
+      ? { ...result.analytics }
+      : {};
+    giphyPendingAnalytics.set(id, analytics);
+  }
+
+  function registerGiphySend(attachmentValue) {
+    const attachment = cleanGiphyAttachment(attachmentValue);
+    if (!attachment) return;
+    const analytics = giphyPendingAnalytics.get(attachment.id);
+    if (analytics?.onsent) globalThis.SmartTeXGiphyIntegration?.pingAnalytics?.(analytics.onsent);
+    giphyPendingAnalytics.delete(attachment.id);
+  }
+
+  function ensureGiphyResultObserver(grid) {
+    if (giphyResultObserver || typeof IntersectionObserver !== "function") return;
+    giphyResultObserver = new IntersectionObserver((entries, observer) => {
+      for (const entry of entries) {
+        const button = entry.target;
+        button.__smarttexGiphyVisible = Boolean(entry.isIntersecting && entry.intersectionRatio > 0);
+        button.__smarttexGiphyRegisterView?.();
+        if (button.dataset.smarttexGiphyViewed === "true") observer.unobserve(button);
+      }
+    }, { root: grid, threshold: 0.05 });
+  }
+
+  function appendGiphyResultButtons(grid, list, startIndex) {
+    ensureGiphyResultObserver(grid);
+    for (let relativeIndex = 0; relativeIndex < list.length; relativeIndex += 1) {
+      const result = list[relativeIndex];
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "smarttex-comment-giphy-result";
+      button.dataset.giphyIndex = String(startIndex + relativeIndex);
+      button.title = result.attachment.title || "Insert GIPHY GIF";
+      const img = document.createElement("img");
+      img.src = result.previewUrl;
+      img.alt = result.attachment.title || "GIPHY GIF";
+      img.loading = "lazy";
+      img.referrerPolicy = "no-referrer";
+      const registerView = () => {
+        if (button.dataset.smarttexGiphyViewed === "true") return;
+        if (!img.complete || !img.naturalWidth) return;
+        if (giphyResultObserver && !button.__smarttexGiphyVisible) return;
+        button.dataset.smarttexGiphyViewed = "true";
+        if (result.analytics?.onload) globalThis.SmartTeXGiphyIntegration?.pingAnalytics?.(result.analytics.onload);
+      };
+      button.__smarttexGiphyRegisterView = registerView;
+      img.addEventListener("load", registerView, { once: true });
+      button.appendChild(img);
+      const resultCredits = [];
+      if (result.attachment.username) {
+        resultCredits.push(result.attachment.username.startsWith("@")
+          ? result.attachment.username
+          : `@${result.attachment.username}`);
+      }
+      if (result.attachment.sourceTld) resultCredits.push(result.attachment.sourceTld);
+      if (resultCredits.length) {
+        const credit = document.createElement("span");
+        credit.textContent = resultCredits.join(" · ");
+        button.appendChild(credit);
+      }
+      grid.appendChild(button);
+      if (giphyResultObserver) giphyResultObserver.observe(button);
+      else registerView();
+    }
+  }
+
+  function setGiphyPaginationLoading(loading) {
+    const more = giphyPicker?.querySelector(".smarttex-comment-giphy-pagination");
+    if (!more) return;
+    more.classList.toggle("smarttex-comment-giphy-pagination-loading", Boolean(loading));
+    const button = more.querySelector(".smarttex-comment-giphy-load-more");
+    const label = more.querySelector(".smarttex-comment-giphy-more-label");
+    const spinner = more.querySelector(".smarttex-comment-giphy-pagination-spinner");
+    if (button) button.hidden = Boolean(loading);
+    if (label) label.hidden = Boolean(loading);
+    if (spinner) spinner.hidden = !loading;
+    more.setAttribute("aria-busy", loading ? "true" : "false");
+  }
+
+  function configureGiphyPagination(pageResults) {
+    const grid = giphyPicker?.querySelector(".smarttex-comment-giphy-grid");
+    if (!grid || !giphyPicker) return;
+    giphyPaginationObserver?.disconnect?.();
+    giphyPaginationObserver = null;
+    grid.querySelector(".smarttex-comment-giphy-pagination")?.remove?.();
+
+    const pagination = pageResults?.pagination || {};
+    if (!pagination.hasMore) return;
+    const nextOffset = Math.max(0, Number(pagination.nextOffset) || 0);
+    const usesBundledKey = Boolean(pageResults?.usesBundledKey);
+    const query = String(giphyPicker.__smarttexQuery || "");
+    const more = document.createElement("div");
+    more.className = "smarttex-comment-giphy-pagination";
+    more.setAttribute("aria-live", "polite");
+
+    const spinner = document.createElement("span");
+    spinner.className = "smarttex-comment-giphy-pagination-spinner";
+    spinner.hidden = true;
+    spinner.setAttribute("role", "status");
+    spinner.setAttribute("aria-label", "Loading more GIFs");
+
+    const loadNext = () => {
+      if (!giphyPicker || giphyPicker.hidden || giphyPicker.__smarttexLoadingMore) return;
+      setGiphyPaginationLoading(true);
+      loadGiphyPickerResults(query, { append: true, offset: nextOffset });
+    };
+
+    if (usesBundledKey || typeof IntersectionObserver !== "function") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "smarttex-comment-giphy-load-more";
+      button.textContent = "Load more";
+      button.title = usesBundledKey
+        ? "Load 50 more GIFs (uses one GIPHY API call)"
+        : "Load 50 more GIFs";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        loadNext();
+      });
+      more.appendChild(button);
+    } else {
+      const label = document.createElement("span");
+      label.className = "smarttex-comment-giphy-more-label";
+      label.textContent = "Scroll for more";
+      more.appendChild(label);
+      giphyPaginationObserver = new IntersectionObserver((entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        giphyPaginationObserver?.disconnect?.();
+        giphyPaginationObserver = null;
+        loadNext();
+      }, { root: grid, rootMargin: "0px 0px 240px 0px", threshold: 0 });
+      giphyPaginationObserver.observe(more);
+    }
+    more.appendChild(spinner);
+    grid.appendChild(more);
+  }
+
+  function renderGiphyPickerResults(results, { append = false } = {}) {
+    const grid = giphyPicker?.querySelector(".smarttex-comment-giphy-grid");
+    const status = giphyPicker?.querySelector(".smarttex-comment-giphy-status");
+    if (!grid || !status || !giphyPicker) return;
+
+    const list = Array.isArray(results) ? results : [];
+    if (!append) {
+      giphyResultObserver?.disconnect?.();
+      giphyResultObserver = null;
+      giphyPaginationObserver?.disconnect?.();
+      giphyPaginationObserver = null;
+      grid.replaceChildren();
+      giphyPicker.__smarttexResults = [];
+    } else {
+      grid.querySelector(".smarttex-comment-giphy-pagination")?.remove?.();
+    }
+
+    const existing = Array.isArray(giphyPicker.__smarttexResults) ? giphyPicker.__smarttexResults : [];
+    const startIndex = existing.length;
+    giphyPicker.__smarttexResults = existing.concat(list);
+    appendGiphyResultButtons(grid, list, startIndex);
+    status.textContent = giphyPicker.__smarttexResults.length ? "" : "No GIFs found.";
+    configureGiphyPagination(results);
+  }
+
+  async function loadGiphyPickerResults(query = "", { append = false, offset = 0 } = {}) {
+    if (!giphyPicker || giphyPicker.hidden) return;
+    const grid = giphyPicker.querySelector(".smarttex-comment-giphy-grid");
+    const status = giphyPicker.querySelector(".smarttex-comment-giphy-status");
+    if (!grid || !status) return;
+    if (append && giphyPicker.__smarttexLoadingMore) return;
+
+    if (!append) {
+      giphySearchController?.abort?.();
+      giphyPaginationObserver?.disconnect?.();
+      giphyPaginationObserver = null;
+      grid.replaceChildren();
+      giphyPicker.__smarttexResults = [];
+      giphyPicker.__smarttexQuery = String(query || "");
+      status.textContent = query.trim() ? "Searching GIPHY…" : "Loading trending GIFs…";
+    } else {
+      if (String(query || "") !== String(giphyPicker.__smarttexQuery || "")) return;
+      giphyPicker.__smarttexLoadingMore = true;
+      setGiphyPaginationLoading(true);
+      status.textContent = "Loading 50 more GIFs…";
+    }
+
+    const controller = new AbortController();
+    giphySearchController = controller;
+    try {
+      const results = await globalThis.SmartTeXGiphyIntegration?.search?.(query, {
+        signal: controller.signal,
+        offset
+      });
+      if (controller.signal.aborted || giphySearchController !== controller) return;
+      // Release the in-flight guard before arming the next-page observer.
+      if (append && giphyPicker) giphyPicker.__smarttexLoadingMore = false;
+      renderGiphyPickerResults(results || [], { append });
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      if (append) setGiphyPaginationLoading(false);
+      if (!append) grid.replaceChildren();
+      status.replaceChildren();
+      const message = document.createElement("span");
+      message.textContent = error?.message || "Could not load GIPHY GIFs.";
+      status.appendChild(message);
+      if (error?.code === "MISSING_API_KEY" || error?.code === "PERSONAL_API_KEY_REQUIRED") {
+        const options = document.createElement("button");
+        options.type = "button";
+        options.className = "smarttex-comment-giphy-options-button";
+        options.textContent = "Open SmartTeX options";
+        options.addEventListener("click", (event) => {
+          event.stopPropagation();
+          globalThis.SmartTeXGiphyIntegration?.openOptions?.();
+        });
+        status.appendChild(options);
+      }
+    } finally {
+      if (giphySearchController === controller) giphySearchController = null;
+      if (giphyPicker) giphyPicker.__smarttexLoadingMore = false;
+    }
+  }
+
+  function ensureGiphyPicker() {
+    if (giphyPicker?.isConnected) return giphyPicker;
+    const picker = document.createElement("div");
+    picker.id = "smarttex-comment-giphy-picker";
+    picker.hidden = true;
+    picker.setAttribute("aria-hidden", "true");
+    picker.setAttribute("role", "dialog");
+    picker.setAttribute("aria-label", "Choose a GIPHY GIF");
+
+    const top = document.createElement("div");
+    top.className = "smarttex-comment-giphy-picker-top";
+    const input = document.createElement("input");
+    input.type = "search";
+    input.className = "smarttex-comment-giphy-search";
+    input.placeholder = "Search GIPHY GIFs";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "smarttex-comment-giphy-picker-close";
+    close.textContent = "×";
+    close.title = "Close GIPHY picker";
+    close.setAttribute("aria-label", "Close GIPHY picker");
+    close.addEventListener("click", () => closeGiphyPicker());
+    top.append(input, close);
+
+    const status = document.createElement("div");
+    status.className = "smarttex-comment-giphy-status";
+    const grid = document.createElement("div");
+    grid.className = "smarttex-comment-giphy-grid";
+    const footer = document.createElement("div");
+    footer.className = "smarttex-comment-giphy-footer";
+    footer.appendChild(giphyBrandElement());
+
+    input.addEventListener("input", () => {
+      window.clearTimeout(giphySearchTimer);
+      const exactQuery = input.value;
+      giphySearchTimer = window.setTimeout(() => loadGiphyPickerResults(exactQuery), 320);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        window.clearTimeout(giphySearchTimer);
+        loadGiphyPickerResults(input.value);
+      }
+    });
+    grid.addEventListener("click", async (event) => {
+      const button = event.target.closest(".smarttex-comment-giphy-result");
+      if (!button) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const result = picker.__smarttexResults?.[Number(button.dataset.giphyIndex)];
+      if (!result?.attachment || !giphyPickerTarget?.textarea) return;
+      const integration = globalThis.SmartTeXGiphyIntegration;
+      if (!(await integration?.ensureGifInsertionAllowed?.({ prompt: true }))) {
+        closeGiphyPicker({ restoreFocus: false });
+        return;
+      }
+      if (result.analytics?.onclick) integration?.pingAnalytics?.(result.analytics.onclick);
+      rememberGiphyAnalytics(result);
+      const textarea = giphyPickerTarget.textarea;
+      setGiphyForTextarea(textarea, result.attachment);
+      await integration?.recordGifInsertion?.();
+      closeGiphyPicker({ restoreFocus: false });
+      try { textarea.focus({ preventScroll: true }); } catch (_error) { textarea.focus?.(); }
+    });
+    picker.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeGiphyPicker();
+    });
+    picker.append(top, status, grid, footer);
+    document.body.appendChild(picker);
+    document.addEventListener("pointerdown", (event) => {
+      if (picker.hidden || picker.contains(event.target) || giphyPickerRestoreFocus?.contains?.(event.target)) return;
+      closeGiphyPicker({ restoreFocus: false });
+    }, true);
+    giphyPicker = picker;
+    return picker;
+  }
+
+  function describeGiphyInput(textarea) {
+    if (!textarea) return null;
+    const draft = textarea.closest?.('[data-smarttex-draft-thread="true"]');
+    if (draft) return { kind: "draft" };
+
+    const entry = textarea.closest?.(".smarttex-comment-entry");
+    const thread = textarea.closest?.(".smarttex-comment-thread");
+    if (entry?.dataset?.commentId && thread?.dataset?.threadId) {
+      return {
+        kind: "edit",
+        threadId: String(thread.dataset.threadId),
+        commentId: String(entry.dataset.commentId)
+      };
+    }
+
+    const reply = textarea.closest?.(".smarttex-comment-reply-editor");
+    if (reply && thread?.dataset?.threadId) {
+      return { kind: "reply", threadId: String(thread.dataset.threadId) };
+    }
+    return null;
+  }
+
+  function escapeGiphySelector(value) {
+    const exact = String(value || "");
+    if (globalThis.CSS?.escape) return globalThis.CSS.escape(exact);
+    return exact.replace(/[^A-Za-z0-9_-]/g, (character) => `\\${character}`);
+  }
+
+  function resolveGiphyInput(context, fallbackButton, fallbackTextarea) {
+    if (fallbackButton?.isConnected && fallbackTextarea?.isConnected) {
+      return { button: fallbackButton, textarea: fallbackTextarea };
+    }
+    const root = pane?.isConnected ? pane : document;
+    let host = null;
+    if (context?.kind === "draft") {
+      host = root.querySelector?.('[data-smarttex-draft-thread="true"]');
+    } else if (context?.kind === "reply" && context.threadId) {
+      host = root.querySelector?.(
+        `[data-thread-id="${escapeGiphySelector(context.threadId)}"] .smarttex-comment-reply-editor`
+      );
+    } else if (context?.kind === "edit" && context.threadId && context.commentId) {
+      host = root.querySelector?.(
+        `[data-thread-id="${escapeGiphySelector(context.threadId)}"] ` +
+        `.smarttex-comment-entry[data-comment-id="${escapeGiphySelector(context.commentId)}"]`
+      );
+    }
+    const textarea = host?.querySelector?.("textarea");
+    const button = host?.querySelector?.(".smarttex-comment-giphy-trigger");
+    if (!textarea?.isConnected || !button?.isConnected) return null;
+    return { button, textarea };
+  }
+
+  async function openGiphyPicker(button, textarea) {
+    if (!button || !textarea) return;
+    const context = describeGiphyInput(textarea);
+    const integration = globalThis.SmartTeXGiphyIntegration;
+    const allowed = await integration?.requestConsent?.({ reason: "add" });
+    if (!allowed) return;
+
+    // Consent can trigger UI updates. Resolve the current textarea/button pair
+    // again after the asynchronous consent step so the first click remains valid
+    // even if the comments pane was re-rendered in the meantime.
+    const target = resolveGiphyInput(context, button, textarea);
+    if (!target) return;
+    button = target.button;
+    textarea = target.textarea;
+
+    if (emojiPicker && !emojiPicker.hidden) closeEmojiPicker({ restoreFocus: false });
+    const picker = ensureGiphyPicker();
+    if (!picker.hidden) closeGiphyPicker({ restoreFocus: false });
+    giphyPickerTarget = { textarea };
+    giphyPickerRestoreFocus = button;
+    picker.hidden = false;
+    picker.setAttribute("aria-hidden", "false");
+    picker.classList.toggle("smarttex-comments-dark", Boolean(pane?.classList?.contains("smarttex-comments-dark")));
+    const input = picker.querySelector(".smarttex-comment-giphy-search");
+    if (input) input.value = "";
+    positionGiphyPicker(button);
+    await loadGiphyPickerResults("");
+    if (!picker.hidden) {
+      positionGiphyPicker(button);
+      input?.focus?.();
+    }
+  }
+
+  function emojiInputShell(textarea) {
+    const shell = document.createElement("div");
+    shell.className = "smarttex-comment-input-shell";
+
+    const emojiButton = document.createElement("button");
+    emojiButton.type = "button";
+    emojiButton.className = "smarttex-comment-emoji-trigger";
+    emojiButton.innerHTML = smileyIconSvg();
+    emojiButton.title = "Insert emoji";
+    emojiButton.setAttribute("aria-label", "Insert emoji");
+    emojiButton.addEventListener("pointerdown", (event) => event.preventDefault());
+    emojiButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openEmojiPicker(emojiButton, { kind: "input", textarea });
+    });
+
+    const giphyButton = document.createElement("button");
+    giphyButton.type = "button";
+    giphyButton.className = "smarttex-comment-giphy-trigger";
+    giphyButton.textContent = "GIF";
+    giphyButton.title = "Insert GIPHY GIF";
+    giphyButton.setAttribute("aria-label", "Insert GIPHY GIF");
+    // Trigger on pointerdown, with click as the keyboard/accessibility fallback.
+    // This prevents the first activation from being lost to focus/re-render work
+    // in the surrounding comment card and suppresses the duplicate click event.
+    bindImmediateButtonAction(giphyButton, () => {
+      openGiphyPicker(giphyButton, textarea);
+    });
+
+    const preview = document.createElement("div");
+    preview.className = "smarttex-comment-giphy-input-preview";
+    const refreshPreview = () => {
+      preview.replaceChildren();
+      const attachment = cleanGiphyAttachment(textarea.__smarttexGiphyGet?.());
+      if (!attachment) {
+        preview.hidden = true;
+        return;
+      }
+      preview.hidden = false;
+      const rendered = renderGiphyAttachment(attachment, {
+        allowRemove: true,
+        onRemove: () => {
+          textarea.__smarttexGiphySet?.(null);
+          giphyPendingAnalytics.delete(attachment.id);
+          refreshPreview();
+        }
+      });
+      if (rendered) preview.appendChild(rendered);
+    };
+    textarea.__smarttexGiphyRefresh = refreshPreview;
+
+    shell.append(textarea, giphyButton, emojiButton, preview);
+    refreshPreview();
+    return shell;
+  }
+
+  function ensureReactionTooltip() {
+    if (reactionTooltip?.isConnected) return reactionTooltip;
+    const tooltip = document.createElement("div");
+    tooltip.id = "smarttex-comment-reaction-tooltip";
+    tooltip.className = "smarttex-comment-reaction-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.hidden = true;
+    document.body.appendChild(tooltip);
+    reactionTooltip = tooltip;
+    return tooltip;
+  }
+
+  function hideReactionTooltip(owner = null) {
+    if (!reactionTooltip || (owner && reactionTooltipOwner !== owner)) return;
+    reactionTooltip.hidden = true;
+    reactionTooltip.classList.remove("smarttex-comment-reaction-tooltip-visible");
+    reactionTooltip.replaceChildren();
+    reactionTooltip.style.removeProperty("left");
+    reactionTooltip.style.removeProperty("top");
+    reactionTooltipOwner = null;
+  }
+
+  function showReactionTooltip(button, actors) {
+    const tooltip = ensureReactionTooltip();
+    if (!tooltip || !button?.isConnected) return;
+    reactionTooltipOwner = button;
+    tooltip.replaceChildren();
+    for (const reaction of actors) {
+      const name = document.createElement("span");
+      name.textContent = reaction.authorName || "Anonymous";
+      tooltip.appendChild(name);
+    }
+    tooltip.classList.toggle("smarttex-comments-dark", Boolean(pane?.classList?.contains("smarttex-comments-dark")));
+    tooltip.hidden = false;
+    tooltip.classList.add("smarttex-comment-reaction-tooltip-visible");
+    const rect = button.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    tooltip.style.left = `${Math.max(6, Math.min(window.innerWidth - tooltipRect.width - 6, rect.left + rect.width / 2 - tooltipRect.width / 2))}px`;
+    const above = rect.top - tooltipRect.height - 8;
+    tooltip.style.top = `${above >= 6 ? above : Math.min(window.innerHeight - tooltipRect.height - 6, rect.bottom + 8)}px`;
+  }
+
+  function renderCommentReactions(thread, comment) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "smarttex-comment-reactions";
+    const groups = activeReactionGroups(comment);
+    const ownActorKey = reactionActorKey();
+    for (const group of groups) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "smarttex-comment-reaction";
+      button.setAttribute("aria-pressed", group.actors.some((reaction) => reaction.actorKey === ownActorKey) ? "true" : "false");
+      button.setAttribute("aria-describedby", "smarttex-comment-reaction-tooltip");
+      button.setAttribute(
+        "aria-label",
+        `${group.emoji}: ${group.actors.length} reaction${group.actors.length === 1 ? "" : "s"} from ${group.actors.map((reaction) => reaction.authorName || "Anonymous").join(", ")}`
+      );
+      const emoji = document.createElement("span");
+      emoji.className = "smarttex-comment-reaction-emoji";
+      emoji.textContent = group.emoji;
+      const badge = document.createElement("span");
+      badge.className = "smarttex-comment-reaction-count";
+      badge.textContent = String(group.actors.length);
+      button.appendChild(emoji);
+      if (group.actors.length >= 2) button.appendChild(badge);
+      button.addEventListener("mouseenter", () => showReactionTooltip(button, group.actors));
+      button.addEventListener("mouseleave", () => hideReactionTooltip(button));
+      button.addEventListener("focus", () => showReactionTooltip(button, group.actors));
+      button.addEventListener("blur", () => hideReactionTooltip(button));
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        hideReactionTooltip(button);
+        toggleCommentReaction(thread.id, comment.id, group.emoji);
+      });
+      wrapper.appendChild(button);
+    }
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "smarttex-comment-reaction-add";
+    if (groups.length) {
+      add.textContent = "+";
+      add.classList.add("smarttex-comment-reaction-add-plus");
+    } else {
+      add.innerHTML = smileyIconSvg();
+    }
+    add.title = "Add reaction";
+    add.setAttribute("aria-label", "Add reaction");
+    add.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openEmojiPicker(add, { kind: "reaction", threadId: thread.id, commentId: comment.id });
+    });
+    wrapper.appendChild(add);
+    return wrapper;
   }
 
   function commentIconSvg() {
@@ -1613,7 +2729,7 @@
     heading.append(author, remove);
     if (unread) {
       row.addEventListener("click", (event) => {
-        if (event.target.closest("button, textarea, input")) return;
+        if (event.target.closest("button, textarea, input, a, iframe")) return;
         if (!markCommentRead(thread, comment, { refresh: false })) return;
         row.classList.remove("smarttex-comment-unread");
         row.querySelector(".smarttex-comments-unread-dot")?.remove?.();
@@ -1631,6 +2747,16 @@
       const textarea = document.createElement("textarea");
       textarea.rows = 3;
       textarea.value = editingComment.draftText;
+      textarea.__smarttexGiphyGet = () => (
+        editingComment?.threadId === thread.id && editingComment?.commentId === comment.id
+          ? editingComment.draftGiphy
+          : null
+      );
+      textarea.__smarttexGiphySet = (value) => {
+        if (editingComment?.threadId === thread.id && editingComment?.commentId === comment.id) {
+          editingComment.draftGiphy = cleanGiphyAttachment(value);
+        }
+      };
       textarea.addEventListener("input", () => {
         if (editingComment?.threadId === thread.id && editingComment?.commentId === comment.id) {
           editingComment.draftText = textarea.value;
@@ -1642,30 +2768,43 @@
       ok.type = "button";
       ok.className = "smarttex-comment-primary";
       ok.textContent = "OK";
-      ok.addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (!commitEditedComment(thread.id, comment.id, textarea.value)) textarea.focus();
+      bindImmediateButtonAction(ok, () => {
+        if (!commitEditedComment(thread.id, comment.id, textarea.value, editingComment?.draftGiphy)) textarea.focus();
       });
       const cancel = document.createElement("button");
       cancel.type = "button";
       cancel.textContent = "Cancel";
-      cancel.addEventListener("click", (event) => {
-        event.stopPropagation();
+      bindImmediateButtonAction(cancel, () => {
         editingComment = null;
         renderAll();
       });
       actions.append(ok, cancel);
-      row.append(heading, textarea, actions);
+      row.append(heading, emojiInputShell(textarea), actions);
     } else {
-      const text = document.createElement("div");
-      text.className = "smarttex-comment-text";
-      text.textContent = comment.text;
-      if (editable) text.title = "Double-click to edit";
-      row.append(heading, text);
+      const content = document.createElement("div");
+      content.className = "smarttex-comment-content";
+      if (comment.text) {
+        const text = document.createElement("div");
+        text.className = "smarttex-comment-text";
+        text.textContent = comment.text;
+        text.classList.toggle("smarttex-comment-text-emoji-only", isEmojiOnlyText(comment.text));
+        if (editable) text.title = "Double-click to edit";
+        content.appendChild(text);
+      }
+      const gif = renderGiphyAttachment(comment.giphy);
+      if (gif) content.appendChild(gif);
+      if (editable && !comment.text) content.title = "Double-click to edit";
+      row.append(heading, content, renderCommentReactions(thread, comment));
       if (editable) {
-        row.title = "Double-click to edit";
+        // Keep clicks on an editable comment inside the comment pane. Without
+        // this, the first click of a double-click bubbles to the thread card,
+        // which navigates to the source editor and steals focus before editing.
+        row.addEventListener("click", (event) => {
+          if (event.target.closest("button, textarea, input, a, iframe")) return;
+          event.stopPropagation();
+        });
         row.addEventListener("dblclick", (event) => {
-          if (event.target.closest("button, textarea, input")) return;
+          if (event.target.closest("button, textarea, input, a, iframe")) return;
           event.preventDefault();
           event.stopPropagation();
           beginEditComment(thread.id, comment.id);
@@ -1682,6 +2821,12 @@
     textarea.rows = 2;
     textarea.placeholder = "Reply…";
     textarea.value = replyDrafts.get(thread.id) || "";
+    textarea.__smarttexGiphyGet = () => replyGiphyDrafts.get(thread.id) || null;
+    textarea.__smarttexGiphySet = (value) => {
+      const giphy = cleanGiphyAttachment(value);
+      if (giphy) replyGiphyDrafts.set(thread.id, giphy);
+      else replyGiphyDrafts.delete(thread.id);
+    };
     textarea.addEventListener("input", () => replyDrafts.set(thread.id, textarea.value));
     const actions = document.createElement("div");
     actions.className = "smarttex-comment-edit-actions";
@@ -1691,7 +2836,7 @@
     ok.textContent = "OK";
     ok.addEventListener("click", (event) => {
       event.stopPropagation();
-      if (!addReply(thread.id, textarea.value)) textarea.focus();
+      if (!addReply(thread.id, textarea.value, replyGiphyDrafts.get(thread.id))) textarea.focus();
     });
     const cancel = document.createElement("button");
     cancel.type = "button";
@@ -1699,10 +2844,11 @@
     cancel.addEventListener("click", (event) => {
       event.stopPropagation();
       replyDrafts.delete(thread.id);
+      replyGiphyDrafts.delete(thread.id);
       renderAll();
     });
     actions.append(ok, cancel);
-    wrapper.append(textarea, actions);
+    wrapper.append(emojiInputShell(textarea), actions);
     return wrapper;
   }
 
@@ -1891,6 +3037,10 @@
     textarea.rows = 4;
     textarea.placeholder = "Add comment…";
     textarea.value = draftThread.draftText || "";
+    textarea.__smarttexGiphyGet = () => cleanGiphyAttachment(draftThread?.giphy);
+    textarea.__smarttexGiphySet = (value) => {
+      if (draftThread) draftThread.giphy = cleanGiphyAttachment(value);
+    };
     textarea.addEventListener("input", () => { if (draftThread) draftThread.draftText = textarea.value; });
     const actions = document.createElement("div");
     actions.className = "smarttex-comment-edit-actions";
@@ -1898,18 +3048,94 @@
     ok.type = "button";
     ok.className = "smarttex-comment-primary";
     ok.textContent = "OK";
-    ok.addEventListener("click", commitDraftThread);
+    bindImmediateButtonAction(ok, commitDraftThread);
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.textContent = "Cancel";
-    cancel.addEventListener("click", cancelDraftThread);
+    bindImmediateButtonAction(cancel, cancelDraftThread);
     actions.append(ok, cancel);
-    card.append(heading, textarea, actions);
+    card.append(heading, emojiInputShell(textarea), actions);
     return card;
   }
 
-  function renderPaneThreads() {
+  function startCommentAtCurrentSelection() {
+    const selection = currentSelection();
+    if (selection) {
+      startCommentAt(selection.start, selection.end);
+      return;
+    }
+    const cursor = Math.max(0, Number(currentState?.cursorIndex) || 0);
+    startCommentAt(cursor, cursor);
+  }
+
+  function renderAddCommentControl() {
+    const row = document.createElement("div");
+    row.className = "smarttex-comments-add-row";
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "smarttex-comments-add";
+    add.textContent = "+";
+    add.title = "Add comment at cursor or selection";
+    add.setAttribute("aria-label", add.title);
+    bindImmediateButtonAction(add, startCommentAtCurrentSelection);
+    row.appendChild(add);
+    return row;
+  }
+
+  function paneInteractionIsActive() {
+    if (giphyPicker && !giphyPicker.hidden) return true;
+    if (emojiPicker && !emojiPicker.hidden) return true;
+    if (confirmationOverlay && !confirmationOverlay.hidden) return true;
+    if (colorPickerOverlay && !colorPickerOverlay.hidden) return true;
+    if (document.getElementById("smarttex-review-stop-overlay")) return true;
+    if (document.getElementById("smarttex-giphy-consent-overlay")) return true;
+    if (document.getElementById("smarttex-giphy-key-limit-overlay")) return true;
+
+    const active = document.activeElement;
+    if (!active || !pane?.contains?.(active)) return false;
+    return Boolean(active.closest?.(
+      'textarea, input, select, [contenteditable="true"], [role="textbox"]'
+    ));
+  }
+
+  function scheduleDeferredPaneRenderFlush(delay = 0) {
+    if (!paneRenderDeferred) return;
+    window.clearTimeout(paneRenderFlushTimer);
+    paneRenderFlushTimer = window.setTimeout(() => {
+      paneRenderFlushTimer = 0;
+      if (!paneRenderDeferred || !paneOpen || paneInteractionIsActive()) return;
+      paneRenderDeferred = false;
+      renderAll();
+    }, Math.max(0, Number(delay) || 0));
+  }
+
+  function updatePaneThreadHighlights() {
     if (!pane) return;
+    for (const card of pane.querySelectorAll?.(".smarttex-comment-thread[data-thread-id]") || []) {
+      const threadId = String(card.dataset.threadId || "");
+      card.classList.toggle(
+        "smarttex-comment-thread-cursor-active",
+        threadId === cursorActiveThreadId
+      );
+      card.classList.toggle(
+        "smarttex-comment-thread-icon-active",
+        threadId === iconFocusedThreadId
+      );
+    }
+  }
+
+  function renderPaneThreads({ preserveInteraction = false } = {}) {
+    if (preserveInteraction && paneInteractionIsActive()) {
+      paneRenderDeferred = true;
+      updatePaneStatus();
+      updatePaneThreadHighlights();
+      return false;
+    }
+    paneRenderDeferred = false;
+    if (!pane) return;
+    hideReactionTooltip();
+    if (emojiPicker && !emojiPicker.hidden) closeEmojiPicker({ restoreFocus: false });
+    if (giphyPicker && !giphyPicker.hidden) closeGiphyPicker({ restoreFocus: false });
     const list = pane.querySelector(".smarttex-comments-list");
     if (!list) return;
     const activeElement = document.activeElement;
@@ -1921,19 +3147,23 @@
     const selectionEnd = activeWasTextarea ? Number(activeElement.selectionEnd) : null;
     const fragment = document.createDocumentFragment();
     const draft = renderDraftThread();
-    if (draft) fragment.appendChild(draft);
     const threads = activeThreads();
     const marks = Object.values(data.marks)
       .filter((mark) => alive(mark) && fileMatches(mark.fileName, currentState?.fileName))
       .sort((a, b) => a.start - b.start || a.createdAt - b.createdAt);
     const entries = [
       ...threads.map((thread) => ({ kind: "thread", start: thread.start, createdAt: thread.createdAt, value: thread })),
-      ...marks.map((mark) => ({ kind: "mark", start: mark.start, createdAt: mark.createdAt, value: mark }))
+      ...marks.map((mark) => ({ kind: "mark", start: mark.start, createdAt: mark.createdAt, value: mark })),
+      ...(draft ? [{ kind: "draft", start: draftThread.start, createdAt: draftThread.createdAt, value: draft }] : [])
     ].sort((a, b) => a.start - b.start || a.createdAt - b.createdAt);
     for (const entry of entries) {
-      fragment.appendChild(entry.kind === "thread" ? renderThread(entry.value) : renderMark(entry.value));
+      fragment.appendChild(
+        entry.kind === "thread" ? renderThread(entry.value) :
+          entry.kind === "mark" ? renderMark(entry.value) : entry.value
+      );
     }
-    if (!draft && !entries.length) {
+    fragment.appendChild(renderAddCommentControl());
+    if (!entries.length) {
       const empty = document.createElement("div");
       empty.className = "smarttex-comments-empty";
       empty.textContent = "No comments or markings in this document.";
@@ -1968,6 +3198,7 @@
         } catch (_error) {}
       }
     }
+    return true;
   }
 
   function updatePaneStatus() {
@@ -2005,11 +3236,11 @@
     }));
   }
 
-  function renderAll() {
+  function renderAll({ preserveInteraction = false } = {}) {
     renderOverlays();
     dispatchUnreadState();
     if (paneOpen) {
-      renderPaneThreads();
+      renderPaneThreads({ preserveInteraction });
       scheduleSelectionPopup();
     } else {
       hideSelectionPopup();
@@ -2050,6 +3281,9 @@
     pane.classList.toggle("smarttex-comments-dark", theme.dark);
     if (selectionPopup) selectionPopup.classList.toggle("smarttex-comments-dark", theme.dark);
     if (colorPickerOverlay) colorPickerOverlay.classList.toggle("smarttex-comments-dark", theme.dark);
+    if (emojiPicker) emojiPicker.classList.toggle("smarttex-comments-dark", theme.dark);
+    if (giphyPicker) giphyPicker.classList.toggle("smarttex-comments-dark", theme.dark);
+    if (reactionTooltip) reactionTooltip.classList.toggle("smarttex-comments-dark", theme.dark);
   }
 
   function pdfLayoutContainer() {
@@ -2797,7 +4031,6 @@
         <section class="smarttex-review-section smarttex-comments-section">
           <header class="smarttex-review-subheader smarttex-comments-header">
             <button type="button" class="smarttex-review-section-toggle smarttex-comments-section-toggle" aria-expanded="true" title="Minimize comments" aria-label="Minimize comments">▾</button>
-            <button type="button" class="smarttex-comments-add" title="Add comment at cursor or selection" aria-label="Add comment at cursor or selection">+</button>
             <strong>comments</strong>
             <button type="button" class="smarttex-comments-settings" title="Comment display settings" aria-label="Comment display settings" aria-expanded="false">${settingsIconSvg()}</button>
           </header>
@@ -2885,16 +4118,6 @@
     renderTrackChangesList();
     applyReviewSectionLayout();
 
-    const addButton = pane.querySelector(".smarttex-comments-add");
-    bindImmediateButtonAction(addButton, () => {
-      const selection = currentSelection();
-      if (selection) {
-        startCommentAt(selection.start, selection.end);
-        return;
-      }
-      const cursor = Math.max(0, Number(currentState?.cursorIndex) || 0);
-      startCommentAt(cursor, cursor);
-    });
     pane.querySelector(".smarttex-comments-close")?.addEventListener("click", closePane);
     const settingsButton = pane.querySelector(".smarttex-comments-settings");
     bindImmediateButtonAction(settingsButton, () => setPaneSettingsExpanded(!paneSettingsExpanded));
@@ -3023,6 +4246,12 @@
   function finishClosePane({ markAllRead = false } = {}) {
     if (markAllRead) markCurrentFileRead({ refresh: false });
     paneOpen = false;
+    paneRenderDeferred = false;
+    window.clearTimeout(paneRenderFlushTimer);
+    paneRenderFlushTimer = 0;
+    closeEmojiPicker({ restoreFocus: false });
+    closeGiphyPicker({ restoreFocus: false });
+    hideReactionTooltip();
     paneAwaitingInitialReviewState = false;
     if (pane) pane.hidden = true;
     if (paneGeometryFrame) {
@@ -3175,12 +4404,12 @@
   function focusThreadFromIcon(threadId) {
     window.clearTimeout(iconFocusedThreadTimer);
     iconFocusedThreadId = String(threadId || "");
-    if (paneOpen) renderPaneThreads();
+    if (paneOpen) updatePaneThreadHighlights();
     iconFocusedThreadTimer = window.setTimeout(() => {
       iconFocusedThreadTimer = 0;
       if (iconFocusedThreadId !== threadId) return;
       iconFocusedThreadId = "";
-      if (paneOpen) renderPaneThreads();
+      if (paneOpen) updatePaneThreadHighlights();
     }, 1600);
   }
 
@@ -3246,13 +4475,21 @@
     requestAnimationFrame(() => scrollThreadIntoView(threadId));
   });
 
+  // If a background refresh was deferred while the user was typing or using a
+  // chooser, apply it only after focus has genuinely left all protected UI.
+  // setTimeout lets focus move between textarea -> GIF button -> picker without
+  // creating a destructive refresh in the middle of that transition.
+  document.addEventListener("focusout", () => {
+    scheduleDeferredPaneRenderFlush();
+  }, true);
+
   window.addEventListener(STATE_EVENT, (event) => {
     let state = null;
     try { state = JSON.parse(String(event.detail || "null")); } catch (_error) { return; }
     if (!state) return;
-    if (currentState?.fileName && !fileMatches(currentState.fileName, state.fileName)) {
-      flushPendingSourceChange();
-    }
+    const previousFileName = String(currentState?.fileName || "");
+    const fileChanged = Boolean(previousFileName) && !fileMatches(previousFileName, state.fileName);
+    if (fileChanged) flushPendingSourceChange();
     currentState = state;
     scheduleEditorSourceChange(state);
     maybeAutoOpenForCurrentDocument();
@@ -3268,7 +4505,21 @@
         }).catch(() => {});
       }, 120);
     }
-    renderAll();
+
+    if (fileChanged) {
+      // A document switch needs a new list, but even this is deferred while a
+      // modal/comment interaction is active so focus is never stolen mid-action.
+      renderAll({ preserveInteraction: true });
+    } else {
+      // Editor cursor/selection events are very frequent. They only need
+      // overlays, selection UI and the active-thread class; rebuilding the
+      // complete comments DOM here was the main source of random focus loss.
+      renderOverlays();
+      dispatchUnreadState();
+      updatePaneThreadHighlights();
+      if (paneOpen) scheduleSelectionPopup();
+      else hideSelectionPopup();
+    }
     if (paneOpen && cursorFocus.threadId && cursorFocus.changed) {
       requestAnimationFrame(() => scrollThreadIntoView(cursorFocus.threadId));
     }
@@ -3330,10 +4581,19 @@
     if (detail.kind === "comments-live") {
       const remote = normalizeData(detail.payload?.data);
       const merged = mergeData(data, remote);
-      if (JSON.stringify(merged) !== JSON.stringify(normalizeData(data))) {
+      const localChanged = !sameDataRecords(merged, data);
+      const correction = realtimeCorrectionForIncoming(remote, merged);
+      const incomingNeedsCorrection = !sameDataRecords(correction, remote);
+      if (localChanged) {
         data = merged;
-        renderAll();
+        renderAll({ preserveInteraction: true });
         if (initialSyncComplete) maybeAutoOpenForCurrentDocument();
+      }
+      if (incomingNeedsCorrection) {
+        // A peer may have sent a full thread from a stale local snapshot while
+        // changing a different reaction. Re-broadcast and persist the merged
+        // record so newer per-actor reaction tombstones cannot be overwritten.
+        markDirty(250, correction);
       }
       return;
     }
@@ -3357,19 +4617,41 @@
     if (applyCommentsAuthorProfile(String(detail.authorId || ""), {
       name: detail.name,
       color: detail.color
-    })) renderAll();
+    })) renderAll({ preserveInteraction: true });
   });
+
+  window.addEventListener(
+    globalThis.SmartTeXGiphyIntegration?.CONSENT_CHANGED_EVENT || "smarttex:giphy-consent-changed",
+    () => {
+      Promise.resolve(globalThis.SmartTeXGiphyIntegration?.hasConsent?.()).then((accepted) => {
+        if (accepted) {
+          // Do not re-render the comment pane here. In the add-GIF flow this event
+          // fires while openGiphyPicker() is awaiting consent; a full render would
+          // replace the clicked button/textarea and make the first activation fail.
+          suppressGiphyAutoPrompt = false;
+          return;
+        }
+        closeGiphyPicker({ restoreFocus: false });
+        suppressGiphyAutoPrompt = true;
+        if (paneOpen) renderAll();
+        suppressGiphyAutoPrompt = false;
+      }).catch(() => { suppressGiphyAutoPrompt = false; });
+    }
+  );
 
   extensionApi?.storage?.onChanged?.addListener?.((changes, areaName) => {
     if (areaName !== "local" || !changes[PROFILE_KEY]) return;
     const previousProfile = profile;
     profile = normalizeProfile(changes[PROFILE_KEY].newValue, profile);
+    if (!globalThis.SmartTeXCommentProfile?.isFallbackProfile?.(profile)) {
+      globalThis.SmartTeXCommentProfile?.dismissFallbackNotice?.();
+    }
     if (draftThread) draftThread.color = profile.color;
     window.dispatchEvent(new CustomEvent(COLLABORATION_PROFILE_EVENT, {
       detail: JSON.stringify({ name: profile.name, color: profile.color, authorId })
     }));
     if (applyCommentsAuthorProfile(authorId, profile, previousProfile)) markDirty(250);
-    else renderAll();
+    else renderAll({ preserveInteraction: true });
   });
 
   const themeObserver = new MutationObserver(() => {
@@ -3408,6 +4690,8 @@
   window.addEventListener("pagehide", () => {
     clearInterval(syncTimer);
     clearTimeout(writeTimer);
+    window.clearTimeout(paneRenderFlushTimer);
+    paneRenderFlushTimer = 0;
     flushPendingSourceChange();
     themeObserver.disconnect();
     layoutObserver.disconnect();
@@ -3426,6 +4710,23 @@
     colorPickerOverlay?.remove?.();
     colorPickerOverlay = null;
     colorPickerTarget = null;
+    emojiPicker?.remove?.();
+    emojiPicker = null;
+    emojiPickerTarget = null;
+    emojiPickerRestoreFocus = null;
+    giphySearchController?.abort?.();
+    giphySearchController = null;
+    giphyResultObserver?.disconnect?.();
+    giphyResultObserver = null;
+    window.clearTimeout(giphySearchTimer);
+    giphySearchTimer = 0;
+    giphyPicker?.remove?.();
+    giphyPicker = null;
+    giphyPickerTarget = null;
+    giphyPickerRestoreFocus = null;
+    reactionTooltip?.remove?.();
+    reactionTooltip = null;
+    reactionTooltipOwner = null;
     if (lastSavedRevision !== mutationRevision) flushProjectData();
   }, { once: true });
 

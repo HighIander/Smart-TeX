@@ -29,7 +29,8 @@ assert.match(comments, /comment\.permanentlyDeleted = true/);
 assert.match(comments, /const deletingRootComment = aliveComments\[0\]\?\.id === comment\.id/);
 assert.match(comments, /if \(deletingRootComment \|\| !Object\.values\(thread\.comments\)\.some\(alive\)\)/);
 assert.match(comments, /!record\.permanentlyDeleted/);
-assert.match(comments, /if \(!alive\(comment\) \|\| !matches\(comment, "authorColor"\)\) continue/);
+assert.match(comments, /if \(!alive\(comment\)\) continue/);
+assert.match(comments, /matches\(comment, "authorColor"\)/);
 assert.match(review, /kind: "review-live"/);
 assert.match(review, /detail\.kind === "review-live"[\s\S]*mergeReviewStates\(reviewState, remote\)/);
 

@@ -37,6 +37,10 @@
   let requestCounter = 0;
   let stateUpdateTimer = 0;
   let attachFrame = 0;
+  let overflowFrame = 0;
+  let toolbarResizeObserver = null;
+  let toolbarResizeTarget = null;
+  let toolbarResizeElement = null;
   const pendingRequests = new Map();
 
   function bridgeRequest(type, payload = {}, timeoutMs = 3000) {
@@ -78,6 +82,7 @@
     navigationBackButton.title = available
       ? "Back to the previous editor position"
       : "No previous editor position";
+    scheduleEditingToolbarOverflowUpdate();
   }
 
   function pushNavigationOrigin(value) {
@@ -502,6 +507,7 @@
     if (!table && activeToolbarDropdown?._smarttexAnchor?.dataset.smarttexTableRequired) {
       closeToolbarDropdown();
     }
+    scheduleEditingToolbarOverflowUpdate();
   }
 
   function unusedLabel(prefix, base) {
@@ -1196,6 +1202,35 @@
     return toolbar;
   }
 
+
+  function updateEditingToolbarOverflow() {
+    overflowFrame = 0;
+    if (!editingToolbar?.isConnected) return;
+    const overflowing = editingToolbar.scrollWidth > editingToolbar.clientWidth + 1;
+    editingToolbar.classList.toggle("smarttex-document-toolbar-overflowing", overflowing);
+  }
+
+  function scheduleEditingToolbarOverflowUpdate() {
+    if (overflowFrame) return;
+    overflowFrame = window.requestAnimationFrame(updateEditingToolbarOverflow);
+  }
+
+  function observeEditingToolbarSize(editorToolbar) {
+    if (
+      toolbarResizeTarget === editorToolbar &&
+      toolbarResizeElement === editingToolbar &&
+      toolbarResizeObserver
+    ) return;
+    toolbarResizeObserver?.disconnect?.();
+    toolbarResizeObserver = null;
+    toolbarResizeTarget = editorToolbar || null;
+    toolbarResizeElement = editingToolbar || null;
+    if (!editorToolbar || typeof ResizeObserver !== "function") return;
+    toolbarResizeObserver = new ResizeObserver(() => scheduleEditingToolbarOverflowUpdate());
+    toolbarResizeObserver.observe(editorToolbar);
+    if (editingToolbar) toolbarResizeObserver.observe(editingToolbar);
+  }
+
   function isVisible(element) {
     if (!element?.isConnected) return false;
     const rect = element.getBoundingClientRect();
@@ -1287,6 +1322,8 @@
     if (editingToolbar.parentElement !== editorToolbar) {
       editorToolbar.appendChild(editingToolbar);
     }
+    observeEditingToolbarSize(editorToolbar);
+    scheduleEditingToolbarOverflowUpdate();
   }
 
   function scheduleAttachEditingToolbar() {
@@ -1333,6 +1370,7 @@
   }, true);
 
   window.addEventListener("resize", () => {
+    scheduleEditingToolbarOverflowUpdate();
     if (activeToolbarDropdown && !activeToolbarDropdown.hidden) {
       positionToolbarDropdown(
         activeToolbarDropdown,
@@ -1357,6 +1395,11 @@
     observer.disconnect();
     window.clearTimeout(stateUpdateTimer);
     if (attachFrame) window.cancelAnimationFrame(attachFrame);
+    if (overflowFrame) window.cancelAnimationFrame(overflowFrame);
+    toolbarResizeObserver?.disconnect?.();
+    toolbarResizeObserver = null;
+    toolbarResizeTarget = null;
+    toolbarResizeElement = null;
     closeToolbarDropdown();
     closeTableDialog();
     editingToolbar?.remove();

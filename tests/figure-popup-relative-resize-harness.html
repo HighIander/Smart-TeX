@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmartTeX relative figure resize harness</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; min-height: 100vh; background: #e9eef5; font-family: Inter, system-ui, sans-serif; }
+    #smarttex-equation-preview { position: fixed; top: 24px; left: 24px; display: grid; grid-template-rows: 42px minmax(0, 1fr); width: 420px; height: 320px; overflow: hidden; border: 1px solid #9aa9ba; border-radius: 14px; background: #fff; box-shadow: 0 12px 30px rgb(15 23 42 / 22%); }
+    .smarttex-preview-heading { display: flex; align-items: center; padding: 0 12px; border-bottom: 1px solid #dce3eb; }
+    .smarttex-equation-output { display: grid; place-items: center; box-sizing: border-box; width: 100%; height: 100%; min-height: 0; padding: 12px 14px 14px; overflow: hidden; }
+    #figure-resize-result { position: fixed; top: 12px; right: 12px; padding: 8px 11px; border-radius: 6px; color: #fff; background: #16803b; }
+    #figure-resize-result[data-result="failed"] { background: #cf222e; }
+  </style>
+</head>
+<body>
+  <aside id="smarttex-equation-preview" class="smarttex-preview-visible" data-preview-kind="figure" role="dialog">
+    <header class="smarttex-preview-heading"><strong>Figure preview</strong></header>
+    <div class="smarttex-equation-output">
+      <figure class="smarttex-figure-popup">
+        <div class="smarttex-figure-popup-viewport">
+          <div class="smarttex-figure-popup-media smarttex-figure-layout" data-smarttex-desired-width-px="300" style="width:300px">
+            <div class="smarttex-figure-layout-row">
+              <div class="smarttex-figure-layout-panel" data-smarttex-width-ratio="1" style="flex-basis:100%">
+                <img class="smarttex-figure-popup-image" data-smarttex-local-width-ratio="1" data-smarttex-image-scale="1" alt="test graphic" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='300' viewBox='0 0 600 300'%3E%3Crect width='600' height='300' fill='%23dceeff'/%3E%3Ccircle cx='300' cy='150' r='90' fill='%231674c7'/%3E%3C/svg%3E">
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption class="smarttex-float-popup-caption"><strong>Fig. 1:</strong> Caption text must scale together with the graphic.</figcaption>
+      </figure>
+    </div>
+  </aside>
+  <output id="figure-resize-result">Figure resize passed</output>
+  <script src="../figure-renderer.js"></script>
+  <script src="../popup-gate.js"></script>
+  <script>
+    const popup = document.querySelector("#smarttex-equation-preview");
+    const media = popup.querySelector(".smarttex-figure-layout");
+    const figure = popup.querySelector(".smarttex-figure-popup");
+    const caption = popup.querySelector(".smarttex-float-popup-caption");
+    const content = popup.querySelector(".smarttex-equation-output");
+    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    const resize = async (deltaX, deltaY, pointerId) => {
+      const handle = popup.querySelector('[data-direction="se"]');
+      const before = popup.getBoundingClientRect();
+      handle.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: before.right, clientY: before.bottom, pointerId }));
+      window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, buttons: 1, clientX: before.right + deltaX, clientY: before.bottom + deltaY, pointerId }));
+      window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, clientX: before.right + deltaX, clientY: before.bottom + deltaY, pointerId }));
+      await nextFrame();
+    };
+
+    (async () => {
+      try {
+        localStorage.removeItem("smarttex:popup-sizes:v1");
+        SmartTeXPopupUI.enhance(popup, { type: "image", headingSelector: ".smarttex-preview-heading" });
+        popup.addEventListener("smarttex:popup-resized", () => SmartTeXFigureRenderer.fitPopupLayout(media));
+        await document.querySelector("img").decode();
+        SmartTeXFigureRenderer.fitPopupLayout(media);
+        await nextFrame();
+        const initialMediaWidth = media.getBoundingClientRect().width;
+        const initialCaptionSize = parseFloat(getComputedStyle(caption).fontSize);
+
+        await resize(168, 128, 31);
+        const grownMediaWidth = media.getBoundingClientRect().width;
+        const grownCaptionSize = parseFloat(getComputedStyle(caption).fontSize);
+        if (!(grownMediaWidth > initialMediaWidth * 1.2)) throw new Error("Figure graphic did not scale up");
+        if (!(grownCaptionSize > initialCaptionSize * 1.2)) throw new Error("Figure caption did not scale up");
+
+        await resize(-310, -245, 32);
+        const shrunkMediaWidth = media.getBoundingClientRect().width;
+        const shrunkCaptionSize = parseFloat(getComputedStyle(caption).fontSize);
+        if (!(shrunkMediaWidth < initialMediaWidth)) throw new Error("Figure graphic did not scale down");
+        if (!(shrunkCaptionSize < initialCaptionSize)) throw new Error("Figure caption did not scale down");
+        const figureRect = figure.getBoundingClientRect();
+        const contentRect = content.getBoundingClientRect();
+        const captionRect = caption.getBoundingClientRect();
+        if (figureRect.width > contentRect.width + 1 || figureRect.height > contentRect.height + 1) {
+          throw new Error("Scaled figure exceeds its popup content box");
+        }
+        if (captionRect.top < contentRect.top || captionRect.bottom > contentRect.bottom) {
+          throw new Error("Scaled figure caption is clipped by its popup content box");
+        }
+
+        const saved = JSON.parse(localStorage.getItem("smarttex:popup-sizes:v1") || "{}").image;
+        if (!(saved?.widthRatio > 0 && saved?.heightRatio > 0) || "width" in saved || "height" in saved) {
+          throw new Error("Figure size was not persisted as relative ratios");
+        }
+        document.documentElement.dataset.figureResizeTest = "passed";
+      } catch (error) {
+        document.documentElement.dataset.figureResizeTest = "failed";
+        const result = document.querySelector("#figure-resize-result");
+        result.dataset.result = "failed";
+        result.textContent = error.message;
+      }
+    })();
+  </script>
+</body>
+</html>

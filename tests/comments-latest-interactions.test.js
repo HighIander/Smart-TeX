@@ -45,6 +45,16 @@ assert.match(css, /\.ace_editor\.smarttex-comments-editor-docked[\s\S]*calc\(100
 // The + button uses the current selection when available.
 assert.match(comments, /const selection = currentSelection\(\);[\s\S]*startCommentAt\(selection\.start, selection\.end\)/);
 
+// The + button is part of the scrolling list below all positioned entries (or
+// above the empty-state message), while a new draft joins the same positional
+// sort immediately and is scrolled fully into view.
+assert.doesNotMatch(comments, /smarttex-comments-header[\s\S]{0,500}class="smarttex-comments-add"/);
+assert.match(comments, /kind: "draft", start: draftThread\.start, createdAt: draftThread\.createdAt/);
+assert.match(comments, /\.sort\(\(a, b\) => a\.start - b\.start \|\| a\.createdAt - b\.createdAt\)/);
+assert.match(comments, /fragment\.appendChild\(renderAddCommentControl\(\)\);[\s\S]*if \(!entries\.length\)/);
+assert.match(comments, /function ensureDraftCommentEditorVisible\(\)[\s\S]*list\.scrollTop \+= delta/);
+assert.match(css, /\.smarttex-comments-add-row[\s\S]*justify-content: center/);
+
 // Auto-open only considers actual comment threads, not marker-only metadata.
 assert.match(comments, /function hasActualCommentsForCurrentDocument\(\)/);
 assert.match(comments, /Object\.values\(thread\.comments \|\| \{\}\)\.some/);

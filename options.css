@@ -546,3 +546,133 @@ select:focus {
     color: #e5edf7;
   }
 }
+
+.smarttex-giphy-options-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.smarttex-giphy-options-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.smarttex-giphy-options-grid input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.smarttex-giphy-options-row,
+.smarttex-giphy-options-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-top: 12px;
+}
+
+.smarttex-giphy-powered-link {
+  display: inline-flex;
+  text-decoration: none;
+}
+
+.smarttex-giphy-powered-bg {
+  display: inline-flex;
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: #4b5563;
+}
+
+.smarttex-giphy-powered-bg img {
+  display: block;
+  width: 150px;
+  height: auto;
+}
+
+
+.smarttex-giphy-key-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 8px;
+  align-items: center;
+}
+
+.smarttex-giphy-help-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #9aa9ba;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: 700 17px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-giphy-help-button:hover { background: rgb(127 127 127 / 12%); }
+
+.smarttex-options-overlay[hidden] { display: none; }
+.smarttex-options-overlay {
+  position: fixed;
+  z-index: 10000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(15 23 42 / 58%);
+  backdrop-filter: blur(2px);
+}
+
+.smarttex-options-overlay-dialog {
+  position: relative;
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 24px;
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  background: #fff;
+  color: #1e293b;
+  box-shadow: 0 24px 80px rgb(15 23 42 / 38%);
+}
+
+.smarttex-options-overlay-dialog h2 { margin: 0 42px 16px 0; }
+.smarttex-options-overlay-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 25px;
+  cursor: pointer;
+}
+.smarttex-options-overlay-close:hover { background: rgb(127 127 127 / 12%); }
+.smarttex-giphy-help-steps { margin: 0; padding-left: 24px; }
+.smarttex-giphy-help-steps li { margin: 0 0 12px; padding-left: 4px; }
+.smarttex-options-overlay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+.smarttex-giphy-dashboard-button { text-decoration: none; }
+html.smarttex-options-overlay-open { overflow: hidden; }
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-giphy-help-button { border-color: #52657a; }
+  .smarttex-options-overlay-dialog {
+    border-color: #475569;
+    background: #1d2736;
+    color: #e5edf7;
+  }
+}

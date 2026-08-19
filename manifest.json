@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SmartTeX",
-  "version": "2.1.0",
+  "version": "2.1.12",
   "description": "LaTeX popup previews, autocomplete, source tools, and per-document Nextcloud integration for CollabTeX-compatible editors.",
   "permissions": [
     "storage",
@@ -49,7 +49,8 @@
     {
       "resources": [
         "vendor/katex/fonts/*",
-        "vendor/pdfjs/*"
+        "vendor/pdfjs/*",
+        "icons/giphy-powered-by.png"
       ],
       "matches": [
         "https://*/*"

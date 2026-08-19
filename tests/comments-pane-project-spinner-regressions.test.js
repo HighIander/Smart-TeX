@@ -84,6 +84,21 @@ assert.match(comments, /function ensureRemovalConfirmationOverlay\(/);
 assert.match(comments, /smarttex-comments-confirm-overlay/);
 assert.match(comments, /title: "Delete comment\?"/);
 assert.match(comments, /title: "Delete comment thread\?"/);
+// Draft/edit controls must run on pointer-down because CollabTeX can rerender
+// the pane between pointer-down and click when focus changes.
+assert.match(comments, /bindImmediateButtonAction\(ok, \(\) => \{/);
+assert.match(comments, /bindImmediateButtonAction\(cancel, \(\) => \{/);
+assert.match(comments, /bindImmediateButtonAction\(ok, commitDraftThread\)/);
+assert.match(comments, /bindImmediateButtonAction\(cancel, cancelDraftThread\)/);
+// Cancelling a new comment must discard its temporary range highlight instead
+// of turning the selection into a persistent marking.
+const cancelStart = comments.indexOf("function cancelDraftThread()");
+const cancelEnd = comments.indexOf("function toggleMark", cancelStart);
+const cancelBody = comments.slice(cancelStart, cancelEnd);
+assert.doesNotMatch(cancelBody, /createMarkFromAnchor/);
+// Own comment clicks stay in the pane so a double-click cannot navigate to and
+// focus the source editor before edit mode opens.
+assert.match(comments, /row\.addEventListener\("click", \(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*row\.addEventListener\("dblclick"/);
 assert.doesNotMatch(comments, /window\.confirm/);
 assert.match(css, /smarttex-comments-source-pane-docked > \.editor-container > \.vertical-resizable-top/);
 

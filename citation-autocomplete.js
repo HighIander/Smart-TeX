@@ -85,6 +85,7 @@
         <button type="button" class="smarttex-citation-refresh" title="Re-parse bibliography files" aria-label="Refresh bibliography">
           <span aria-hidden="true">↻</span> Refresh
         </button>
+        <span class="smarttex-popup-escape-hint" aria-hidden="true">[Esc]</span>
         <button type="button" class="smarttex-citation-close" title="Close (Esc)" aria-label="Close citation suggestions">&times;</button>
       </span>
     </header>
@@ -101,6 +102,16 @@
   const list = popup.querySelector(".smarttex-citation-list");
   const closeButton = popup.querySelector(".smarttex-citation-close");
   const refreshButton = popup.querySelector(".smarttex-citation-refresh");
+  globalThis.SmartTeXPopupUI?.enhance?.(popup, {
+    type: "list",
+    closeButton,
+    onClose: () => hidePopup({ dismiss: true })
+  });
+  popup.addEventListener("smarttex:popup-resized", () => {
+    const rect = popup.getBoundingClientRect();
+    lastPopupPosition = { left: rect.left, top: rect.top };
+    positionPopup();
+  });
 
   function smartCitationsIsPresent() {
     return Boolean(document.querySelector(SMART_CITATIONS_SELECTOR));
@@ -364,6 +375,31 @@
     return parts.join(", ") || "Publication details unavailable";
   }
 
+  function appendHighlightedText(container, value, queryValue) {
+    const text = String(value || "");
+    const terms = [...new Set(
+      String(queryValue || "").trim().split(/\s+/).filter(Boolean)
+    )].sort((left, right) => right.length - left.length);
+    if (!terms.length) {
+      container.textContent = text;
+      return;
+    }
+    const escaped = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
+    let offset = 0;
+    for (const match of text.matchAll(pattern)) {
+      const index = Number(match.index) || 0;
+      if (index > offset) container.appendChild(document.createTextNode(text.slice(offset, index)));
+      const highlighted = document.createElement("strong");
+      highlighted.className = "smarttex-autocomplete-match";
+      highlighted.textContent = match[0];
+      container.appendChild(highlighted);
+      offset = index + match[0].length;
+    }
+    if (offset < text.length) container.appendChild(document.createTextNode(text.slice(offset)));
+    if (!container.childNodes.length) container.textContent = text;
+  }
+
   function setStatus(message, error = false) {
     status.hidden = !message;
     status.textContent = message || "";
@@ -453,17 +489,17 @@
 
       const title = document.createElement("strong");
       title.className = "smarttex-citation-title";
-      title.textContent = record.title || record.key;
+      appendHighlightedText(title, record.title || record.key, query);
       title.title = title.textContent;
       const key = document.createElement("code");
       key.className = "smarttex-citation-key";
-      key.textContent = record.key;
+      appendHighlightedText(key, record.key, query);
       const authors = document.createElement("span");
       authors.className = "smarttex-citation-authors";
-      authors.textContent = abbreviatedAuthors(record);
+      appendHighlightedText(authors, abbreviatedAuthors(record), query);
       const publication = document.createElement("span");
       publication.className = "smarttex-citation-publication";
-      publication.textContent = publicationText(record);
+      appendHighlightedText(publication, publicationText(record), query);
       item.append(title, key, authors, publication);
       item.addEventListener("mouseenter", () => {
         selectedIndex = index;
@@ -504,12 +540,12 @@
   }
 
   function positionPopup() {
-    if (popup.hidden) return;
+    if (popup.hidden || popup.classList.contains("smarttex-popup-resizing")) return;
     const screen = currentState?.screen;
     if (!screen) return;
     const margin = 9;
     const width = Math.max(1, Math.min(540, window.innerWidth - margin * 2));
-    popup.style.width = `${width}px`;
+    if (popup.dataset.smarttexUserSized !== "true") popup.style.width = `${width}px`;
     const cursorLeft = Number(screen.pageX) - window.scrollX;
     const cursorTop = Number(screen.pageY) - window.scrollY;
     const lineHeight = Math.max(14, Number(screen.lineHeight) || 18);
@@ -521,7 +557,9 @@
       48,
       Math.min(460, window.innerHeight - margin * 2, availableSideSpace)
     );
-    popup.style.maxHeight = `${Math.round(popupMaxHeight)}px`;
+    if (popup.dataset.smarttexUserSized !== "true") {
+      popup.style.maxHeight = `${Math.round(popupMaxHeight)}px`;
+    }
 
     const rect = popup.getBoundingClientRect();
     const cursorRect = {

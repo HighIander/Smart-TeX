@@ -15,7 +15,10 @@
   const STRUCTURE_HIGHLIGHT_KEY = "smarttex:structure-highlight:v1";
   const LABEL_REFERENCE_GUARD_KEY = "smarttex:label-reference-guard:v1";
   const DOCUMENT_OVERRIDES_KEY = "smarttex:document-overrides:v1";
+  const POPUP_SIZES_KEY = "smarttex:popup-sizes:v1";
+  const POPUP_SCALE_KEY = "smarttex:popup-scale:v1";
   const COMMENT_PROFILE_KEY = globalThis.SmartTeXCommentProfile?.KEY || "smarttex:comment-profile:v1";
+  const OPEN_SETTINGS_EVENT = globalThis.SmartTeXCommentProfile?.OPEN_SETTINGS_EVENT || "smarttex:open-settings-menu";
   const RUNTIME_SETTINGS_EVENT = "smarttex:runtime-settings";
   const DATA_PROTECTION_URL = "https://smartioz.com/smartTex/dataprotection.php";
   const IMPRINT_URL = "https://smartioz.com/smartTex/impressum.php";
@@ -125,6 +128,49 @@
     return /^#[0-9a-f]{6}$/i.test(String(value || ""))
       ? String(value).toLowerCase()
       : fallback;
+  }
+
+
+  function clampPopupScale(value) {
+    return Math.max(0.5, Math.min(2, Number(value) || 1));
+  }
+
+  function readPopupScaleSettings() {
+    const defaults = { mode: "global", global: 1, image: 1, equation: 1, table: 1 };
+    try {
+      const parsed = JSON.parse(localStorage.getItem(POPUP_SCALE_KEY) || "{}");
+      if (!parsed || typeof parsed !== "object") return defaults;
+      return {
+        mode: parsed.mode === "separate" ? "separate" : "global",
+        global: clampPopupScale(parsed.global),
+        image: clampPopupScale(parsed.image),
+        equation: clampPopupScale(parsed.equation),
+        table: clampPopupScale(parsed.table)
+      };
+    } catch (_error) {
+      return defaults;
+    }
+  }
+
+  function applyPopupScaleSettings(settings) {
+    const normalized = {
+      mode: settings?.mode === "separate" ? "separate" : "global",
+      global: clampPopupScale(settings?.global),
+      image: clampPopupScale(settings?.image),
+      equation: clampPopupScale(settings?.equation),
+      table: clampPopupScale(settings?.table)
+    };
+    try {
+      localStorage.setItem(POPUP_SCALE_KEY, JSON.stringify(normalized));
+    } catch (_error) {
+      // The popup UI still updates for the current tab if local storage is restricted.
+    }
+    if (typeof globalThis.SmartTeXPopupUI?.setRelativeSizeSettings === "function") {
+      globalThis.SmartTeXPopupUI.setRelativeSizeSettings(normalized);
+    } else {
+      window.dispatchEvent(new CustomEvent("smarttex:set-popup-relative-size", { detail: normalized }));
+    }
+    return normalized;
   }
 
   function normalizedPresets(stored = {}) {
@@ -332,7 +378,7 @@
     const profileGrid = document.createElement("div");
     profileGrid.className = "smarttex-settings-comment-profile-grid";
     const nameLabel = document.createElement("label");
-    nameLabel.textContent = "Name";
+    nameLabel.textContent = "User name";
     commentNameControl = document.createElement("input");
     commentNameControl.type = "text";
     commentNameControl.maxLength = 80;
@@ -350,19 +396,21 @@
     profileSection.append(profileHeading, profileGrid);
     menu.appendChild(profileSection);
 
-    const saveProfile = () => {
+    const saveProfile = ({ manualName = false } = {}) => {
       const normalized = globalThis.SmartTeXCommentProfile?.normalize?.({
         name: commentNameControl?.value,
-        color: commentColorControl?.value
+        color: commentColorControl?.value,
+        nameSource: manualName ? "manual" : commentProfile.nameSource
       }, commentProfile) || {
         name: String(commentNameControl?.value || "Anonymous").trim().slice(0, 80) || "Anonymous",
-        color: validColor(commentColorControl?.value, "#268bd2")
+        color: validColor(commentColorControl?.value, "#268bd2"),
+        nameSource: manualName ? "manual" : (commentProfile.nameSource || "manual")
       };
       commentProfile = normalized;
       extensionApi?.storage?.local?.set?.({ [COMMENT_PROFILE_KEY]: normalized }).catch?.(() => {});
     };
-    commentNameControl.addEventListener("input", saveProfile);
-    commentColorControl.addEventListener("input", saveProfile);
+    commentNameControl.addEventListener("input", () => saveProfile({ manualName: true }));
+    commentColorControl.addEventListener("input", () => saveProfile());
 
     const defaultsRow = document.createElement("label");
     defaultsRow.className = "smarttex-settings-use-presets";
@@ -382,6 +430,121 @@
       for (const definition of group.rows) section.appendChild(createSettingRow(definition));
       scrollBody.appendChild(section);
     }
+
+    const popupSection = document.createElement("section");
+    popupSection.className = "smarttex-settings-popup-size-section";
+    const popupHeading = document.createElement("h3");
+    popupHeading.textContent = "Popup sizes";
+
+    let popupScaleSettings = readPopupScaleSettings();
+    const popupControls = document.createElement("div");
+    popupControls.className = "smarttex-settings-popup-size-controls";
+
+    const resetPopupSizes = document.createElement("button");
+    resetPopupSizes.type = "button";
+    resetPopupSizes.className = "smarttex-settings-action smarttex-settings-reset-popup-sizes";
+    resetPopupSizes.textContent = "Reset popup sizes";
+    resetPopupSizes.title = "Reset saved popup sizes and set relative popup size to 100%";
+
+    const globalScaleWrap = document.createElement("div");
+    globalScaleWrap.className = "smarttex-settings-popup-global-scale";
+    const globalScale = document.createElement("input");
+    globalScale.type = "range";
+    globalScale.min = "50";
+    globalScale.max = "200";
+    globalScale.step = "5";
+    globalScale.setAttribute("aria-label", "Relative popup size");
+    const globalScaleValue = document.createElement("span");
+    globalScaleValue.className = "smarttex-settings-popup-scale-value";
+    globalScaleWrap.append(globalScale, globalScaleValue);
+
+    const detailToggle = document.createElement("button");
+    detailToggle.type = "button";
+    detailToggle.className = "smarttex-settings-popup-scale-toggle";
+    detailToggle.title = "Set image, equation, and table popup sizes separately";
+    detailToggle.setAttribute("aria-label", detailToggle.title);
+
+    const separateScales = document.createElement("div");
+    separateScales.className = "smarttex-settings-popup-separate-scales";
+    const separateControls = {};
+    for (const [type, labelText] of [["image", "Image"], ["equation", "Equation"], ["table", "Table"]]) {
+      const row = document.createElement("label");
+      row.className = "smarttex-settings-popup-scale-row";
+      const label = document.createElement("span");
+      label.textContent = labelText;
+      const input = document.createElement("input");
+      input.type = "range";
+      input.min = "50";
+      input.max = "200";
+      input.step = "5";
+      input.setAttribute("aria-label", `${labelText} popup size`);
+      const value = document.createElement("span");
+      value.className = "smarttex-settings-popup-scale-value";
+      row.append(label, input, value);
+      separateScales.appendChild(row);
+      separateControls[type] = { input, value };
+    }
+
+    const updatePopupScaleControls = () => {
+      const separate = popupScaleSettings.mode === "separate";
+      globalScaleWrap.hidden = separate;
+      separateScales.hidden = !separate;
+      detailToggle.textContent = separate ? "▴" : "▾";
+      detailToggle.setAttribute("aria-expanded", String(separate));
+      globalScale.value = String(Math.round(popupScaleSettings.global * 100));
+      globalScaleValue.textContent = `${Math.round(popupScaleSettings.global * 100)}%`;
+      for (const type of ["image", "equation", "table"]) {
+        const percent = Math.round(popupScaleSettings[type] * 100);
+        separateControls[type].input.value = String(percent);
+        separateControls[type].value.textContent = `${percent}%`;
+      }
+    };
+
+    const commitPopupScale = (next) => {
+      popupScaleSettings = applyPopupScaleSettings({ ...popupScaleSettings, ...next });
+      updatePopupScaleControls();
+    };
+
+    globalScale.addEventListener("input", () => {
+      commitPopupScale({ global: Number(globalScale.value) / 100 });
+    });
+    for (const type of ["image", "equation", "table"]) {
+      separateControls[type].input.addEventListener("input", () => {
+        commitPopupScale({ [type]: Number(separateControls[type].input.value) / 100 });
+      });
+    }
+    detailToggle.addEventListener("click", () => {
+      commitPopupScale({ mode: popupScaleSettings.mode === "separate" ? "global" : "separate" });
+    });
+
+    resetPopupSizes.addEventListener("click", () => {
+      popupScaleSettings = {
+        mode: popupScaleSettings.mode,
+        global: 1,
+        image: 1,
+        equation: 1,
+        table: 1
+      };
+      try {
+        localStorage.removeItem(POPUP_SIZES_KEY);
+        localStorage.setItem(POPUP_SCALE_KEY, JSON.stringify(popupScaleSettings));
+      } catch (_error) {
+        // The live reset event still resets current popups if storage is restricted.
+      }
+      if (typeof globalThis.SmartTeXPopupUI?.resetSizes === "function") {
+        globalThis.SmartTeXPopupUI.resetSizes({ relativeSettings: popupScaleSettings });
+      } else {
+        window.dispatchEvent(new CustomEvent("smarttex:reset-popup-sizes", {
+          detail: { relativeSettings: popupScaleSettings }
+        }));
+      }
+      updatePopupScaleControls();
+    });
+
+    popupControls.append(resetPopupSizes, globalScaleWrap, detailToggle);
+    popupSection.append(popupHeading, popupControls, separateScales);
+    updatePopupScaleControls();
+    scrollBody.appendChild(popupSection);
 
     const legal = document.createElement("section");
     legal.className = "smarttex-settings-legal";
@@ -485,13 +648,29 @@
     menu.style.maxHeight = `${Math.max(240, window.innerHeight - top - 10)}px`;
   }
 
-  function openMenu() {
+  function maybeShowFallbackNameNoticeInMenu() {
+    if (!commentNameControl?.isConnected) return;
+    globalThis.SmartTeXCommentProfile?.maybeShowFallbackNotice?.(
+      extensionApi?.storage?.local,
+      commentProfile,
+      commentNameControl
+    ).catch?.(() => {});
+  }
+
+  function openMenu({ focusUserName = false } = {}) {
     createMenu();
     updateMenuFromState();
     menu.hidden = false;
     optionsButton?.setAttribute("aria-expanded", "true");
     positionMenu();
-    menu.querySelector("#smarttex-settings-use-presets")?.focus?.({ preventScroll: true });
+    if (focusUserName) commentNameControl?.focus?.({ preventScroll: true });
+    else menu.querySelector("#smarttex-settings-use-presets")?.focus?.({ preventScroll: true });
+    if (globalThis.SmartTeXCommentProfile?.isFallbackProfile?.(commentProfile)) {
+      window.dispatchEvent(new CustomEvent(
+        globalThis.SmartTeXCommentProfile?.IDENTITY_REFRESH_EVENT || "smarttex:collabtex-identity-refresh"
+      ));
+    }
+    window.setTimeout(maybeShowFallbackNameNoticeInMenu, 300);
   }
 
   function closeMenu() {
@@ -564,6 +743,10 @@
     dispatchEffectiveSettings();
   }
 
+  window.addEventListener(OPEN_SETTINGS_EVENT, (event) => {
+    openMenu({ focusUserName: event?.detail?.focusUserName !== false });
+  });
+
   document.addEventListener("pointerdown", (event) => {
     if (!menu || menu.hidden) return;
     if (menu.contains(event.target) || optionsButton?.contains?.(event.target)) return;
@@ -587,6 +770,9 @@
       commentProfile = globalThis.SmartTeXCommentProfile?.normalize?.(changes[COMMENT_PROFILE_KEY].newValue, commentProfile)
         || changes[COMMENT_PROFILE_KEY].newValue
         || commentProfile;
+      if (!globalThis.SmartTeXCommentProfile?.isFallbackProfile?.(commentProfile)) {
+        globalThis.SmartTeXCommentProfile?.dismissFallbackNotice?.();
+      }
       updateMenuFromState();
     }
     if (changes[DOCUMENT_OVERRIDES_KEY]) {

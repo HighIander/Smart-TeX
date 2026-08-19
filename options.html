@@ -39,12 +39,43 @@
         <h2>Comments identity</h2>
         <p class="hint">This name and color identify your comments, replies, and text markings to collaborators using SmartTeX.</p>
         <div class="smarttex-comment-profile-options">
-          <label for="smarttex-comment-user-name">Name
+          <label for="smarttex-comment-user-name">User name
             <input id="smarttex-comment-user-name" type="text" maxlength="80" autocomplete="off" spellcheck="false">
           </label>
           <label for="smarttex-comment-user-color">User color
             <input id="smarttex-comment-user-color" type="color" value="#268bd2">
           </label>
+        </div>
+      </section>
+
+
+      <section>
+        <h2>GIPHY GIFs in comments</h2>
+        <p class="hint">
+          SmartTeX includes a shared GIPHY Web API key. Because GIPHY rate-limits API usage, SmartTeX may ask you to
+          add your own key. With a personal key, more GIFs load automatically as you scroll; with the shared key, use
+          <strong>Load more</strong>. Your personal key is stored only in this browser's extension storage. GIPHY content
+          is not requested or displayed until you accept the separate GIPHY data-protection consent.
+        </p>
+        <div class="smarttex-giphy-options-grid">
+          <label for="smarttex-giphy-api-key">Personal GIPHY Web API key
+            <span class="smarttex-giphy-key-input-row">
+              <input id="smarttex-giphy-api-key" type="password" maxlength="300" autocomplete="off" spellcheck="false" placeholder="Optional: paste your own GIPHY API key">
+              <button id="smarttex-giphy-key-help" type="button" class="smarttex-giphy-help-button" aria-label="How to get a GIPHY API key" title="How to get a GIPHY API key">?</button>
+            </span>
+          </label>
+          <button id="smarttex-giphy-toggle-key" type="button" class="secondary-button">Show key</button>
+        </div>
+        <div class="smarttex-giphy-options-row">
+          <span>GIPHY consent: <strong id="smarttex-giphy-consent-status">Not granted</strong></span>
+          <button id="smarttex-giphy-withdraw-consent" type="button" class="secondary-button">Withdraw consent</button>
+        </div>
+        <div class="smarttex-giphy-options-links">
+          <a href="https://developers.giphy.com/dashboard/" target="_blank" rel="noopener noreferrer">GIPHY Developer Dashboard</a>
+          <a href="https://support.giphy.com/hc/en-us/articles/360032872931-GIPHY-Privacy-Policy" target="_blank" rel="noopener noreferrer">GIPHY Privacy Policy</a>
+          <a class="smarttex-giphy-powered-link" href="https://giphy.com/" target="_blank" rel="noopener noreferrer">
+            <span class="smarttex-giphy-powered-bg"><img src="icons/giphy-powered-by.png" alt="Powered by GIPHY"></span>
+          </a>
         </div>
       </section>
 
@@ -196,7 +227,27 @@
       </p>
     </section>
   </main>
+
+  <div id="smarttex-giphy-key-help-overlay" class="smarttex-options-overlay" hidden>
+    <div class="smarttex-options-overlay-dialog" role="dialog" aria-modal="true" aria-labelledby="smarttex-giphy-key-help-title">
+      <button id="smarttex-giphy-key-help-close" type="button" class="smarttex-options-overlay-close" aria-label="Close">×</button>
+      <h2 id="smarttex-giphy-key-help-title">How to get your GIPHY API key</h2>
+      <ol class="smarttex-giphy-help-steps">
+        <li>Open the <a href="https://developers.giphy.com/dashboard/" target="_blank" rel="noopener noreferrer">GIPHY Developer Dashboard</a>.</li>
+        <li>Sign in to GIPHY, or create a free developer account.</li>
+        <li>Click <strong>Create an API Key</strong>. If GIPHY asks for the integration type or platform, choose the regular <strong>API</strong> for <strong>Web</strong>, not an SDK key.</li>
+        <li>Give the app a simple name such as <strong>SmartTeX</strong> and finish creating the key.</li>
+        <li>Copy the generated API key, return to this page, and paste it into the field next to the <strong>?</strong> button. SmartTeX saves it automatically.</li>
+      </ol>
+      <p class="hint">GIPHY rate-limits API usage, so SmartTeX may ask you to use your own API key.</p>
+      <div class="smarttex-options-overlay-actions">
+        <a class="secondary-button smarttex-giphy-dashboard-button" href="https://developers.giphy.com/dashboard/" target="_blank" rel="noopener noreferrer">Open GIPHY Dashboard</a>
+        <button id="smarttex-giphy-key-help-done" type="button">Done</button>
+      </div>
+    </div>
+  </div>
   <script src="privacy-consent.js"></script>
+  <script src="giphy-integration.js"></script>
   <script src="comment-profile.js"></script>
   <script src="options.js"></script>
 </body>

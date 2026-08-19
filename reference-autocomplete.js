@@ -123,6 +123,7 @@
           <line x1="7" y1="16" x2="17" y2="16"></line>
         </svg>
       </button>
+      <span class="smarttex-popup-escape-hint" aria-hidden="true">[Esc]</span>
       <button type="button" class="smarttex-reference-autocomplete-close" title="Close (Esc)" aria-label="Close reference suggestions">&times;</button>
     </header>
     <div class="smarttex-reference-autocomplete-list" role="listbox" aria-label="Reference suggestions"></div>`;
@@ -135,6 +136,11 @@
   const listViewIcon = viewButton.querySelector(".smarttex-reference-autocomplete-view-list-icon");
   const list = popup.querySelector(".smarttex-reference-autocomplete-list");
   const closeButton = popup.querySelector(".smarttex-reference-autocomplete-close");
+  globalThis.SmartTeXPopupUI?.enhance?.(popup, {
+    type: "list",
+    closeButton,
+    onClose: () => hidePopup({ dismiss: true })
+  });
 
   function schedulePopupRefit() {
     if (popup.hidden || popupRefitFrame !== null) return;
@@ -148,6 +154,11 @@
     const popupResizeObserver = new ResizeObserver(schedulePopupRefit);
     popupResizeObserver.observe(popup);
   }
+  popup.addEventListener("smarttex:popup-resized", () => {
+    const rect = popup.getBoundingClientRect();
+    lastPopupPosition = { left: rect.left, top: rect.top };
+    positionPopup();
+  });
 
   function normalizeOrder(value) {
     return value === "alphabetical" ? "alphabetical" : "document";
@@ -979,12 +990,12 @@
   }
 
   function positionPopup() {
-    if (popup.hidden) return;
+    if (popup.hidden || popup.classList.contains("smarttex-popup-resizing")) return;
     const screen = currentState?.screen;
     if (!screen) return;
     const margin = 9;
     const width = Math.max(1, Math.min(500, window.innerWidth - margin * 2));
-    popup.style.width = `${width}px`;
+    if (popup.dataset.smarttexUserSized !== "true") popup.style.width = `${width}px`;
     const cursorLeft = Number(screen.pageX) - window.scrollX;
     const cursorTop = Number(screen.pageY) - window.scrollY;
     const lineHeight = Math.max(14, Number(screen.lineHeight) || 18);
@@ -996,7 +1007,9 @@
       48,
       Math.min(430, window.innerHeight - margin * 2, availableSideSpace)
     );
-    popup.style.maxHeight = `${Math.round(popupMaxHeight)}px`;
+    if (popup.dataset.smarttexUserSized !== "true") {
+      popup.style.maxHeight = `${Math.round(popupMaxHeight)}px`;
+    }
     const rect = popup.getBoundingClientRect();
     const cursorRect = {
       left: cursorLeft - 3,

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmartTeX popup resize UI harness</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; min-height: 100vh; background: #e9eef5; font-family: Inter, system-ui, sans-serif; }
+    .harness-popup { position: fixed; display: grid; grid-template-rows: auto minmax(0, 1fr); width: 340px; height: 220px; overflow: hidden; border: 1px solid #9aa9ba; border-radius: 10px; background: white; box-shadow: 0 12px 30px rgb(15 23 42 / 22%); }
+    .harness-popup:nth-of-type(1) { top: 32px; left: 32px; }
+    .harness-popup:nth-of-type(2) { top: 32px; left: 420px; }
+    .harness-popup:nth-of-type(3) { top: 290px; left: 32px; }
+    .harness-popup:nth-of-type(4) { top: 290px; left: 420px; }
+    .harness-heading { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 9px 0 12px; border-bottom: 1px solid #dce3eb; background: #f7f9fc; font-size: 12px; font-weight: 700; }
+    .harness-content { min-height: 0; padding: 14px; overflow: auto; }
+    .harness-row { padding: 8px; border-bottom: 1px solid #edf0f4; }
+    #popup-resize-result { position: fixed; z-index: 999; top: 12px; right: 12px; padding: 8px 11px; border-radius: 6px; color: white; background: #16803b; }
+    #popup-resize-result[data-result="failed"] { background: #cf222e; }
+  </style>
+</head>
+<body>
+  <aside id="harness-list" class="harness-popup" role="dialog">
+    <header class="harness-heading"><span>Filtered list</span><button class="smarttex-popup-window-close" type="button">×</button></header>
+    <div class="harness-content"><div class="harness-row">alpha <strong class="smarttex-autocomplete-match">matrix</strong></div><div class="harness-row">beta matrix</div></div>
+  </aside>
+  <aside id="harness-image" class="harness-popup" role="dialog">
+    <header class="harness-heading"><span>Image preview</span></header>
+    <div class="harness-content"><svg viewBox="0 0 200 100" width="100%" height="100%"><rect width="200" height="100" fill="#dceeff"/><circle cx="100" cy="50" r="34" fill="#1674c7"/></svg></div>
+  </aside>
+  <aside id="harness-equation" class="harness-popup" role="dialog">
+    <header class="harness-heading"><span>Equation preview</span></header>
+    <div class="harness-content" style="display:grid;place-items:center;font:26px Georgia,serif">E = mc²</div>
+  </aside>
+  <aside id="harness-table" class="harness-popup" role="dialog">
+    <header class="harness-heading"><span>Table preview</span></header>
+    <div class="harness-content"><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table></div>
+  </aside>
+  <output id="popup-resize-result">Popup resize UI passed</output>
+  <script src="../popup-gate.js"></script>
+  <script>
+    const popups = [
+      [document.querySelector("#harness-list"), "list"],
+      [document.querySelector("#harness-image"), "image"],
+      [document.querySelector("#harness-equation"), "equation"],
+      [document.querySelector("#harness-table"), "table"]
+    ];
+    (async () => {
+    try {
+      localStorage.removeItem("smarttex:popup-sizes:v1");
+      for (const [popup, type] of popups) {
+        SmartTeXPopupUI.enhance(popup, {
+          type,
+          headingSelector: ".harness-heading",
+          onClose: () => { popup.hidden = true; }
+        });
+        if (popup.querySelectorAll(":scope > .smarttex-popup-resize-handle").length !== 8) {
+          throw new Error(`${type} popup does not expose all eight resize edges`);
+        }
+        const expectedCursors = {
+          n: "ns-resize", s: "ns-resize",
+          e: "ew-resize", w: "ew-resize",
+          ne: "nesw-resize", sw: "nesw-resize",
+          nw: "nwse-resize", se: "nwse-resize"
+        };
+        for (const [direction, cursor] of Object.entries(expectedCursors)) {
+          const handle = popup.querySelector(
+            `:scope > .smarttex-popup-resize-handle[data-direction="${direction}"]`
+          );
+          const style = getComputedStyle(handle);
+          if (style.pointerEvents !== "auto" || style.cursor !== cursor) {
+            throw new Error(`${type}/${direction} has pointer-events=${style.pointerEvents}, cursor=${style.cursor}`);
+          }
+        }
+        const close = popup.querySelector(".smarttex-popup-window-close");
+        if (!close || !close.previousElementSibling?.classList.contains("smarttex-popup-escape-hint")) {
+          throw new Error(`${type} popup does not show [Esc] immediately before close`);
+        }
+      }
+      const resize = (popup, direction, deltaX, deltaY, pointerId) => {
+        const handle = popup.querySelector(
+          `:scope > .smarttex-popup-resize-handle[data-direction="${direction}"]`
+        );
+        const before = popup.getBoundingClientRect();
+        const startX = direction.includes("w") ? before.left : before.right;
+        const startY = direction.includes("n") ? before.top : before.bottom;
+        handle.dispatchEvent(new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: startX,
+          clientY: startY,
+          pointerId
+        }));
+        handle.dispatchEvent(new PointerEvent("pointermove", {
+          bubbles: true,
+          buttons: 1,
+          clientX: startX + deltaX,
+          clientY: startY + deltaY,
+          pointerId
+        }));
+        handle.dispatchEvent(new PointerEvent("pointerup", {
+          bubbles: true,
+          button: 0,
+          clientX: startX + deltaX,
+          clientY: startY + deltaY,
+          pointerId
+        }));
+        return { before, after: popup.getBoundingClientRect() };
+      };
+      const listResize = resize(popups[0][0], "se", 54, 28, 11);
+      const imageResize = resize(popups[1][0], "w", -34, 0, 12);
+      const equationResize = resize(popups[2][0], "n", 0, -26, 13);
+      const tableResize = resize(popups[3][0], "e", 38, 0, 14);
+      if (listResize.after.width <= listResize.before.width || listResize.after.height <= listResize.before.height) {
+        throw new Error("South-east list resizing did not change both dimensions");
+      }
+      if (imageResize.after.width <= imageResize.before.width || imageResize.after.left >= imageResize.before.left) {
+        throw new Error("West-edge image resizing did not preserve the opposite edge");
+      }
+      if (equationResize.after.height <= equationResize.before.height || equationResize.after.top >= equationResize.before.top) {
+        throw new Error("North-edge equation resizing did not preserve the opposite edge");
+      }
+      if (tableResize.after.width <= tableResize.before.width) {
+        throw new Error("Table resizing did not retain its own profile");
+      }
+      const saved = JSON.parse(localStorage.getItem("smarttex:popup-sizes:v1") || "{}");
+      if (!["list", "image", "equation", "table"].every((type) => (
+        saved[type]?.widthRatio > 0 && saved[type]?.heightRatio > 0
+      ))) {
+        throw new Error("Popup dimensions were not persisted separately by type");
+      }
+      const restoredList = document.createElement("aside");
+      restoredList.className = "harness-popup";
+      restoredList.innerHTML = '<header class="harness-heading"><span>Restored list</span></header>';
+      document.body.appendChild(restoredList);
+      SmartTeXPopupUI.enhance(restoredList, { type: "list", headingSelector: ".harness-heading" });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const expectedRestoredWidth = Math.max(280, 340 * saved.list.widthRatio);
+      if (Math.abs(restoredList.getBoundingClientRect().width - expectedRestoredWidth) > 2) {
+        throw new Error("A new list popup did not restore the saved list width");
+      }
+      restoredList.remove();
+      document.documentElement.dataset.popupResizeUiTest = "passed";
+      document.querySelector("#popup-resize-result").dataset.result = "passed";
+    } catch (error) {
+      document.documentElement.dataset.popupResizeUiTest = "failed";
+      const output = document.querySelector("#popup-resize-result");
+      output.dataset.result = "failed";
+      output.textContent = error.message;
+    }
+    })();
+  </script>
+</body>
+</html>

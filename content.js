@@ -248,7 +248,8 @@
       <span class="smarttex-preview-heading-actions">
         <span class="smarttex-preview-meta"></span>
         <span class="smarttex-inline-loading-spinner smarttex-graphic-preview-spinner" hidden aria-hidden="true"></span>
-        <button class="smarttex-preview-close smarttex-graphic-autocomplete-close" type="button" title="Close figure preview" aria-label="Close figure preview" hidden>&times;</button>
+        <span class="smarttex-popup-escape-hint" aria-hidden="true">[Esc]</span>
+        <button class="smarttex-preview-close smarttex-graphic-autocomplete-close" type="button" title="Close figure preview (Esc)" aria-label="Close figure preview">&times;</button>
       </span>
     </div>
     <div class="smarttex-graphic-autocomplete-output"></div>`;
@@ -277,6 +278,7 @@
       <span class="smarttex-preview-heading-actions">
         <span class="smarttex-inline-loading-spinner smarttex-preview-loading-indicator" hidden aria-hidden="true"></span>
         <span class="smarttex-preview-meta" hidden></span>
+        <span class="smarttex-popup-escape-hint" aria-hidden="true">[Esc]</span>
         <button class="smarttex-preview-close" type="button" title="Close preview (Esc)" aria-label="Close preview">&times;</button>
       </span>
     </div>
@@ -291,6 +293,126 @@
   const previewMeta = preview.querySelector(".smarttex-preview-meta");
   const previewLoadingIndicator = preview.querySelector(".smarttex-preview-loading-indicator");
   const closeButton = preview.querySelector(".smarttex-preview-close");
+  const graphicAutocompletePopupUI = globalThis.SmartTeXPopupUI?.enhance?.(
+    graphicAutocompletePreview,
+    { type: "image", onClose: dismissGraphicAutocompleteClickPreview }
+  );
+  const previewPopupUI = globalThis.SmartTeXPopupUI?.enhance?.(
+    preview,
+    { type: "equation", onClose: dismissPreview }
+  );
+  const previewZoomControls = document.createElement("div");
+  previewZoomControls.className = "smarttex-figure-zoom-controls smarttex-preview-zoom-controls";
+  previewZoomControls.setAttribute("role", "group");
+  previewZoomControls.setAttribute("aria-label", "Preview zoom");
+  const previewZoomOut = document.createElement("button");
+  previewZoomOut.type = "button";
+  previewZoomOut.textContent = "−";
+  previewZoomOut.title = "Zoom out";
+  previewZoomOut.setAttribute("aria-label", "Zoom out");
+  const previewZoomOutput = document.createElement("output");
+  previewZoomOutput.className = "smarttex-figure-zoom-output";
+  previewZoomOutput.setAttribute("aria-live", "polite");
+  const previewZoomIn = document.createElement("button");
+  previewZoomIn.type = "button";
+  previewZoomIn.textContent = "+";
+  previewZoomIn.title = "Zoom in";
+  previewZoomIn.setAttribute("aria-label", "Zoom in");
+  previewZoomControls.append(previewZoomOut, previewZoomOutput, previewZoomIn);
+  preview.appendChild(previewZoomControls);
+  let previewZoom = 1;
+  let previewZoomKind = "equation";
+
+  function popupContentScale() {
+    return Math.max(
+      0.2,
+      Number.parseFloat(
+        globalThis.getComputedStyle?.(preview)?.getPropertyValue(
+          "--smarttex-popup-content-scale"
+        )
+      ) || 1
+    );
+  }
+
+  function fitTablePreview() {
+    if (preview.dataset.previewKind !== "table") return;
+    const tablePopup = output.querySelector(":scope > .smarttex-table-popup");
+    const table = tablePopup?.querySelector(".smarttex-table-preview");
+    if (!tablePopup || !table) return;
+    const baseScale = popupContentScale();
+    preview.style.setProperty("--smarttex-table-render-scale", String(baseScale));
+    const outputStyle = globalThis.getComputedStyle?.(output);
+    const availableWidth = Math.max(
+      40,
+      output.clientWidth - (parseFloat(outputStyle?.paddingLeft) || 0) -
+        (parseFloat(outputStyle?.paddingRight) || 0)
+    );
+    const availableHeight = Math.max(
+      40,
+      output.clientHeight - (parseFloat(outputStyle?.paddingTop) || 0) -
+        (parseFloat(outputStyle?.paddingBottom) || 0)
+    );
+    const popupRect = tablePopup.getBoundingClientRect();
+    const tableRect = table.getBoundingClientRect();
+    const fitScale = Math.min(
+      1,
+      availableWidth / Math.max(1, tableRect.width),
+      availableHeight / Math.max(1, popupRect.height)
+    );
+    preview.style.setProperty(
+      "--smarttex-table-render-scale",
+      String(Math.max(0.12, baseScale * fitScale * previewZoom))
+    );
+  }
+
+  function refreshPreviewZoom() {
+    const kind = preview.dataset.previewKind || "equation";
+    const zoomable = kind === "equation" || kind === "table";
+    previewZoomControls.hidden = !zoomable;
+    preview.classList.toggle(
+      "smarttex-preview-manually-zoomed",
+      zoomable && Math.abs(previewZoom - 1) > 0.01
+    );
+    previewZoomOutput.value = `${Math.round(previewZoom * 100)}%`;
+    previewZoomOutput.textContent = previewZoomOutput.value;
+    preview.style.setProperty(
+      "--smarttex-equation-render-scale",
+      String(popupContentScale() * previewZoom)
+    );
+    fitTablePreview();
+  }
+
+  function setPreviewZoom(value) {
+    previewZoom = Math.max(0.25, Math.min(5, Number(value) || 1));
+    refreshPreviewZoom();
+  }
+
+  for (const button of [previewZoomOut, previewZoomIn]) {
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+  }
+  previewZoomOut.addEventListener("click", () => setPreviewZoom(previewZoom - 0.25));
+  previewZoomIn.addEventListener("click", () => setPreviewZoom(previewZoom + 0.25));
+  output.addEventListener("wheel", (event) => {
+    if (!["equation", "table"].includes(preview.dataset.previewKind)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const factor = Math.exp(-Math.max(-120, Math.min(120, event.deltaY)) * 0.0025);
+    setPreviewZoom(previewZoom * factor);
+  }, { passive: false });
+  graphicAutocompletePreview.addEventListener("smarttex:popup-resized", () => {
+    const figure = graphicAutocompleteOutput.querySelector(".smarttex-figure-popup");
+    globalThis.SmartTeXFigureRenderer?.ensurePopupZoom?.(figure)?.refresh?.();
+  });
+  preview.addEventListener("smarttex:popup-resized", (event) => {
+    globalThis.SmartTeXFigureRenderer?.fitPopupLayout?.(
+      output.querySelector(".smarttex-figure-layout")
+    );
+    refreshPreviewZoom();
+    if (!event.detail?.live) positionPreviewAtCursor();
+  });
   const optionsButton = document.createElement("button");
   optionsButton.id = "smarttex-options-button";
   optionsButton.type = "button";
@@ -647,7 +769,13 @@
   function applyPreviewPresentation(context) {
     const isTable = context?.kind === "table";
     const isFigure = context?.kind === "figure";
-    preview.dataset.previewKind = isFigure ? "figure" : isTable ? "table" : "equation";
+    const nextKind = isFigure ? "figure" : isTable ? "table" : "equation";
+    preview.dataset.previewKind = nextKind;
+    if (previewZoomKind !== nextKind) {
+      previewZoomKind = nextKind;
+      previewZoom = 1;
+    }
+    previewPopupUI?.setType(isFigure ? "image" : isTable ? "table" : "equation");
     previewTitle.textContent = isFigure
       ? "Figure preview"
       : isTable
@@ -661,6 +789,7 @@
           ? "Live table preview"
           : "Live equation preview"
     );
+    refreshPreviewZoom();
   }
 
   function showPreviewLoading(state, context) {
@@ -1400,7 +1529,7 @@
     graphicAutocompletePreview.classList.remove(
       "smarttex-graphic-autocomplete-click-preview"
     );
-    graphicAutocompleteClose.hidden = true;
+    graphicAutocompleteClose.hidden = false;
     graphicAutocompleteOutput.replaceChildren();
   }
 
@@ -1420,6 +1549,7 @@
     dismissGraphicAutocompleteClickPreview();
   });
   graphicAutocompletePreview.addEventListener("pointerleave", () => {
+    if (graphicAutocompletePreview.classList.contains("smarttex-popup-resizing")) return;
     if (graphicAutocompleteClickPreview) {
       dismissGraphicAutocompleteClickPreview();
     }
@@ -1467,9 +1597,11 @@
 
     const popupWidth = Math.max(80, Math.ceil(mediaWidth + outputPadding));
     const outputHeight = Math.max(80, Math.ceil(mediaHeight + outputPadding));
-    graphicAutocompletePreview.style.width = `${popupWidth}px`;
-    graphicAutocompletePreview.style.maxHeight = `${Math.ceil(maxPopupHeight)}px`;
-    graphicAutocompleteOutput.style.height = `${outputHeight}px`;
+    if (graphicAutocompletePreview.dataset.smarttexUserSized !== "true") {
+      graphicAutocompletePreview.style.width = `${popupWidth}px`;
+      graphicAutocompletePreview.style.maxHeight = `${Math.ceil(maxPopupHeight)}px`;
+      graphicAutocompleteOutput.style.height = `${outputHeight}px`;
+    }
   }
 
   function renderGraphicAutocompletePreview(path, owner) {
@@ -1482,9 +1614,11 @@
     graphicAutocompletePath = normalizedPath;
     // Reset sizing while a different file is resolving; the final dimensions
     // are set from the resolved media's intrinsic aspect ratio below.
-    graphicAutocompletePreview.style.width = "";
-    graphicAutocompletePreview.style.maxHeight = "";
-    graphicAutocompleteOutput.style.height = "";
+    if (graphicAutocompletePreview.dataset.smarttexUserSized !== "true") {
+      graphicAutocompletePreview.style.width = "";
+      graphicAutocompletePreview.style.maxHeight = "";
+      graphicAutocompleteOutput.style.height = "";
+    }
     graphicAutocompleteMeta.textContent = normalizedPath;
     graphicAutocompleteMeta.title = normalizedPath;
 
@@ -1507,7 +1641,7 @@
       "smarttex-graphic-autocomplete-click-preview",
       graphicAutocompleteClickPreview
     );
-    graphicAutocompleteClose.hidden = !graphicAutocompleteClickPreview;
+    graphicAutocompleteClose.hidden = false;
     positionGraphicAutocompletePreview(owner);
 
     const showFailure = () => {
@@ -1565,7 +1699,13 @@
         window.requestAnimationFrame(() => {
           const baseWidth = Math.max(1, resolvedMedia.getBoundingClientRect?.().width || resolvedMedia.clientWidth || 1);
           resolvedMedia.dataset.smarttexBaseWidthPx = String(baseWidth);
-          resolvedMedia.style.width = `${baseWidth}px`;
+          if (graphicAutocompletePreview.dataset.smarttexUserSized === "true") {
+            resolvedMedia.style.width = "100%";
+            resolvedMedia.style.height = "100%";
+          } else {
+            resolvedMedia.style.width = `${baseWidth}px`;
+            resolvedMedia.style.removeProperty("height");
+          }
           renderer.ensurePopupZoom?.(figure)?.refresh?.();
           positionGraphicAutocompletePreview(owner);
         });
@@ -2065,6 +2205,19 @@
     popup.addEventListener("scroll", keepReferencePopupOpen, { passive: true, capture: true });
   }
 
+  function enhanceReferencePopup(popup, contentKind = "equation") {
+    const type = contentKind === "figure"
+      ? "image"
+      : contentKind === "table"
+        ? "table"
+        : "equation";
+    return globalThis.SmartTeXPopupUI?.enhance?.(popup, {
+      type,
+      headingSelector: ".smarttex-reference-popup-heading",
+      onClose: hideCaptionReferencePopup
+    });
+  }
+
   const POPUP_SCROLL_SELECTOR = [
     ".smarttex-reference-popup-target",
     ".smarttex-reference-popup-equation",
@@ -2550,6 +2703,7 @@
     popup.dataset.smarttexContentKind = target.type === "figure"
       ? "figure"
       : target.type || "reference";
+    enhanceReferencePopup(popup, popup.dataset.smarttexContentKind);
     popup.hidden = false;
     restorePopupScrollState(popup, scrollState);
 
@@ -2759,6 +2913,7 @@
     popup.__smarttexKey = key;
     popup.__smarttexTargetKeys = interactionTargetKeys(interaction, source);
     updateReferencePopupContentKind(popup);
+    enhanceReferencePopup(popup, popup.dataset.smarttexContentKind);
     popup.hidden = false;
     restorePopupScrollState(popup, scrollState);
     positionCaptionReferencePopup(anchorRect);
@@ -2856,6 +3011,7 @@
     popup.__smarttexKey = key;
     popup.__smarttexTargetKeys = interactionTargetKeys(interaction, source);
     updateReferencePopupContentKind(popup);
+    enhanceReferencePopup(popup, popup.dataset.smarttexContentKind);
     popup.hidden = false;
     activeSecondaryEditorReferenceKey = key;
     restorePopupScrollState(popup, scrollState);
@@ -3300,6 +3456,7 @@
       consumePress(event);
       hideCaptionReferencePopup();
     });
+    enhanceReferencePopup(popup, "equation");
 
     window.requestAnimationFrame(() => {
       const rect = surface.getBoundingClientRect();
@@ -3832,7 +3989,10 @@
     }
     preview.hidden = false;
     preview.classList.add("smarttex-preview-visible");
-    window.requestAnimationFrame(() => positionPreview());
+    window.requestAnimationFrame(() => {
+      if (previewPositioned) positionPreviewAtCursor();
+      else positionPreview();
+    });
   }
 
   async function renderPreview(generation, loadingGeneration = null) {
@@ -4059,6 +4219,9 @@
     const renderedFigure = isFigure && !contextChanged
       ? output.querySelector(":scope > .smarttex-figure-popup")
       : null;
+    const renderedTable = isTable && !contextChanged
+      ? output.querySelector(":scope > .smarttex-table-popup")
+      : null;
     const updateCaptionOnly = Boolean(
       renderedFigure &&
       caretInFigureCaption
@@ -4176,7 +4339,14 @@
 
     taskCheckpoint(0, 1, taskToken);
     if (generation !== renderGeneration || contextId !== activeContextId) return;
-    if (!updateCaptionOnly) {
+    if (renderedTable) {
+      const nextTable = staging.querySelector(":scope > .smarttex-table-popup");
+      if (nextTable) {
+        const scrollState = capturePopupScrollState(renderedTable);
+        renderedTable.replaceChildren(...nextTable.childNodes);
+        restorePopupScrollState(renderedTable, scrollState);
+      }
+    } else if (!updateCaptionOnly) {
       output.replaceChildren(...staging.childNodes);
     }
     lastSuccessfulMarkup = output.innerHTML;
@@ -4192,6 +4362,8 @@
     preview.classList.remove("smarttex-preview-stale");
     preview.hidden = false;
     preview.classList.add("smarttex-preview-visible");
+    previewPopupUI?.refresh?.({ rebase: contextChanged });
+    refreshPreviewZoom();
     window.requestAnimationFrame(() => {
       if (contextChanged || !previewPositioned) positionPreview();
       else positionPreviewAtCursor();
@@ -4594,7 +4766,7 @@
       activePreviewState
     ) {
       activePreviewState = currentState;
-      window.requestAnimationFrame(() => positionPreview());
+      window.requestAnimationFrame(() => positionPreviewAtCursor());
       return;
     }
 
@@ -4613,6 +4785,7 @@
     popupsSuppressedAfterEditorScroll = false;
     if (event.key !== "Escape") return;
     if (!preview.hidden) dismissPreview();
+    if (!graphicAutocompletePreview.hidden) dismissGraphicAutocompleteClickPreview();
     if (captionReferencePopup && !captionReferencePopup.hidden) {
       hideCaptionReferencePopup();
     }
@@ -4750,7 +4923,7 @@
       "smarttex-graphic-autocomplete-click-preview",
       graphicAutocompleteClickPreview
     );
-    graphicAutocompleteClose.hidden = !graphicAutocompleteClickPreview;
+    graphicAutocompleteClose.hidden = false;
     scheduleGraphicAutocompletePreviewUpdate();
   });
   const noteEditorTextInput = (event) => {
@@ -4875,7 +5048,7 @@
         // interaction. Keep all active previews mounted and refresh only their
         // content/position from the state updates already in flight.
         window.requestAnimationFrame(() => {
-          positionPreview();
+          positionPreviewAtCursor();
           repositionReferencePopups();
           scheduleGraphicAutocompletePreviewUpdate();
         });

@@ -157,6 +157,7 @@
         js: [
           "privacy-consent.js",
           "privacy-consent-content.js",
+          "giphy-integration.js",
           "popup-gate.js",
           "comment-profile.js",
           "content.js",

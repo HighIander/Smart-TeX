@@ -18,7 +18,7 @@ const bridge = read("page-bridge.js");
 const referenceAutocomplete = read("reference-autocomplete.js");
 const labelGuard = read("label-reference-guard.js");
 
-assert.equal(manifest.version, "2.1.0");
+assert.equal(manifest.version, "2.1.12");
 assert.match(background, /"content\.js",\s*"settings-menu\.js",\s*"figure-autocomplete\.js"/);
 assert.match(optionsHtml, /<title>SmartTeX presets<\/title>/);
 assert.match(optionsHtml, /<h1>SmartTeX presets<\/h1>/);
@@ -40,6 +40,8 @@ assert.match(menu, /smarttex:runtime-settings/);
 assert.match(menu, /environmentFirstLineEnabled/);
 assert.match(menu, /sectionEnabled/);
 assert.match(menu, /Reset .* to the extension preset/);
+assert.match(menu, /Reset popup sizes/);
+assert.match(menu, /smarttex:popup-sizes:v1/);
 assert.doesNotMatch(menu, /Document editor sites/);
 
 assert.match(content, /RUNTIME_SETTINGS_EVENT = "smarttex:runtime-settings"/);

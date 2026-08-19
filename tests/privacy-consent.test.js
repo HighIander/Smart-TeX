@@ -14,7 +14,7 @@ const optionsJs = fs.readFileSync(path.join(root, "options.js"), "utf8");
 const consent = fs.readFileSync(path.join(root, "privacy-consent.js"), "utf8");
 const consentContent = fs.readFileSync(path.join(root, "privacy-consent-content.js"), "utf8");
 
-assert.equal(manifest.version, "2.1.0");
+assert.equal(manifest.version, "2.1.12");
 assert.match(background, /"privacy-consent\.js"\s*,\s*"privacy-consent-content\.js"/);
 assert.match(background, /details\.reason === "install"[\s\S]*runtime\.openOptionsPage\(\)/);
 assert.match(optionsHtml, /smartioz\.com\/smartTex\/dataprotection\.php/);

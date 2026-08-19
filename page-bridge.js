@@ -56,6 +56,8 @@
   const COMMENT_ANCHOR_ACTIVATE_EVENT = "smarttex:comment-anchor-activate";
   const COLLABORATION_PRESENCE_EVENT = "smarttex:collaboration-presence";
   const COLLABORATION_PROFILE_EVENT = "smarttex:collaboration-local-profile";
+  const COLLABTEX_IDENTITY_EVENT = "smarttex:collabtex-local-identity";
+  const COLLABTEX_IDENTITY_REFRESH_EVENT = "smarttex:collabtex-identity-refresh";
   const COLLABORATION_DIRTY_EVENT = "smarttex:collaboration-metadata-dirty";
   const COLLABORATION_SIGNAL_EVENT = "smarttex:collaboration-signal";
   const CITE_COMMAND = /\\(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]*)$/i;
@@ -89,6 +91,9 @@
   const pendingCollaborationSignals = new Map();
   let lastCollaborationPresenceFingerprint = "";
   let collaborationProfile = { name: "Anonymous", color: "#268bd2", authorId: "" };
+  let lastCollabtexIdentityName = "";
+  let collabtexIdentityDiscoveryTimer = 0;
+  let collabtexSettingsIdentityFetchAttempted = false;
   let selectedDocumentCache = { fileName: "", documentId: "", at: 0 };
   let lastPointerClientX = -10000;
   let lastPointerClientY = -10000;
@@ -1958,6 +1963,254 @@
     }
   }
 
+  function cleanCollabtexIdentityName(value) {
+    const name = String(value || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!name || /^anonymous$/i.test(name) || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(name)) return "";
+    return name;
+  }
+
+  function collabtexDisplayName(record) {
+    if (!record || typeof record !== "object") return "";
+    const first = String(record.first_name || record.firstName || "").trim();
+    const last = String(record.last_name || record.lastName || "").trim();
+    const combined = cleanCollabtexIdentityName(`${first} ${last}`);
+    if (combined) return combined;
+    for (const key of ["display_name", "displayName", "full_name", "fullName", "name"]) {
+      const candidate = cleanCollabtexIdentityName(record[key]);
+      if (candidate) return candidate;
+    }
+    for (const key of ["user", "profile", "userInfo", "user_info", "cursorData"]) {
+      const candidate = collabtexDisplayName(record[key]);
+      if (candidate) return candidate;
+    }
+    return "";
+  }
+
+  function socketIdentityIds(socket) {
+    return new Set([
+      socket?.publicId, socket?.id, socket?.socket?.id, socket?.socket?.sessionid
+    ].map((value) => String(value || "")).filter(Boolean));
+  }
+
+  function recordIdentityIds(record) {
+    if (!record || typeof record !== "object") return [];
+    return [record.client_id, record.clientId, record.id, record.publicId, record.socket_id, record.socketId]
+      .map((value) => String(value || "")).filter(Boolean);
+  }
+
+  function findLocalCollabtexUser(users, socket) {
+    if (!Array.isArray(users) || !users.length) return null;
+    const ownIds = socketIdentityIds(socket);
+    for (const user of users) {
+      if (!user || typeof user !== "object") continue;
+      if (user.isSelf === true || user.self === true || user.isCurrentUser === true || user.current === true) {
+        if (collabtexDisplayName(user)) return user;
+      }
+      if (recordIdentityIds(user).some((id) => ownIds.has(id)) && collabtexDisplayName(user)) return user;
+    }
+    return null;
+  }
+
+  function publishLocalCollabtexIdentity(record) {
+    const name = collabtexDisplayName(record);
+    if (!name || name === lastCollabtexIdentityName) return false;
+    lastCollabtexIdentityName = name;
+    window.dispatchEvent(new CustomEvent(COLLABTEX_IDENTITY_EVENT, {
+      detail: JSON.stringify({
+        name,
+        userId: String(record?.user_id || record?.userId || record?.user?._id || record?.user?.id || "")
+      })
+    }));
+    return true;
+  }
+
+  function parseCollabtexIdentityPayload(value) {
+    if (!value) return null;
+    if (typeof value === "object") return value;
+    const text = String(value || "").trim();
+    if (!text) return null;
+    try { return JSON.parse(text); } catch (_error) { return null; }
+  }
+
+  function explicitCurrentUserRoots() {
+    const roots = [];
+    const push = (value) => { if (value && (typeof value === "object" || typeof value === "string")) roots.push(value); };
+    for (const value of [
+      globalThis.currentUser,
+      globalThis.user,
+      globalThis.userInfo,
+      globalThis.user_info,
+      globalThis.OL?.currentUser,
+      globalThis.OL?.user,
+      globalThis.OL?.userInfo,
+      globalThis.OL?.user_info,
+      globalThis.__INITIAL_STATE__?.currentUser,
+      globalThis.__INITIAL_STATE__?.user,
+      globalThis.__PRELOADED_STATE__?.currentUser,
+      globalThis.__PRELOADED_STATE__?.user,
+      globalThis.__NEXT_DATA__?.props?.pageProps?.currentUser,
+      globalThis.__NEXT_DATA__?.props?.pageProps?.user
+    ]) push(value);
+
+    for (const store of [globalThis.sessionStorage, globalThis.localStorage]) {
+      for (const key of ["ol-user", "ol-current-user", "currentUser"]) {
+        try { push(store?.getItem?.(key)); } catch (_error) {}
+      }
+    }
+
+    for (const selector of [
+      'meta[name="ol-user"]',
+      'meta[name="ol-current-user"]',
+      'meta[name="ol-userInfo"]',
+      'meta[name="ol-user-info"]',
+      '[data-ol-user]',
+      '[data-current-user]',
+      'script#ol-user[type="application/json"]',
+      'script[data-ol-user][type="application/json"]'
+    ]) {
+      for (const node of document.querySelectorAll?.(selector) || []) {
+        push(node.getAttribute?.("content"));
+        push(node.getAttribute?.("data-ol-user"));
+        push(node.getAttribute?.("data-current-user"));
+        push(node.textContent);
+      }
+    }
+    return roots;
+  }
+
+  function findIdentityInExplicitState(root) {
+    const seen = new Set();
+    const preferredKeys = /^(?:current_?user|user|user_?info|profile|account|identity|session)$/i;
+    const visit = (value, depth = 0) => {
+      const parsed = parseCollabtexIdentityPayload(value);
+      if (!parsed || typeof parsed !== "object" || depth > 4 || seen.has(parsed)) return null;
+      seen.add(parsed);
+      const name = collabtexDisplayName(parsed);
+      if (name) return parsed;
+      let keys = [];
+      try { keys = Object.keys(parsed).filter((key) => preferredKeys.test(key)).slice(0, 24); } catch (_error) { return null; }
+      for (const key of keys) {
+        try {
+          const found = visit(parsed[key], depth + 1);
+          if (found) return found;
+        } catch (_error) {}
+      }
+      return null;
+    };
+    return visit(root);
+  }
+
+  function identityFromPageBootstrap() {
+    for (const root of explicitCurrentUserRoots()) {
+      const record = findIdentityInExplicitState(root);
+      if (record && collabtexDisplayName(record)) return record;
+    }
+    return null;
+  }
+
+  function cleanAccountMenuText(value) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text || text.length > 120) return "";
+    const labeled = text.match(/^(?:account|user|profile)(?:\s+menu)?(?:\s+for|\s*:)?\s+(.+)$/i);
+    const candidate = cleanCollabtexIdentityName(labeled?.[1] || text);
+    if (!candidate) return "";
+    if (/^(?:account|user|profile|menu|settings|account settings|user settings|log ?out|sign ?out)$/i.test(candidate)) return "";
+    if (/^[A-Z]{1,3}$/i.test(candidate)) return "";
+    return candidate;
+  }
+
+  function identityFromAccountUi() {
+    const selectors = [
+      '[data-testid="user-menu-button"]',
+      '[data-testid="account-menu-button"]',
+      '[data-testid*="user-menu" i]',
+      '[data-testid*="account-menu" i]',
+      'button[aria-label*="account" i]',
+      'button[aria-label*="profile" i]',
+      '[data-user-name]',
+      '[data-display-name]'
+    ];
+    for (const selector of selectors) {
+      for (const node of document.querySelectorAll?.(selector) || []) {
+        for (const raw of [
+          node.getAttribute?.("data-user-name"),
+          node.getAttribute?.("data-display-name"),
+          node.getAttribute?.("aria-label"),
+          node.getAttribute?.("title"),
+          node.textContent
+        ]) {
+          const name = cleanAccountMenuText(raw);
+          if (name) return { name };
+        }
+      }
+    }
+    return null;
+  }
+
+  function identityFromDocument(documentRoot) {
+    if (!documentRoot?.querySelectorAll) return null;
+    for (const selector of [
+      'meta[name="ol-user"]',
+      'meta[name="ol-current-user"]',
+      'meta[name="ol-userInfo"]',
+      'meta[name="ol-user-info"]',
+      '[data-ol-user]',
+      '[data-current-user]'
+    ]) {
+      for (const node of documentRoot.querySelectorAll(selector)) {
+        for (const raw of [
+          node.getAttribute?.("content"),
+          node.getAttribute?.("data-ol-user"),
+          node.getAttribute?.("data-current-user"),
+          node.textContent
+        ]) {
+          const record = findIdentityInExplicitState(raw);
+          if (record && collabtexDisplayName(record)) return record;
+        }
+      }
+    }
+    return null;
+  }
+
+  async function identityFromSettingsPage() {
+    if (collabtexSettingsIdentityFetchAttempted || lastCollabtexIdentityName) return null;
+    collabtexSettingsIdentityFetchAttempted = true;
+    try {
+      const response = await fetch(new URL("/user/settings", location.origin), {
+        method: "GET",
+        credentials: "same-origin",
+        headers: { Accept: "text/html" },
+        cache: "no-store"
+      });
+      if (!response.ok) return null;
+      const html = await response.text();
+      const parsed = new DOMParser().parseFromString(html, "text/html");
+      return identityFromDocument(parsed);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async function discoverLocalCollabtexIdentity({ allowSettingsFetch = false } = {}) {
+    if (lastCollabtexIdentityName) return true;
+    const direct = identityFromPageBootstrap() || identityFromAccountUi();
+    if (direct && publishLocalCollabtexIdentity(direct)) return true;
+    if (allowSettingsFetch) {
+      const fromSettings = await identityFromSettingsPage();
+      if (fromSettings && publishLocalCollabtexIdentity(fromSettings)) return true;
+    }
+    return false;
+  }
+
+  function scheduleCollabtexIdentityDiscovery(delay = 0, allowSettingsFetch = false) {
+    if (lastCollabtexIdentityName) return;
+    window.clearTimeout(collabtexIdentityDiscoveryTimer);
+    collabtexIdentityDiscoveryTimer = window.setTimeout(() => {
+      collabtexIdentityDiscoveryTimer = 0;
+      discoverLocalCollabtexIdentity({ allowSettingsFetch }).catch(() => {});
+    }, Math.max(0, Number(delay) || 0));
+  }
+
   function findCollaborationSocket() {
     const seen = new Set();
     const budget = { remaining: 9000 };
@@ -2116,6 +2369,8 @@
     try {
       socket.emit("clientTracking.getConnectedUsers", (error, users) => {
         if (error || !Array.isArray(users)) return;
+        const localUser = findLocalCollabtexUser(users, socket);
+        if (localUser) publishLocalCollabtexIdentity(localUser);
         for (const user of users) {
           if (!user?.cursorData) continue;
           dispatchCollaborationPresence({ ...user.cursorData, ...user, id: user.client_id });
@@ -2184,6 +2439,7 @@
 
   function scheduleCollaborationPresence(immediate = false) {
     window.clearTimeout(collaborationPresenceTimer);
+    window.clearTimeout(collabtexIdentityDiscoveryTimer);
     collaborationPresenceTimer = window.setTimeout(
       emitCollaborationPresence,
       immediate ? 0 : 90
@@ -3822,6 +4078,12 @@
     }
   });
 
+  window.addEventListener(COLLABTEX_IDENTITY_REFRESH_EVENT, () => {
+    if (!lastCollabtexIdentityName) {
+      discoverLocalCollabtexIdentity({ allowSettingsFetch: true }).catch(() => {});
+    }
+  });
+
   const observer = new MutationObserver(() => {
     const found = findEditor();
     if (found) {
@@ -3832,6 +4094,7 @@
       scheduleOverlayRender();
     }
     if (nativeAutocompleteSuppressed()) hideNativeAutocomplete();
+    if (!lastCollabtexIdentityName) scheduleCollabtexIdentityDiscovery(120);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
@@ -3858,12 +4121,18 @@
     scheduleCollaborationPresence();
   }, 4000);
   ensureCollaborationSocket();
+  scheduleCollabtexIdentityDiscovery(0);
+  window.setTimeout(() => scheduleCollabtexIdentityDiscovery(0), 500);
+  window.setTimeout(() => scheduleCollabtexIdentityDiscovery(0), 1500);
+  window.setTimeout(() => scheduleCollabtexIdentityDiscovery(0), 4000);
+  window.setTimeout(() => scheduleCollabtexIdentityDiscovery(0, true), 9000);
 
   window.addEventListener("pagehide", () => {
     window.clearInterval(poll);
     window.clearInterval(collaborationSocketPoll);
     window.clearInterval(collaborationPresenceHeartbeat);
     window.clearTimeout(collaborationPresenceTimer);
+    window.clearTimeout(collabtexIdentityDiscoveryTimer);
     collaborationSocketCleanup?.();
     collaborationSocketCleanup = null;
     collaborationSocket = null;

@@ -202,8 +202,17 @@
 }
 
 #smarttex-equation-preview[data-preview-kind="table"] .smarttex-equation-output {
+  overflow: hidden;
   padding: 12px 14px 14px;
   text-align: left;
+}
+
+#smarttex-equation-preview[data-preview-kind="table"].smarttex-preview-manually-zoomed .smarttex-equation-output {
+  overflow: auto;
+}
+
+#smarttex-equation-preview[data-preview-kind="table"] .smarttex-table-scroll {
+  max-width: 100%;
 }
 
 #smarttex-equation-preview[data-preview-kind="figure"] {
@@ -2694,18 +2703,25 @@ body[data-theme="dark"] #smarttex-graphic-autocomplete-preview {
   display: flex;
   align-items: center;
   gap: 3px;
+  flex: 0 1 auto;
   width: max-content;
-  max-width: min(100%, 520px);
+  max-width: 100%;
+  min-width: 0;
   min-height: 30px;
   margin: 0 5px 0 auto;
   padding: 1px 3px;
-  overflow: auto hidden;
+  overflow-x: hidden;
+  overflow-y: hidden;
   border: 0;
   border-radius: 5px;
   color: #34465a;
   background: transparent;
   box-shadow: none;
   scrollbar-width: thin;
+}
+
+.smarttex-document-editing-toolbar.smarttex-document-toolbar-overflowing {
+  overflow-x: auto;
 }
 
 .smarttex-document-editing-toolbar button[hidden],
@@ -3209,9 +3225,19 @@ body[data-theme="dark"] #smarttex-graphic-autocomplete-preview {
 
 .smarttex-figure-popup-viewport:hover .smarttex-figure-zoom-controls,
 .smarttex-figure-popup-viewport:focus-within .smarttex-figure-zoom-controls,
-.smarttex-figure-popup-viewport.smarttex-figure-popup-zoomed .smarttex-figure-zoom-controls {
+.smarttex-figure-popup-viewport.smarttex-figure-popup-zoomed .smarttex-figure-zoom-controls,
+#smarttex-equation-preview:hover > .smarttex-preview-zoom-controls,
+#smarttex-equation-preview:focus-within > .smarttex-preview-zoom-controls {
   opacity: 1;
   pointer-events: auto;
+}
+
+.smarttex-preview-zoom-controls {
+  top: 47px;
+}
+
+.smarttex-preview-zoom-controls[hidden] {
+  display: none !important;
 }
 
 .smarttex-figure-zoom-controls button {
@@ -4411,6 +4437,110 @@ html.smarttex-editor-scrolling .smarttex-popup-loading-spinner {
   background: #eef6ff;
 }
 
+.smarttex-settings-action {
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid #b9c5d3;
+  border-radius: 7px;
+  color: #344054;
+  background: #fff;
+  font: 700 12px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-settings-action:hover,
+.smarttex-settings-action:focus-visible {
+  border-color: #2583e9;
+  color: #0969da;
+  background: #eef6ff;
+  outline: none;
+}
+
+.smarttex-settings-popup-size-controls {
+  display: grid;
+  grid-template-columns: minmax(118px, 1fr) minmax(104px, 1.15fr) 28px;
+  align-items: center;
+  gap: 7px;
+}
+
+.smarttex-settings-popup-size-controls .smarttex-settings-action {
+  grid-column: 1;
+  width: auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.smarttex-settings-popup-global-scale {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: minmax(70px, 1fr) 42px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.smarttex-settings-popup-global-scale[hidden],
+.smarttex-settings-popup-separate-scales[hidden] {
+  display: none !important;
+}
+
+.smarttex-settings-popup-global-scale input[type="range"],
+.smarttex-settings-popup-scale-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  accent-color: #1674d1;
+}
+
+.smarttex-settings-popup-scale-value {
+  min-width: 39px;
+  color: #526071;
+  font: 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-align: right;
+}
+
+.smarttex-settings-popup-scale-toggle {
+  grid-column: 3;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #b9c5d3;
+  border-radius: 7px;
+  color: #526071;
+  background: #fff;
+  font: 800 15px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-settings-popup-scale-toggle:hover,
+.smarttex-settings-popup-scale-toggle:focus-visible {
+  border-color: #2583e9;
+  color: #0969da;
+  background: #eef6ff;
+  outline: none;
+}
+
+.smarttex-settings-popup-separate-scales {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 7px 8px;
+  border: 1px solid #d9e0e8;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.smarttex-settings-popup-scale-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 7px;
+  color: #344054;
+  font: 600 11px/1.25 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
 @media (max-width: 520px) {
   .smarttex-settings-row-select,
   .smarttex-settings-row-range {
@@ -4463,25 +4593,56 @@ html.smarttex-editor-scrolling .smarttex-popup-loading-spinner {
   .smarttex-settings-reset,
   .smarttex-settings-row-select select,
   .smarttex-settings-row-highlight input[type="color"],
-  .smarttex-settings-edit-presets {
+  .smarttex-settings-edit-presets,
+  .smarttex-settings-action {
     border-color: #53647a;
   }
 
   .smarttex-settings-row-select select,
-  .smarttex-settings-edit-presets {
+  .smarttex-settings-edit-presets,
+  .smarttex-settings-action {
     color: #e5edf7;
     background: #111827;
   }
 
   .smarttex-settings-close:hover,
   .smarttex-settings-reset:hover:not(:disabled),
-  .smarttex-settings-edit-presets:hover {
+  .smarttex-settings-edit-presets:hover,
+  .smarttex-settings-action:hover,
+  .smarttex-settings-action:focus-visible {
     color: #79c0ff;
     background: #263b53;
   }
 
   .smarttex-settings-legal a {
     color: #79c0ff;
+  }
+  .smarttex-settings-popup-scale-toggle,
+  .smarttex-settings-popup-separate-scales {
+    border-color: #53647a;
+  }
+
+  .smarttex-settings-popup-scale-toggle {
+    color: #aebdd0;
+    background: #111827;
+  }
+
+  .smarttex-settings-popup-scale-toggle:hover,
+  .smarttex-settings-popup-scale-toggle:focus-visible {
+    color: #79c0ff;
+    background: #263b53;
+  }
+
+  .smarttex-settings-popup-separate-scales {
+    background: #1a2432;
+  }
+
+  .smarttex-settings-popup-scale-row {
+    color: #d6e0ec;
+  }
+
+  .smarttex-settings-popup-scale-value {
+    color: #aebdd0;
   }
 }
 
@@ -4643,6 +4804,244 @@ html.smarttex-editor-scrolling .smarttex-popup-loading-spinner {
 
 .smarttex-label-guard-preview-loading .smarttex-inline-loading-spinner {
   flex: 0 0 auto;
+}
+
+/* Shared close and resize chrome for lists, image previews, and equations. */
+.smarttex-popup-escape-hint {
+  flex: 0 0 auto;
+  color: #7a8798;
+  font: 500 10.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.smarttex-reference-autocomplete-header,
+.smarttex-figure-autocomplete-header {
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+}
+
+.smarttex-popup-window-heading-enhanced {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.smarttex-reference-autocomplete-header.smarttex-popup-window-heading-enhanced,
+.smarttex-figure-autocomplete-header.smarttex-popup-window-heading-enhanced {
+  display: grid;
+}
+
+.smarttex-popup-window-heading-enhanced > .smarttex-popup-escape-hint {
+  margin-left: auto;
+}
+
+.smarttex-popup-window-close {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #64748b;
+  background: transparent;
+  font: 500 19px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-popup-window-close:hover,
+.smarttex-popup-window-close:focus-visible {
+  color: #172033;
+  background: #e7edf5;
+  outline: none;
+}
+
+.smarttex-popup-resizable {
+  box-sizing: border-box;
+}
+
+.smarttex-popup-resize-handle {
+  position: absolute;
+  z-index: 2147483647;
+  display: block;
+  pointer-events: auto !important;
+  touch-action: none;
+  user-select: none;
+}
+
+.smarttex-popup-resize-handle[data-direction="n"],
+.smarttex-popup-resize-handle[data-direction="s"] {
+  right: 13px;
+  left: 13px;
+  height: 12px;
+  cursor: ns-resize;
+}
+
+.smarttex-popup-resize-handle[data-direction="n"] { top: 0; }
+.smarttex-popup-resize-handle[data-direction="s"] { bottom: 0; }
+
+.smarttex-popup-resize-handle[data-direction="e"],
+.smarttex-popup-resize-handle[data-direction="w"] {
+  top: 13px;
+  bottom: 13px;
+  width: 12px;
+  cursor: ew-resize;
+}
+
+.smarttex-popup-resize-handle[data-direction="e"] { right: 0; }
+.smarttex-popup-resize-handle[data-direction="w"] { left: 0; }
+
+.smarttex-popup-resize-handle[data-direction="ne"],
+.smarttex-popup-resize-handle[data-direction="se"],
+.smarttex-popup-resize-handle[data-direction="sw"],
+.smarttex-popup-resize-handle[data-direction="nw"] {
+  width: 20px;
+  height: 20px;
+}
+
+.smarttex-popup-resize-handle[data-direction="ne"] {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.smarttex-popup-resize-handle[data-direction="se"] {
+  right: 0;
+  bottom: 0;
+  color: #758397;
+  cursor: nwse-resize;
+}
+
+.smarttex-popup-resize-handle[data-direction="sw"] {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.smarttex-popup-resize-handle[data-direction="nw"] {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.smarttex-popup-resize-handle[data-direction="se"]::before {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  background:
+    linear-gradient(135deg, transparent 44%, currentColor 45%, currentColor 55%, transparent 56%) right bottom / 13px 13px no-repeat,
+    linear-gradient(135deg, transparent 42%, currentColor 43%, currentColor 57%, transparent 58%) right bottom / 7px 7px no-repeat;
+  content: "";
+  pointer-events: none;
+}
+
+.smarttex-popup-resizing,
+.smarttex-popup-resizing * {
+  cursor: inherit !important;
+  user-select: none !important;
+}
+
+html[data-smarttex-popup-resize-direction="n"],
+html[data-smarttex-popup-resize-direction="s"],
+html[data-smarttex-popup-resize-direction="n"] *,
+html[data-smarttex-popup-resize-direction="s"] * { cursor: ns-resize !important; }
+
+html[data-smarttex-popup-resize-direction="e"],
+html[data-smarttex-popup-resize-direction="w"],
+html[data-smarttex-popup-resize-direction="e"] *,
+html[data-smarttex-popup-resize-direction="w"] * { cursor: ew-resize !important; }
+
+html[data-smarttex-popup-resize-direction="ne"],
+html[data-smarttex-popup-resize-direction="sw"],
+html[data-smarttex-popup-resize-direction="ne"] *,
+html[data-smarttex-popup-resize-direction="sw"] * { cursor: nesw-resize !important; }
+
+html[data-smarttex-popup-resize-direction="nw"],
+html[data-smarttex-popup-resize-direction="se"],
+html[data-smarttex-popup-resize-direction="nw"] *,
+html[data-smarttex-popup-resize-direction="se"] * { cursor: nwse-resize !important; }
+
+#smarttex-citation-popup[data-smarttex-user-sized="true"],
+#smarttex-reference-autocomplete-popup[data-smarttex-user-sized="true"],
+#smarttex-figure-autocomplete-popup[data-smarttex-user-sized="true"] {
+  max-width: calc(100vw - 18px);
+  max-height: calc(100vh - 18px);
+}
+
+#smarttex-equation-preview[data-smarttex-user-sized="true"],
+#smarttex-graphic-autocomplete-preview[data-smarttex-user-sized="true"] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-width: calc(100vw - 18px);
+  max-height: calc(100vh - 18px);
+  overflow: hidden;
+}
+
+#smarttex-equation-preview[data-smarttex-user-sized="true"] .smarttex-equation-output,
+#smarttex-graphic-autocomplete-preview[data-smarttex-user-sized="true"] .smarttex-graphic-autocomplete-output {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+}
+
+#smarttex-equation-preview[data-smarttex-popup-type="equation"] .smarttex-equation-output .katex {
+  font-size: calc(1.25em * var(--smarttex-equation-render-scale, 1));
+}
+
+#smarttex-equation-preview[data-smarttex-user-sized="true"][data-preview-kind="figure"] .smarttex-equation-output {
+  place-items: start center;
+  overflow: hidden;
+}
+
+[data-smarttex-popup-type="image"] .smarttex-figure-popup {
+  gap: calc(9px * var(--smarttex-popup-content-scale, 1));
+}
+
+[data-smarttex-popup-type="image"] .smarttex-float-popup-caption {
+  font-size: calc(12px * var(--smarttex-popup-content-scale, 1));
+}
+
+#smarttex-equation-preview[data-smarttex-popup-type="table"] .smarttex-table-popup {
+  gap: calc(9px * var(--smarttex-popup-content-scale, 1));
+}
+
+#smarttex-equation-preview[data-smarttex-popup-type="table"] .smarttex-table-preview {
+  font-size: calc(13px * var(--smarttex-table-render-scale, 1));
+}
+
+#smarttex-equation-preview[data-smarttex-popup-type="table"] .smarttex-table-preview td {
+  min-width: calc(34px * var(--smarttex-table-render-scale, 1));
+  padding: calc(6px * var(--smarttex-table-render-scale, 1))
+    calc(10px * var(--smarttex-table-render-scale, 1));
+}
+
+#smarttex-equation-preview[data-smarttex-popup-type="table"] .smarttex-float-popup-caption {
+  font-size: calc(12px * var(--smarttex-table-render-scale, 1));
+}
+
+.smarttex-document-reference-popup[data-smarttex-user-sized="true"] {
+  min-width: 0;
+  max-width: calc(100vw - 18px);
+  max-height: calc(100vh - 18px);
+}
+
+@media (prefers-color-scheme: dark) {
+  .smarttex-popup-escape-hint { color: #93a4b8; }
+  .smarttex-popup-window-close { color: #aab8ca; }
+  .smarttex-popup-window-close:hover,
+  .smarttex-popup-window-close:focus-visible {
+    color: #fff;
+    background: #35445a;
+  }
+  .smarttex-popup-resize-handle[data-direction="se"] { color: #9aabbe; }
 }
 
 
@@ -4817,7 +5216,7 @@ html.smarttex-editor-scrolling .smarttex-popup-loading-spinner {
   border-right: 1px solid var(--smarttex-comments-border);
   color: var(--smarttex-comments-fg);
   background: var(--smarttex-comments-bg);
-  font: 13px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 13px/1.4 "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   z-index: 8;
 }
 
@@ -4880,6 +5279,12 @@ html.smarttex-editor-scrolling .smarttex-popup-loading-spinner {
 
 .smarttex-comments-add:hover {
   background: rgba(72, 136, 218, 0.15);
+}
+
+.smarttex-comments-add-row {
+  display: flex;
+  justify-content: center;
+  margin: 2px 0 4px;
 }
 
 .smarttex-comments-close {
@@ -5128,6 +5533,581 @@ html.smarttex-editor-scrolling .smarttex-popup-loading-spinner {
 .smarttex-comment-text {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.smarttex-comment-text.smarttex-comment-text-emoji-only {
+  font-size: 3em;
+  line-height: 1.12;
+}
+
+.smarttex-comment-input-shell {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.smarttex-comment-input-shell textarea {
+  padding-right: 72px;
+}
+
+.smarttex-comment-emoji-trigger,
+.smarttex-comment-giphy-trigger,
+.smarttex-comment-reaction-add {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--smarttex-comments-muted, #7b8795);
+  background: transparent;
+  cursor: pointer;
+}
+
+.smarttex-comment-emoji-trigger:hover,
+.smarttex-comment-emoji-trigger:focus-visible,
+.smarttex-comment-giphy-trigger:hover,
+.smarttex-comment-giphy-trigger:focus-visible,
+.smarttex-comment-reaction-add:hover,
+.smarttex-comment-reaction-add:focus-visible {
+  color: var(--smarttex-comments-fg, #172033);
+  background: rgba(111, 128, 150, 0.13);
+  outline: none;
+}
+
+.smarttex-comment-emoji-trigger {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  width: 25px;
+  height: 25px;
+}
+
+.smarttex-comment-giphy-trigger {
+  position: absolute;
+  right: 36px;
+  bottom: 7px;
+  width: 31px;
+  height: 25px;
+  font: 800 9px/1 Arial, sans-serif;
+  letter-spacing: 0.02em;
+}
+
+.smarttex-comment-content {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.smarttex-comment-giphy-input-preview {
+  margin-top: 7px;
+}
+
+.smarttex-comment-giphy-input-preview[hidden] {
+  display: none !important;
+}
+
+.smarttex-comment-giphy-attachment {
+  position: relative;
+  width: min(100%, 360px);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--smarttex-comments-border);
+  border-radius: 9px;
+  background: var(--smarttex-comments-card);
+}
+
+.smarttex-comment-giphy-media {
+  width: 100%;
+  min-height: 86px;
+  overflow: hidden;
+  background: #10151d;
+}
+
+.smarttex-comment-giphy-frame {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  max-height: 300px;
+  border: 0;
+  background: #10151d;
+  aspect-ratio: 4 / 3;
+}
+
+.smarttex-comment-giphy-blocked {
+  display: grid;
+  width: 100%;
+  min-height: 110px;
+  place-content: center;
+  gap: 4px;
+  padding: 16px;
+  border: 0;
+  color: #e6edf5;
+  background: #17202b;
+  text-align: center;
+  cursor: pointer;
+}
+
+.smarttex-comment-giphy-blocked strong {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.smarttex-comment-giphy-blocked span {
+  color: #b8c4d2;
+  font-size: 11px;
+}
+
+.smarttex-comment-giphy-blocked:hover,
+.smarttex-comment-giphy-blocked:focus-visible {
+  background: #202c3a;
+  outline: none;
+}
+
+.smarttex-comment-giphy-attribution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 9px;
+  min-height: 30px;
+  padding: 5px 7px;
+  font-size: 10px;
+}
+
+.smarttex-comment-giphy-brand {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 3px 5px;
+  border-radius: 4px;
+  color: #fff;
+  background: #4b5563;
+  text-decoration: none;
+}
+
+.smarttex-comment-giphy-brand img {
+  display: block;
+  width: 112px;
+  height: auto;
+}
+
+.smarttex-comment-giphy-credit {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--smarttex-comments-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-comment-giphy-remove {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 35%);
+  border-radius: 999px;
+  color: #fff;
+  background: rgb(15 23 42 / 78%);
+  font: 700 17px/1 Arial, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-comment-giphy-remove:hover,
+.smarttex-comment-giphy-remove:focus-visible {
+  background: rgb(15 23 42 / 94%);
+  outline: none;
+}
+
+#smarttex-comment-giphy-picker {
+  position: fixed;
+  z-index: 2147483647;
+  display: flex;
+  max-height: min(520px, calc(100vh - 16px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #c6d0dc;
+  border-radius: 11px;
+  color: #172033;
+  background: #fff;
+  box-shadow: 0 12px 34px rgb(15 23 42 / 28%);
+  font: 12px/1.35 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#smarttex-comment-giphy-picker[hidden] {
+  display: none !important;
+}
+
+#smarttex-comment-giphy-picker.smarttex-comments-dark {
+  border-color: #46576b;
+  color: #e7edf5;
+  background: #1d2734;
+}
+
+.smarttex-comment-giphy-picker-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px;
+}
+
+.smarttex-comment-giphy-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 6px 9px;
+  border: 1px solid #bdc9d7;
+  border-radius: 7px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+}
+
+.smarttex-comments-dark .smarttex-comment-giphy-search {
+  border-color: #52657a;
+}
+
+.smarttex-comment-giphy-picker-close {
+  flex: 0 0 auto;
+  width: 31px;
+  height: 31px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font: 700 18px/1 Arial, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-comment-giphy-picker-close:hover {
+  background: rgb(111 128 150 / 16%);
+}
+
+.smarttex-comment-giphy-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 9px 7px;
+  color: #667587;
+  text-align: center;
+}
+
+.smarttex-comments-dark .smarttex-comment-giphy-status {
+  color: #aab7c8;
+}
+
+.smarttex-comment-giphy-options-button {
+  padding: 4px 7px;
+  border: 1px solid #aebccc;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.smarttex-comment-giphy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  min-height: 64px;
+  padding: 0 8px 8px;
+  overflow: auto;
+}
+
+.smarttex-comment-giphy-result {
+  position: relative;
+  min-width: 0;
+  min-height: 76px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: #10151d;
+  cursor: pointer;
+}
+
+.smarttex-comment-giphy-result img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 76px;
+  max-height: 128px;
+  object-fit: cover;
+}
+
+.smarttex-comment-giphy-result span {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  left: 3px;
+  overflow: hidden;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: #fff;
+  background: rgb(0 0 0 / 60%);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smarttex-comment-giphy-result:hover,
+.smarttex-comment-giphy-result:focus-visible {
+  outline: 2px solid #268bd2;
+  outline-offset: -2px;
+}
+
+.smarttex-comment-giphy-pagination {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 7px 4px 3px;
+}
+
+.smarttex-comment-giphy-load-more {
+  min-width: 118px;
+  padding: 7px 12px;
+  border: 1px solid #aebccc;
+  border-radius: 7px;
+  color: #334155;
+  background: #f8fafc;
+  font: 600 11px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.smarttex-comment-giphy-load-more:hover,
+.smarttex-comment-giphy-load-more:focus-visible {
+  border-color: #7ea8d4;
+  background: #eef6ff;
+  outline: none;
+}
+
+.smarttex-comment-giphy-more-label {
+  color: #718096;
+  font-size: 10px;
+}
+
+.smarttex-comment-giphy-pagination-spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgb(113 128 150 / 34%);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  color: #5f6f82;
+  animation: smarttex-spinner-spin 0.7s linear infinite;
+}
+
+.smarttex-comment-giphy-pagination-spinner[hidden] {
+  display: none !important;
+}
+
+.smarttex-comments-dark .smarttex-comment-giphy-pagination-spinner {
+  border-color: rgb(170 183 200 / 30%);
+  border-top-color: currentColor;
+  color: #aab7c8;
+}
+
+.smarttex-comments-dark .smarttex-comment-giphy-load-more {
+  border-color: #52657a;
+  color: #e7edf5;
+  background: #253346;
+}
+
+.smarttex-comments-dark .smarttex-comment-giphy-load-more:hover,
+.smarttex-comments-dark .smarttex-comment-giphy-load-more:focus-visible {
+  border-color: #6f91b5;
+  background: #30445c;
+}
+
+.smarttex-comments-dark .smarttex-comment-giphy-more-label {
+  color: #aab7c8;
+}
+
+.smarttex-comment-giphy-footer {
+  display: flex;
+  justify-content: center;
+  padding: 7px 8px 9px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.smarttex-comments-dark .smarttex-comment-giphy-footer {
+  border-color: #3f5063;
+}
+
+.smarttex-comment-emoji-trigger svg,
+.smarttex-comment-reaction-add svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.smarttex-comment-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 25px;
+  margin-top: 8px;
+}
+
+.smarttex-comment-reaction {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  min-width: 30px;
+  height: 25px;
+  padding: 1px 7px;
+  border: 1px solid var(--smarttex-comments-border);
+  border-radius: 999px;
+  color: var(--smarttex-comments-fg);
+  background: var(--smarttex-comments-card);
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.smarttex-comment-reaction:hover,
+.smarttex-comment-reaction:focus-visible {
+  border-color: rgba(38, 139, 210, 0.62);
+  outline: none;
+}
+
+.smarttex-comment-reaction[aria-pressed="true"] {
+  border-color: rgba(38, 139, 210, 0.72);
+  background: rgba(38, 139, 210, 0.14);
+}
+
+.smarttex-comment-reaction-count {
+  position: absolute;
+  top: -7px;
+  right: -6px;
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  padding: 0 4px;
+  border: 1.5px solid var(--smarttex-comments-bg);
+  border-radius: 999px;
+  color: #fff;
+  background: #738195;
+  font: 700 9px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  pointer-events: none;
+}
+
+.smarttex-comment-reaction-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  top: 0;
+  left: 0;
+  display: none;
+  min-width: 92px;
+  max-width: min(280px, calc(100vw - 12px));
+  max-height: min(50vh, 360px);
+  padding: 6px 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid rgba(83, 102, 126, 0.28);
+  border-radius: 7px;
+  color: #fff;
+  background: rgba(31, 41, 55, 0.96);
+  box-shadow: 0 5px 16px rgba(15, 23, 42, 0.24);
+  font: 11px/1.35 Inter, ui-sans-serif, system-ui, sans-serif;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.smarttex-comment-reaction-tooltip > span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.smarttex-comment-reaction:hover .smarttex-comment-reaction-tooltip,
+.smarttex-comment-reaction:focus-visible .smarttex-comment-reaction-tooltip,
+.smarttex-comment-reaction-tooltip.smarttex-comment-reaction-tooltip-visible {
+  display: block;
+}
+
+.smarttex-comment-reaction-add {
+  width: 25px;
+  height: 25px;
+}
+
+.smarttex-comment-reaction-add.smarttex-comment-reaction-add-plus {
+  font: 500 20px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+#smarttex-comment-emoji-picker {
+  position: fixed;
+  z-index: 2147483647;
+  width: 284px;
+  box-sizing: border-box;
+  padding: 9px;
+  border: 1px solid rgba(83, 102, 126, 0.28);
+  border-radius: 10px;
+  color: #172033;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.27);
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+#smarttex-comment-emoji-picker[hidden] {
+  display: none !important;
+}
+
+.smarttex-comment-emoji-picker-heading {
+  margin: 0 2px 8px;
+  font: 650 12px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.smarttex-comment-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+}
+
+.smarttex-comment-emoji-option {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.smarttex-comment-emoji-option:hover,
+.smarttex-comment-emoji-option:focus-visible {
+  background: rgba(38, 139, 210, 0.14);
+  outline: 1px solid rgba(38, 139, 210, 0.45);
+}
+
+#smarttex-comment-emoji-picker.smarttex-comments-dark {
+  border-color: rgba(195, 207, 224, 0.24);
+  color: #e7edf5;
+  background: #202a38;
 }
 
 .smarttex-comment-reply-button {
@@ -6391,4 +7371,71 @@ body.smarttex-dark #smarttex-review-stop-overlay .smarttex-comments-confirm-dial
 html[data-theme="dark"] #smarttex-review-stop-overlay .smarttex-comments-confirm-dialog p,
 #smarttex-review-stop-overlay.smarttex-comments-dark .smarttex-comments-confirm-dialog p {
   color: #aab7c8;
+}
+
+/* One-time explanation shown only while SmartTeX has to use a generated comment name. */
+.smarttex-fallback-name-notice {
+  position: fixed;
+  z-index: 2147483646;
+  box-sizing: border-box;
+  width: min(330px, calc(100vw - 20px));
+  padding: 11px 34px 11px 12px;
+  border: 1px solid rgba(80, 90, 105, 0.42);
+  border-radius: 9px;
+  background: var(--smarttex-panel-bg, #fff);
+  color: var(--smarttex-panel-fg, #20242a);
+  box-shadow: 0 7px 24px rgba(0, 0, 0, 0.20);
+  font: 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.smarttex-fallback-name-notice::before {
+  content: "";
+  position: absolute;
+  left: var(--smarttex-fallback-arrow-left, 28px);
+  top: -6px;
+  width: 10px;
+  height: 10px;
+  transform: translateX(-50%) rotate(45deg);
+  border-left: 1px solid rgba(80, 90, 105, 0.42);
+  border-top: 1px solid rgba(80, 90, 105, 0.42);
+  background: inherit;
+}
+
+.smarttex-fallback-name-notice.smarttex-fallback-name-notice-above::before {
+  top: auto;
+  bottom: -6px;
+  transform: translateX(-50%) rotate(225deg);
+}
+
+.smarttex-fallback-name-notice-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #268bd2;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.smarttex-fallback-name-notice-close {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: 20px/24px system-ui, sans-serif;
+  cursor: pointer;
+  opacity: 0.68;
+}
+
+.smarttex-fallback-name-notice-close:hover,
+.smarttex-fallback-name-notice-close:focus-visible {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.12);
 }

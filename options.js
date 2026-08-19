@@ -11,6 +11,9 @@
   const STRUCTURE_HIGHLIGHT_KEY = "smarttex:structure-highlight:v1";
   const LABEL_REFERENCE_GUARD_KEY = "smarttex:label-reference-guard:v1";
   const COMMENT_PROFILE_KEY = globalThis.SmartTeXCommentProfile?.KEY || "smarttex:comment-profile:v1";
+  const GIPHY_SETTINGS_KEY = globalThis.SmartTeXGiphyIntegration?.SETTINGS_KEY || "smarttex:giphy-settings:v1";
+  const GIPHY_CONSENT_KEY = globalThis.SmartTeXGiphyIntegration?.CONSENT_KEY || "smarttex:giphy-consent:v1";
+  const GIPHY_FOCUS_PERSONAL_KEY_KEY = globalThis.SmartTeXGiphyIntegration?.FOCUS_PERSONAL_KEY_KEY || "smarttex:giphy-focus-personal-key:v1";
 
   const DEFAULT_SITES = ["collabtex.helmholtz.cloud"];
   const DEFAULT_FEATURES = Object.freeze({ equations: true, tables: true, figures: true });
@@ -50,6 +53,14 @@
   const labelReferenceGuardInput = document.querySelector("#smarttex-label-reference-guard-enabled");
   const commentNameInput = document.querySelector("#smarttex-comment-user-name");
   const commentColorInput = document.querySelector("#smarttex-comment-user-color");
+  const giphyApiKeyInput = document.querySelector("#smarttex-giphy-api-key");
+  const giphyToggleKeyButton = document.querySelector("#smarttex-giphy-toggle-key");
+  const giphyKeyHelpButton = document.querySelector("#smarttex-giphy-key-help");
+  const giphyKeyHelpOverlay = document.querySelector("#smarttex-giphy-key-help-overlay");
+  const giphyKeyHelpClose = document.querySelector("#smarttex-giphy-key-help-close");
+  const giphyKeyHelpDone = document.querySelector("#smarttex-giphy-key-help-done");
+  const giphyConsentStatus = document.querySelector("#smarttex-giphy-consent-status");
+  const giphyWithdrawConsentButton = document.querySelector("#smarttex-giphy-withdraw-consent");
   const status = document.querySelector("#smarttex-options-status");
   const activeStrengthOutput = document.querySelector("#smarttex-highlight-active-strength-output");
 
@@ -79,6 +90,8 @@
   let saveRevision = 0;
   let saveQueue = Promise.resolve();
   let lastSiteFingerprint = "";
+  let commentProfileState = null;
+  let commentNameEdited = false;
 
   function normalizeDomain(value) {
     let domain = String(value || "").trim().replace(/\/+$/, "");
@@ -149,11 +162,16 @@
         },
         [COMMENT_PROFILE_KEY]: globalThis.SmartTeXCommentProfile?.normalize?.({
           name: commentNameInput?.value,
-          color: commentColorInput?.value
-        }) || {
+          color: commentColorInput?.value,
+          nameSource: commentNameEdited ? "manual" : commentProfileState?.nameSource
+        }, commentProfileState) || {
           name: String(commentNameInput?.value || "Anonymous").trim().slice(0, 80) || "Anonymous",
-          color: validColor(commentColorInput?.value, "#268bd2")
+          color: validColor(commentColorInput?.value, "#268bd2"),
+          nameSource: commentNameEdited ? "manual" : (commentProfileState?.nameSource || "manual")
         },
+        [GIPHY_SETTINGS_KEY]: globalThis.SmartTeXGiphyIntegration?.normalizeSettings?.({
+          apiKey: giphyApiKeyInput?.value
+        }) || { apiKey: String(giphyApiKeyInput?.value || "").trim().slice(0, 300) },
         [STRUCTURE_HIGHLIGHT_KEY]: highlightSettingsFromForm()
       }
     };
@@ -297,6 +315,9 @@
       REFERENCE_POPUPS_KEY,
       LABEL_REFERENCE_GUARD_KEY,
       COMMENT_PROFILE_KEY,
+      GIPHY_SETTINGS_KEY,
+      GIPHY_CONSENT_KEY,
+      GIPHY_FOCUS_PERSONAL_KEY_KEY,
       STRUCTURE_HIGHLIGHT_KEY
     ]);
 
@@ -325,9 +346,26 @@
     const commentProfile = globalThis.SmartTeXCommentProfile?.normalize?.(stored?.[COMMENT_PROFILE_KEY], ensuredProfile)
       || stored?.[COMMENT_PROFILE_KEY]
       || ensuredProfile
-      || { name: "Anonymous", color: "#268bd2" };
+      || { name: "Anonymous", color: "#268bd2", nameSource: "manual" };
+    commentProfileState = commentProfile;
+    commentNameEdited = false;
     if (commentNameInput) commentNameInput.value = commentProfile.name || "Anonymous";
     if (commentColorInput) commentColorInput.value = validColor(commentProfile.color, "#268bd2");
+
+    const giphySettings = globalThis.SmartTeXGiphyIntegration?.normalizeSettings?.(stored?.[GIPHY_SETTINGS_KEY])
+      || { apiKey: String(stored?.[GIPHY_SETTINGS_KEY]?.apiKey || "") };
+    if (giphyApiKeyInput) giphyApiKeyInput.value = giphySettings.apiKey || "";
+    const consent = stored?.[GIPHY_CONSENT_KEY];
+    const consentAccepted = Boolean(consent?.accepted === true && Number(consent?.noticeVersion) === (globalThis.SmartTeXGiphyIntegration?.CONSENT_VERSION || 1));
+    if (giphyConsentStatus) giphyConsentStatus.textContent = consentAccepted ? "Granted" : "Not granted";
+    if (giphyWithdrawConsentButton) giphyWithdrawConsentButton.disabled = !consentAccepted;
+    if (stored?.[GIPHY_FOCUS_PERSONAL_KEY_KEY]) {
+      await extensionApi.storage.local.remove(GIPHY_FOCUS_PERSONAL_KEY_KEY);
+      window.setTimeout(() => {
+        giphyApiKeyInput?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+        giphyApiKeyInput?.focus?.();
+      }, 80);
+    }
 
     const storedHighlights = stored?.[STRUCTURE_HIGHLIGHT_KEY] || {};
     const merged = { ...DEFAULT_HIGHLIGHTS, ...storedHighlights };
@@ -377,8 +415,77 @@
     button.addEventListener("click", () => resetActions[button.dataset.resetSetting]?.());
   }
 
+  function setGiphyKeyHelpOpen(open) {
+    if (!giphyKeyHelpOverlay) return;
+    giphyKeyHelpOverlay.hidden = !open;
+    document.documentElement.classList.toggle("smarttex-options-overlay-open", Boolean(open));
+    if (open) {
+      window.setTimeout(() => giphyKeyHelpClose?.focus?.(), 0);
+    } else {
+      giphyKeyHelpButton?.focus?.();
+    }
+  }
+
+  giphyKeyHelpButton?.addEventListener("click", () => setGiphyKeyHelpOpen(true));
+  giphyKeyHelpClose?.addEventListener("click", () => setGiphyKeyHelpOpen(false));
+  giphyKeyHelpDone?.addEventListener("click", () => setGiphyKeyHelpOpen(false));
+  giphyKeyHelpOverlay?.addEventListener("click", (event) => {
+    if (event.target === giphyKeyHelpOverlay) setGiphyKeyHelpOpen(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && giphyKeyHelpOverlay && !giphyKeyHelpOverlay.hidden) {
+      event.preventDefault();
+      setGiphyKeyHelpOpen(false);
+    }
+  });
+
+  giphyToggleKeyButton?.addEventListener("click", () => {
+    if (!giphyApiKeyInput) return;
+    const showing = giphyApiKeyInput.type === "text";
+    giphyApiKeyInput.type = showing ? "password" : "text";
+    giphyToggleKeyButton.textContent = showing ? "Show key" : "Hide key";
+    giphyApiKeyInput.focus();
+  });
+
+  giphyWithdrawConsentButton?.addEventListener("click", async () => {
+    try {
+      await globalThis.SmartTeXGiphyIntegration?.withdrawConsent?.();
+      if (giphyConsentStatus) giphyConsentStatus.textContent = "Not granted";
+      giphyWithdrawConsentButton.disabled = true;
+      showStatus("GIPHY consent withdrawn.");
+    } catch (error) {
+      showStatus(error?.message || String(error), true);
+    }
+  });
+
+  extensionApi?.storage?.onChanged?.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    if (changes?.[COMMENT_PROFILE_KEY]?.newValue) {
+      const nextProfile = globalThis.SmartTeXCommentProfile?.normalize?.(
+        changes[COMMENT_PROFILE_KEY].newValue,
+        commentProfileState
+      ) || changes[COMMENT_PROFILE_KEY].newValue;
+      commentProfileState = nextProfile;
+      // Reflect an automatically discovered CollabTeX name while the options
+      // page is open, but never disturb a name field the user is editing.
+      if (!commentNameEdited && document.activeElement !== commentNameInput && commentNameInput) {
+        commentNameInput.value = nextProfile.name || "Anonymous";
+      }
+      if (document.activeElement !== commentColorInput && commentColorInput) {
+        commentColorInput.value = validColor(nextProfile.color, "#268bd2");
+      }
+    }
+    if (changes?.[GIPHY_CONSENT_KEY]) {
+      const value = changes[GIPHY_CONSENT_KEY].newValue;
+      const accepted = Boolean(value?.accepted === true && Number(value?.noticeVersion) === (globalThis.SmartTeXGiphyIntegration?.CONSENT_VERSION || 1));
+      if (giphyConsentStatus) giphyConsentStatus.textContent = accepted ? "Granted" : "Not granted";
+      if (giphyWithdrawConsentButton) giphyWithdrawConsentButton.disabled = !accepted;
+    }
+  });
+
   form.addEventListener("submit", (event) => event.preventDefault());
   form.addEventListener("input", (event) => {
+    if (event.target === commentNameInput) commentNameEdited = true;
     if (event.target === highlightControls.activeStrength || event.target === highlightControls.activeEnabled) {
       updateActiveStrengthOutput();
     }

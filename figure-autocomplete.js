@@ -115,6 +115,7 @@
             <line x1="7" y1="16" x2="17" y2="16"></line>
           </svg>
         </button>
+        <span class="smarttex-popup-escape-hint" aria-hidden="true">[Esc]</span>
         <button type="button" class="smarttex-figure-autocomplete-close" title="Close (Esc)" aria-label="Close figure suggestions">&times;</button>
       </header>
       <div class="smarttex-figure-autocomplete-list" role="listbox" aria-label="Figure suggestions"></div>`;
@@ -127,6 +128,11 @@
     const listViewIcon = viewButton.querySelector(".smarttex-figure-autocomplete-view-list-icon");
     const list = popup.querySelector(".smarttex-figure-autocomplete-list");
     const closeButton = popup.querySelector(".smarttex-figure-autocomplete-close");
+    globalThis.SmartTeXPopupUI?.enhance?.(popup, {
+      type: "list",
+      closeButton,
+      onClose: hidePopup
+    });
 
     function schedulePopupRefit() {
       if (popup.hidden || popupRefitFrame !== null) return;
@@ -140,6 +146,11 @@
       const popupResizeObserver = new ResizeObserver(schedulePopupRefit);
       popupResizeObserver.observe(popup);
     }
+    popup.addEventListener("smarttex:popup-resized", () => {
+      const rect = popup.getBoundingClientRect();
+      lastPopupPosition = { left: rect.left, top: rect.top };
+      positionPopup();
+    });
 
     function bridgeRequest(type, payload = {}, timeoutMs = 5000) {
       const requestId = `figure-${Date.now()}-${++requestCounter}`;
@@ -810,10 +821,14 @@
     }
 
     function positionPopup() {
-      if (popup.hidden || !currentState?.screen) return;
+      if (
+        popup.hidden ||
+        popup.classList.contains("smarttex-popup-resizing") ||
+        !currentState?.screen
+      ) return;
       const margin = 9;
       const width = Math.max(1, Math.min(560, window.innerWidth - margin * 2));
-      popup.style.width = `${width}px`;
+      if (popup.dataset.smarttexUserSized !== "true") popup.style.width = `${width}px`;
       const cursorLeft = Number(currentState.screen.pageX) - window.scrollX;
       const cursorTop = Number(currentState.screen.pageY) - window.scrollY;
       const lineHeight = Math.max(14, Number(currentState.screen.lineHeight) || 18);
@@ -821,10 +836,12 @@
       const belowSpace = window.innerHeight - margin - (cursorTop + lineHeight + gap);
       const aboveSpace = cursorTop - gap - margin;
       const availableSideSpace = Math.max(belowSpace, aboveSpace);
-      popup.style.maxHeight = `${Math.round(Math.max(
-        48,
-        Math.min(470, window.innerHeight - margin * 2, availableSideSpace)
-      ))}px`;
+      if (popup.dataset.smarttexUserSized !== "true") {
+        popup.style.maxHeight = `${Math.round(Math.max(
+          48,
+          Math.min(470, window.innerHeight - margin * 2, availableSideSpace)
+        ))}px`;
+      }
       const rect = popup.getBoundingClientRect();
       const cursorRect = {
         left: cursorLeft - 3,

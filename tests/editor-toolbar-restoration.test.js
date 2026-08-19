@@ -35,6 +35,11 @@ assert.match(toolbar, /window\.addEventListener\(NAVIGATION_PUSH_EVENT/);
 assert.match(css, /\.smarttex-document-back-button\[hidden\]/);
 assert.doesNotMatch(toolbar, /document-preview-settings|liveDocumentPreview|applyLiveMode|scheduleRender/);
 assert.match(css, /\.smarttex-document-editing-toolbar\s*\{/);
+assert.match(css, /\.smarttex-document-editing-toolbar\s*\{[\s\S]*max-width:\s*100%/);
+assert.doesNotMatch(css, /max-width:\s*min\(100%,\s*520px\)/);
+assert.match(css, /\.smarttex-document-editing-toolbar\.smarttex-document-toolbar-overflowing\s*\{[\s\S]*overflow-x:\s*auto/);
+assert.match(toolbar, /scrollWidth > editingToolbar\.clientWidth \+ 1/);
+assert.match(toolbar, /new ResizeObserver\(\(\) => scheduleEditingToolbarOverflowUpdate\(\)\)/);
 assert.match(css, /\.smarttex-table-dialog-overlay\s*\{/);
 assert.match(css, /\.smarttex-document-toolbar-dropdown\s*\{/);
 

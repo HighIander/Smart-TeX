@@ -482,6 +482,15 @@
   }
 
   function popupAvailableWidth(root) {
+    const resizableOutput = root.closest?.(
+      "#smarttex-equation-preview[data-smarttex-user-sized='true'] .smarttex-equation-output"
+    );
+    if (resizableOutput) {
+      const style = globalThis.getComputedStyle?.(resizableOutput);
+      const padding = (parseFloat(style?.paddingLeft) || 0) +
+        (parseFloat(style?.paddingRight) || 0);
+      return Math.max(40, resizableOutput.clientWidth - padding);
+    }
     const owner = root.closest?.(".smarttex-document-reference-popup");
     if (owner) {
       const style = globalThis.getComputedStyle?.(owner);
@@ -506,6 +515,19 @@
   }
 
   function popupAvailableHeight(root) {
+    const resizableOutput = root.closest?.(
+      "#smarttex-equation-preview[data-smarttex-user-sized='true'] .smarttex-equation-output"
+    );
+    if (resizableOutput) {
+      const style = globalThis.getComputedStyle?.(resizableOutput);
+      const padding = (parseFloat(style?.paddingTop) || 0) +
+        (parseFloat(style?.paddingBottom) || 0);
+      const figure = root.closest?.(".smarttex-figure-popup");
+      const caption = figure?.querySelector?.(":scope > .smarttex-float-popup-caption");
+      const captionHeight = caption?.getBoundingClientRect?.().height || 0;
+      const gap = parseFloat(globalThis.getComputedStyle?.(figure)?.rowGap) || 0;
+      return Math.max(40, resizableOutput.clientHeight - padding - captionHeight - gap);
+    }
     const owner = root.closest?.(".smarttex-document-reference-popup");
     if (owner) {
       if (owner.classList.contains("smarttex-reference-popup-compact")) {
@@ -773,6 +795,40 @@
         media.classList.add("smarttex-figure-popup-media-pannable");
       },
       refresh() {
+        const containerSized = Boolean(
+          figure.classList.contains("smarttex-graphic-autocomplete-figure") &&
+          figure.closest?.("[data-smarttex-user-sized='true']")
+        );
+        if (containerSized) {
+          viewport.classList.remove("smarttex-figure-popup-viewport-frozen");
+          media.classList.remove("smarttex-figure-popup-media-pannable");
+          viewport.style.width = "100%";
+          viewport.style.height = "100%";
+          media.style.width = "100%";
+          media.style.height = "100%";
+          media.style.maxWidth = "100%";
+          media.style.maxHeight = "100%";
+          media.style.transform = "none";
+          delete viewport.dataset.smarttexBaseViewportWidthPx;
+          delete viewport.dataset.smarttexBaseViewportHeightPx;
+          delete media.dataset.smarttexBaseWidthPx;
+          delete media.dataset.smarttexBaseHeightPx;
+          delete media.dataset.smarttexBaseContentLeftPx;
+          delete media.dataset.smarttexBaseContentTopPx;
+          delete media.dataset.smarttexBaseContentRightPx;
+          delete media.dataset.smarttexBaseContentBottomPx;
+          for (const node of media.querySelectorAll("img")) {
+            delete node.dataset.smarttexBaseWidthPx;
+            delete node.dataset.smarttexBaseHeightPx;
+            node.style.removeProperty("width");
+            node.style.removeProperty("height");
+          }
+          this.captureBaseGeometry(true);
+          this.freezeViewportGeometry();
+          this.clampPan();
+          this.apply();
+          return;
+        }
         if (this.scale <= MIN_POPUP_ZOOM + 1e-6) {
           // Restore normal document flow before measuring again. The pannable
           // media is absolutely positioned while frozen; clearing only the
@@ -784,6 +840,23 @@
           media.style.height = this.mediaBaseInlineHeight;
           media.style.maxHeight = "";
           media.style.transform = "none";
+          delete viewport.dataset.smarttexBaseViewportWidthPx;
+          delete viewport.dataset.smarttexBaseViewportHeightPx;
+          delete media.dataset.smarttexBaseWidthPx;
+          delete media.dataset.smarttexBaseHeightPx;
+          delete media.dataset.smarttexBaseContentLeftPx;
+          delete media.dataset.smarttexBaseContentTopPx;
+          delete media.dataset.smarttexBaseContentRightPx;
+          delete media.dataset.smarttexBaseContentBottomPx;
+          for (const node of media.querySelectorAll(
+            "img, .smarttex-figure-popup-placeholder, .smarttex-document-figure-placeholder"
+          )) {
+            delete node.dataset.smarttexBaseWidthPx;
+            delete node.dataset.smarttexBaseHeightPx;
+            if (node instanceof HTMLImageElement && node.dataset.smarttexLocalWidthRatio) {
+              node.style.removeProperty("height");
+            }
+          }
           this.captureBaseGeometry(true);
         }
         this.freezeViewportGeometry();
@@ -995,53 +1068,86 @@
     const availableWidth = popupAvailableWidth(root);
     const availableHeight = popupAvailableHeight(root);
     const desiredHeight = layoutDesiredHeight(root, desiredWidth);
+    const popup = root.closest?.("[data-smarttex-popup-type]");
+    const maximumFitScale = popup?.dataset.smarttexUserSized === "true" ? 4 : 1;
     const scale = Math.min(
-      1,
+      maximumFitScale,
       availableWidth / desiredWidth,
       availableHeight / desiredHeight
     );
     const appliedScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
-    const appliedWidth = Math.max(40, desiredWidth * appliedScale);
-    root.style.setProperty(
-      "--smarttex-figure-popup-scale",
-      String(appliedScale)
-    );
-    root.dataset.smarttexBaseWidthPx = String(appliedWidth);
-    root.style.width = `${Math.round(appliedWidth)}px`;
-    for (const panel of root.querySelectorAll(".smarttex-figure-layout-panel")) {
-      const fixedPanelWidth = Number(panel.dataset.smarttexFixedPanelWidthPx) || 0;
-      if (fixedPanelWidth > 0) {
-        const baseFlexBasis = fixedPanelWidth * appliedScale;
-        panel.dataset.smarttexBaseFlexBasisPx = String(baseFlexBasis);
-        panel.style.flexBasis = `${baseFlexBasis}px`;
-      }
-    }
-    for (const image of root.querySelectorAll("[data-smarttex-local-width-ratio]")) {
-      const fixedWidth = Number(image.dataset.smarttexFixedWidthPx) || 0;
-      const imageScale = Number(image.dataset.smarttexImageScale) || 1;
-      if (fixedWidth > 0) {
-        const baseImageWidth = fixedWidth * imageScale * appliedScale;
-        image.dataset.smarttexBaseWidthPx = String(baseImageWidth);
-        image.style.width = `${baseImageWidth}px`;
-      } else {
-        delete image.dataset.smarttexBaseWidthPx;
-        const localRatio = Math.max(
-          0.05,
-          Number(image.dataset.smarttexLocalWidthRatio) || 1
-        );
-        image.style.width = `${localRatio * imageScale * 100}%`;
-      }
-    }
     const viewport = root.closest?.(".smarttex-figure-popup-viewport");
-    if (viewport) {
-      viewport.style.width = `${Math.round(appliedWidth)}px`;
-      viewport.classList.remove("smarttex-figure-popup-scrollable");
-    }
     const figure = root.closest?.(".smarttex-figure-popup");
-    if (figure) {
-      figure.style.width = `${Math.round(appliedWidth)}px`;
-      figure.style.maxWidth = `${Math.round(appliedWidth)}px`;
-      ensurePopupZoom(figure)?.refresh();
+    const applyLayoutScale = (layoutScale) => {
+      const appliedWidth = Math.max(20, desiredWidth * layoutScale);
+      root.style.setProperty("--smarttex-figure-popup-scale", String(layoutScale));
+      root.dataset.smarttexBaseWidthPx = String(appliedWidth);
+      root.style.width = `${appliedWidth}px`;
+      for (const panel of root.querySelectorAll(".smarttex-figure-layout-panel")) {
+        const fixedPanelWidth = Number(panel.dataset.smarttexFixedPanelWidthPx) || 0;
+        if (fixedPanelWidth > 0) {
+          const baseFlexBasis = fixedPanelWidth * layoutScale;
+          panel.dataset.smarttexBaseFlexBasisPx = String(baseFlexBasis);
+          panel.style.flexBasis = `${baseFlexBasis}px`;
+        }
+      }
+      for (const image of root.querySelectorAll("[data-smarttex-local-width-ratio]")) {
+        const fixedWidth = Number(image.dataset.smarttexFixedWidthPx) || 0;
+        const imageScale = Number(image.dataset.smarttexImageScale) || 1;
+        if (fixedWidth > 0) {
+          const baseImageWidth = fixedWidth * imageScale * layoutScale;
+          image.dataset.smarttexBaseWidthPx = String(baseImageWidth);
+          image.style.width = `${baseImageWidth}px`;
+        } else {
+          delete image.dataset.smarttexBaseWidthPx;
+          const localRatio = Math.max(
+            0.05,
+            Number(image.dataset.smarttexLocalWidthRatio) || 1
+          );
+          image.style.width = `${localRatio * imageScale * 100}%`;
+        }
+      }
+      if (viewport) {
+        viewport.style.width = `${appliedWidth}px`;
+        viewport.classList.remove("smarttex-figure-popup-scrollable");
+      }
+      if (figure) {
+        figure.style.width = `${appliedWidth}px`;
+        figure.style.maxWidth = `${appliedWidth}px`;
+        ensurePopupZoom(figure)?.refresh();
+      }
+    };
+
+    let finalScale = appliedScale;
+    applyLayoutScale(finalScale);
+
+    const resizableOutput = root.closest?.(
+      "#smarttex-equation-preview[data-smarttex-user-sized='true'] .smarttex-equation-output"
+    );
+    if (resizableOutput && figure && viewport) {
+      const outputStyle = globalThis.getComputedStyle?.(resizableOutput);
+      const horizontalPadding = (parseFloat(outputStyle?.paddingLeft) || 0) +
+        (parseFloat(outputStyle?.paddingRight) || 0);
+      const verticalPadding = (parseFloat(outputStyle?.paddingTop) || 0) +
+        (parseFloat(outputStyle?.paddingBottom) || 0);
+      const caption = figure.querySelector?.(":scope > .smarttex-float-popup-caption");
+      const captionHeight = caption?.getBoundingClientRect?.().height || 0;
+      const gap = parseFloat(globalThis.getComputedStyle?.(figure)?.rowGap) || 0;
+      const viewportRect = viewport.getBoundingClientRect();
+      const widthBudget = Math.max(20, resizableOutput.clientWidth - horizontalPadding);
+      const heightBudget = Math.max(
+        20,
+        resizableOutput.clientHeight - verticalPadding - captionHeight - gap
+      );
+      const correction = Math.min(
+        1,
+        widthBudget / Math.max(1, viewportRect.width),
+        heightBudget / Math.max(1, viewportRect.height)
+      );
+      if (correction < 0.995) {
+        finalScale *= correction;
+        applyLayoutScale(finalScale);
+      }
     }
   }
 
