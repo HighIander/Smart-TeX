@@ -235,36 +235,68 @@
     return { widthRatio, heightRatio };
   }
 
-  function applySize(popup, state, type, savedSize) {
+  function resizePopup(popup, state, type, requested, { live = false, persist = false } = {}) {
     const naturalSize = state.naturalSizes[type];
-    const ratios = savedRatios(savedSize, naturalSize);
-    if (!ratios) return false;
+    if (!naturalSize) return false;
+
     const bounds = viewportBounds();
     const minimum = MINIMUM_SIZE[type];
+    const rect = popup.getBoundingClientRect();
     const width = Math.min(
       bounds.width,
-      Math.max(
-        Math.min(minimum.width, bounds.width),
-        naturalSize.width * ratios.widthRatio
-      )
+      Math.max(Math.min(minimum.width, bounds.width), Number(requested.width) || rect.width)
     );
     const height = Math.min(
       bounds.height,
-      Math.max(
-        Math.min(minimum.height, bounds.height),
-        naturalSize.height * ratios.heightRatio
-      )
+      Math.max(Math.min(minimum.height, bounds.height), Number(requested.height) || rect.height)
     );
+    const requestedLeft = Number.isFinite(Number(requested.left)) ? Number(requested.left) : rect.left;
+    const requestedTop = Number.isFinite(Number(requested.top)) ? Number(requested.top) : rect.top;
+    const left = Math.max(
+      bounds.margin,
+      Math.min(requestedLeft, window.innerWidth - bounds.margin - width)
+    );
+    const top = Math.max(
+      bounds.margin,
+      Math.min(requestedTop, window.innerHeight - bounds.margin - height)
+    );
+
+    popup.style.left = `${Math.round(left)}px`;
+    popup.style.top = `${Math.round(top)}px`;
     popup.style.width = `${Math.round(width)}px`;
     popup.style.height = `${Math.round(height)}px`;
     popup.style.maxWidth = `${Math.round(bounds.width)}px`;
     popup.style.maxHeight = `${Math.round(bounds.height)}px`;
     popup.dataset.smarttexUserSized = "true";
-    setContentScale(popup, Math.min(
-      width / Math.max(1, naturalSize.width),
-      height / Math.max(1, naturalSize.height)
-    ));
+    delete popup.dataset.smarttexRelativeSized;
+
+    const widthRatio = width / Math.max(1, naturalSize.width);
+    const heightRatio = height / Math.max(1, naturalSize.height);
+    const contentScale = Math.min(widthRatio, heightRatio);
+    setContentScale(popup, contentScale);
+
+    if (persist) {
+      sizes[type] = { widthRatio, heightRatio, scale: contentScale };
+      writeSizes();
+    }
+
+    popup.dispatchEvent(new CustomEvent("smarttex:popup-resized", {
+      detail: { type, width, height, scale: contentScale, live }
+    }));
     return true;
+  }
+
+  function applySize(popup, state, type, savedSize, options = {}) {
+    const naturalSize = state.naturalSizes[type];
+    const ratios = savedRatios(savedSize, naturalSize);
+    if (!ratios) return false;
+    const rect = popup.getBoundingClientRect();
+    return resizePopup(popup, state, type, {
+      left: rect.left,
+      top: rect.top,
+      width: naturalSize.width * ratios.widthRatio,
+      height: naturalSize.height * ratios.heightRatio
+    }, options);
   }
 
   function scheduleSavedSize(popup, state, type) {
@@ -386,6 +418,12 @@
       naturalWidth: state.naturalSizes[type]?.width || rect.width,
       naturalHeight: state.naturalSizes[type]?.height || rect.height
     };
+    if (!state.naturalSizes[type]) {
+      state.naturalSizes[type] = {
+        width: origin.naturalWidth,
+        height: origin.naturalHeight
+      };
+    }
     popup.classList.add("smarttex-popup-resizing");
     document.documentElement.dataset.smarttexPopupResizeDirection = direction;
     try {
@@ -424,20 +462,7 @@
       left = Math.max(bounds.margin, Math.min(left, window.innerWidth - bounds.margin - width));
       top = Math.max(bounds.margin, Math.min(top, window.innerHeight - bounds.margin - height));
 
-      popup.style.left = `${Math.round(left)}px`;
-      popup.style.top = `${Math.round(top)}px`;
-      popup.style.width = `${Math.round(width)}px`;
-      popup.style.height = `${Math.round(height)}px`;
-      popup.style.maxWidth = `${Math.round(bounds.width)}px`;
-      popup.style.maxHeight = `${Math.round(bounds.height)}px`;
-      popup.dataset.smarttexUserSized = "true";
-      const widthRatio = width / Math.max(1, origin.naturalWidth);
-      const heightRatio = height / Math.max(1, origin.naturalHeight);
-      const contentScale = Math.min(widthRatio, heightRatio);
-      setContentScale(popup, contentScale);
-      popup.dispatchEvent(new CustomEvent("smarttex:popup-resized", {
-        detail: { type, width, height, scale: contentScale, live: true }
-      }));
+      resizePopup(popup, state, type, { left, top, width, height }, { live: true });
     };
 
     const finish = (finishEvent) => {
@@ -458,18 +483,12 @@
       popup.classList.remove("smarttex-popup-resizing");
       delete document.documentElement.dataset.smarttexPopupResizeDirection;
       const finalRect = popup.getBoundingClientRect();
-      const scale = Number.parseFloat(
-        popup.style.getPropertyValue("--smarttex-popup-content-scale")
-      ) || 1;
-      sizes[type] = {
-        widthRatio: finalRect.width / Math.max(1, origin.naturalWidth),
-        heightRatio: finalRect.height / Math.max(1, origin.naturalHeight),
-        scale
-      };
-      writeSizes();
-      popup.dispatchEvent(new CustomEvent("smarttex:popup-resized", {
-        detail: { type, width: finalRect.width, height: finalRect.height, scale, live: false }
-      }));
+      resizePopup(popup, state, type, {
+        left: finalRect.left,
+        top: finalRect.top,
+        width: finalRect.width,
+        height: finalRect.height
+      }, { live: false, persist: true });
     };
 
     window.addEventListener("pointermove", move, { capture: true, passive: false });
@@ -573,14 +592,32 @@
     relativeSettings = normalizeRelativeSettings(nextSettings);
     writeRelativeSettings();
 
-    // A baseline-size selection deliberately replaces all ad-hoc manual resize ratios.
-    sizes = {};
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch (_error) {
-      // Current popup instances can still be rebased if storage is restricted.
+    // The sliders write the same width/height ratios that are produced by manual
+    // popup resizing. A selected percentage therefore always means that fraction
+    // of the popup's measured default width and default height.
+    for (const type of RELATIVE_SCALE_TYPES) {
+      const ratio = relativeScaleFor(type);
+      sizes[type] = { widthRatio: ratio, heightRatio: ratio, scale: ratio };
     }
-    rebaseOpenPopups();
+    writeSizes();
+
+    document.querySelectorAll(".smarttex-popup-resizable").forEach((popup) => {
+      const state = states.get(popup);
+      if (!state || !RELATIVE_SCALE_TYPES.has(state.type)) return;
+      state.restoreToken += 1;
+      if (popup.hidden) return;
+
+      if (state.naturalSizes[state.type]) {
+        applySize(popup, state, state.type, sizes[state.type], { live: false, persist: true });
+        return;
+      }
+
+      // A popup that has not yet been measured is first returned to its default
+      // geometry; the normal restore path then measures that baseline and applies
+      // the selected ratio to both dimensions.
+      clearSize(popup);
+      scheduleSavedSize(popup, state, state.type);
+    });
     return { ...relativeSettings };
   }
 

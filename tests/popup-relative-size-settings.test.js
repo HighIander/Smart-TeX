@@ -24,7 +24,9 @@ assert.match(menu, /global: 1,[\s\S]*image: 1,[\s\S]*equation: 1,[\s\S]*table: 1
 assert.match(popup, /RELATIVE_SCALE_KEY = "smarttex:popup-scale:v1"/);
 assert.match(popup, /new Set\(\["image", "equation", "table"\]\)/);
 assert.match(popup, /Math\.max\(0\.5, Math\.min\(2/);
-assert.match(popup, /localStorage\.removeItem\(STORAGE_KEY\)/);
+assert.match(popup, /sizes\[type\] = \{ widthRatio: ratio, heightRatio: ratio, scale: ratio \}/);
+assert.match(popup, /writeSizes\(\);[\s\S]*querySelectorAll\("\.smarttex-popup-resizable"\)/);
+assert.match(popup, /applySize\(popup, state, state\.type, sizes\[state\.type\], \{ live: false, persist: true \}\)/);
 assert.match(popup, /setRelativeSizeSettings/);
 assert.match(css, /smarttex-settings-popup-global-scale/);
 assert.match(css, /smarttex-settings-popup-separate-scales/);

@@ -25,9 +25,12 @@ for (const direction of ["n", "ne", "e", "se", "s", "sw", "w", "nw"]) {
 }
 assert.match(popupUi, /localStorage\.setItem\(STORAGE_KEY/);
 assert.match(popupUi, /smarttex:popup-resized/);
-assert.match(popupUi, /widthRatio: finalRect\.width \/ Math\.max\(1, origin\.naturalWidth\)/);
-assert.match(popupUi, /heightRatio: finalRect\.height \/ Math\.max\(1, origin\.naturalHeight\)/);
+assert.match(popupUi, /function resizePopup\(/);
+assert.match(popupUi, /const widthRatio = width \/ Math\.max\(1, naturalSize\.width\)/);
+assert.match(popupUi, /const heightRatio = height \/ Math\.max\(1, naturalSize\.height\)/);
 assert.match(popupUi, /const contentScale = Math\.min\(widthRatio, heightRatio\)/);
+assert.match(popupUi, /resizePopup\(popup, state, type, \{ left, top, width, height \}, \{ live: true \}\)/);
+assert.match(popupUi, /persist: true/);
 assert.match(popupUi, /live: true/);
 assert.match(popupUi, /function resetSizes\(\)/);
 assert.match(popupUi, /localStorage\.removeItem\(STORAGE_KEY\)/);
