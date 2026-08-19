@@ -16,7 +16,7 @@
 
 SmartTeX is available in the Chrome Extension Web-Store and the Mozilla Firefox Add-On store for free.
 
-## Contents
+## More Details
 
 * [Installation for development](#installation-for-development)
 * [Sync uploaded files and figures with Nextcloud](#sync-uploaded-files-and-figures-with-nextcloud)
