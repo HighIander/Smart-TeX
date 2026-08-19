@@ -1,5 +1,21 @@
 # SmartTeX
 
+## Key Features
+
+* choose citations from drop-down list, parsed from the connected bib file; support for smartCitations (an extension that provides a full-featured, supercharged refrence manager)
+* choose references from lists with thumbnail previews, sort by alphabet or by order of appearance in document
+* show previews of equations, figures (zommable!) and tables in popups; even the current cursor position is shown
+* in the editor, environments are highlighted and numbered elements' numbers are displayed
+* graphical user interface to edit tables: add, move, delete columns and rows, edit borders and styles
+* add and sync figures from nextcloud
+* track and accept/refuse changes from multiple authors
+* add comments (support for emojis and animated gifs), highlight text
+* all configurable and de-/activatable in the extension's option page
+
+## Installation
+
+SmartTeX is available in the Chrome Extension Web-Store and the Mozilla Firefox Add-On store for free.
+
 ## Contents
 
 * [Installation for development](#installation-for-development)
