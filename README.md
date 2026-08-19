@@ -29,6 +29,7 @@ SmartTeX is available in the Chrome Extension Web-Store and the Mozilla Firefox 
 * [Citation autocomplete](#citation-autocomplete)
 * [Table preview](#table-preview)
 * [License](#license)
+* [Version history](#history)
 
 SmartTeX is a standalone browser extension for CollabTeX-compatible LaTeX
 editors. It provides equation, table, figure, reference, and citation popup
@@ -204,8 +205,9 @@ not licensed as SmartTeX first-party source.
 
 The name "Smart TeX", "Smart-TeX" and "SmartTeX" are owned by the author and not part of this license.
 
+## History
 
-## Version 1.4.34
+### Version 1.4.34
 
 Figure popup zoom now uses a fixed clipping viewport and stores the rendered
 width and height of every image at 100%. Zoomed figures can therefore be panned
@@ -222,7 +224,7 @@ document from being rendered and avoids repeated full-document scans while
 hovering.
 
 
-## Version 1.4.28
+### Version 1.4.28
 
 This release improves the changed-label context preview and scroll behavior.
 The context renderer recursively handles standard, custom, nested, formatting,
@@ -236,7 +238,7 @@ geometry and editor state are refreshed before the overlays become visible at
 the new location.
 
 
-## Version 1.4.27
+### Version 1.4.27
 
 This release gives editor interaction absolute priority over SmartTeX work. A
 new central task controller invalidates active and scheduled SmartTeX analyses
@@ -249,7 +251,7 @@ leaves the last valid UI in place and is retried only after the editor becomes
 idle. Host-editor events are never prevented or stopped.
 
 
-## Version 1.4.26
+### Version 1.4.26
 
 This release keeps the stable 1.4.20-based architecture and improves the
 label-reference guard. Renamed labels are checked only after the cursor leaves
@@ -260,7 +262,7 @@ emphasize the active field or environment with an adjustable strength; disabled
 highlight categories show only the active structure in neutral gray.
 
 
-## Version 1.4.25
+### Version 1.4.25
 
 This release is based directly on the stable 1.4.20 code path. The experimental
 background-analysis architecture from versions 1.4.21–1.4.24 is not included.
@@ -269,14 +271,14 @@ with navigation, KaTeX hover excerpts, per-reference Update/Ignore actions, and
 Update all/Cancel controls.
 
 
-## 1.4.34
+### 1.4.34
 
 - Keep changed-label reference previews local and approximately symmetric around the exact reference occurrence.
 - Limit context expansion to at most three to four surrounding sentences per side; large environments such as `minipage` never expand the excerpt to the whole environment.
 - Preserve complete nearby inline math and command syntax only when it fits inside a small bounded safety allowance.
 - Show the global loading spinner over the SmartTeX S-hamburger button instead of at the editor cursor.
 
-## Version 2.1.1 — GIPHY GIF comments
+### Version 2.1.1 — GIPHY GIF comments
 
 Comment, reply, and comment-edit text fields now include a `GIF` button next to
 the emoji button. GIF search uses the GIPHY Web API. A separate GIPHY consent
@@ -296,7 +298,7 @@ Developer Dashboard, create an app/API key for a Web API integration, then copy
 the resulting key into the SmartTeX option above. This implementation calls the
 Web API directly and therefore needs an API key, not a GIPHY SDK key.
 
-## Version 2.1.2 — Shared GIPHY key and personal-key handoff
+### Version 2.1.2 — Shared GIPHY key and personal-key handoff
 
 - Includes the configured shared GIPHY API key as the default when no personal key is set.
 - The shared key permits five GIF insertions per rolling 60-minute window per browser profile.
@@ -304,7 +306,7 @@ Web API directly and therefore needs an API key, not a GIPHY SDK key.
 - A personal key removes SmartTeX's five-GIF shared-key limit; GIPHY's own API limits still apply.
 - The Options key field includes a circular `?` help button with a simple step-by-step overlay explaining how to obtain a GIPHY API key.
 
-## Version 2.1.3 — Graduated shared GIPHY key usage
+### Version 2.1.3 — Graduated shared GIPHY key usage
 
 - The bundled GIPHY key remains available for occasional use without requiring a personal key after five GIFs.
 - Insertions 6 through 10 within a rolling 60-minute window show a polite, optional personal-key prompt on each insertion; choosing “Continue with shared key” still inserts the GIF.
@@ -312,14 +314,14 @@ Web API directly and therefore needs an API key, not a GIPHY SDK key.
 - The quota prompt is tied to actual GIF insertion rather than opening or browsing the GIF picker.
 - Choosing to add a personal key opens SmartTeX Options and focuses the GIPHY key field; the existing circular `?` button explains how to obtain a key.
 
-## Version 2.1.4 — Stable first-click GIPHY consent flow
+### Version 2.1.4 — Stable first-click GIPHY consent flow
 
 - The first GIF-button activation is handled immediately so surrounding comment focus/re-render work cannot consume it.
 - Accepting the GIPHY privacy notice now continues directly into the GIF chooser.
 - GIPHY consent acceptance no longer forces a destructive comments-pane re-render while the chooser is opening.
 - The pending GIF target is resolved again after asynchronous consent, so incidental pane re-renders do not invalidate the first click.
 
-## Version 2.1.5 — Remembered relative popup sizing
+### Version 2.1.5 — Remembered relative popup sizing
 
 - Added a 50–200% relative popup-size slider next to **Reset popup sizes** in the S-menu.
 - The down-arrow switches to remembered, independent Image, Equation, and Table popup-size sliders and hides the global slider.
@@ -327,7 +329,7 @@ Web API directly and therefore needs an API key, not a GIPHY SDK key.
 - **Reset popup sizes** clears saved manual resize overrides and sets all relative popup-size values to 100% while retaining global/separate control mode.
 - Relative popup-size values and the selected global/separate mode are remembered locally.
 
-## Version 2.1.6 — Stable comment focus and chooser lifetime
+### Version 2.1.6 — Stable comment focus and chooser lifetime
 
 - Background comment synchronization and editor-state updates no longer rebuild the complete comments pane when its records have not changed.
 - Focused comment/reply/edit fields, the emoji chooser, the GIPHY chooser, and SmartTeX comment modals protect their DOM while background updates arrive; necessary pane refreshes are deferred until the interaction ends.
@@ -335,7 +337,7 @@ Web API directly and therefore needs an API key, not a GIPHY SDK key.
 - The temporary 1.6-second comment-icon highlight timeout also updates CSS classes in place; it no longer tears down a chooser or focused field when the timeout expires.
 - Deferred collaboration updates are applied after the protected interaction closes or focus leaves the input, so remote changes are not discarded.
   
-## Version 2.1.8 — GIPHY pagination and API-call-aware shared-key policy
+### Version 2.1.8 — GIPHY pagination and API-call-aware shared-key policy
 
 - GIPHY Search and Trending requests use the maximum page size of 50 results per content API call.
 - With a personal API key, the GIF picker automatically appends the next 50 results when scrolling near the bottom.
@@ -346,7 +348,7 @@ Web API directly and therefore needs an API key, not a GIPHY SDK key.
 - A personal key becomes mandatory only after 10 insertions or 20 content API calls in a rolling hour, or after 50 total shared-key GIF insertions.
 - The API-call allowance counts Search/Trending page requests; analytics pingbacks and the one-time random customer-ID bootstrap are not counted by SmartTeX's content-call policy.
 
-## Version 2.1.9 — CollabTeX account name for comments
+### Version 2.1.9 — CollabTeX account name for comments
 
 SmartTeX now adopts the logged-in CollabTeX display name from the local
 collaboration client record when available. Random animal names remain only as
@@ -354,16 +356,16 @@ a fallback. Existing manual names are preserved, and once a user edits their
 SmartTeX comment name it is never overwritten automatically. The provenance of
 the name (generated, CollabTeX, or manual) is stored locally with the profile.
 
-## Version 2.1.10 — Concise identity and GIPHY options text
+### Version 2.1.10 — Concise identity and GIPHY options text
 
 - Renames the comment identity field label from **Name** to **User name**.
 - Simplifies the GIPHY Options text: it now mentions GIPHY API rate limiting only briefly as the reason SmartTeX may ask for a personal API key, without exposing SmartTeX's internal shared-key thresholds.
 
-## Version 2.1.11 — Consistent user-name label
+### Version 2.1.11 — Consistent user-name label
 
 - Renames the comment identity label in the SmartTeX S-menu from **Name** to **User name**, matching the Options page.
 
-## Version 2.1.12 — More robust CollabTeX identity discovery and fallback notice
+### Version 2.1.12 — More robust CollabTeX identity discovery and fallback notice
 
 - Current-user discovery now prefers explicit CollabTeX/Overleaf page bootstrap and `ol-user` metadata, with account-menu metadata, collaboration tracking, and the same-origin user-settings page as progressively weaker fallbacks.
 - Identity discovery is retried while CollabTeX finishes bootstrapping and is explicitly retriggered when a comment is started or the S-menu opens while a generated animal name is still active.
